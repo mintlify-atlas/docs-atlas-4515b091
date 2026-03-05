@@ -1,0 +1,299 @@
+---
+title: MPE Support
+description: MIDI Polyphonic Expression for expressive instruments
+---
+
+MPE (MIDI Polyphonic Expression) enables per-note control of pitch bend, pressure, and timbre - essential for expressive instruments like Roli Seaboard, Linnstrument, and other MPE controllers.
+
+## Overview
+
+MPE extends MIDI by dedicating one MIDI channel per note, allowing independent control of:
+
+- **Pitch Bend** - Per-note pitch changes (slides)
+- **Channel Pressure** - Per-note aftertouch (pressure sensitivity)
+- **Timbre (CC74)** - Per-note brightness/filter control
+
+Traditional MIDI applies these controls globally to all notes. MPE makes them per-note for expressive playing.
+
+## Enabling MPE
+
+Set the MPE flag in `config.h`:
+
+```cpp title="config.h"
+#define PLUG_DOES_MPE 1
+```
+
+This tells hosts and the framework that your plugin supports MPE.
+
+## MidiSynth MPE Support
+
+The `MidiSynth` class handles MPE zone configuration automatically:
+
+```cpp title="Basic MPE Setup"
+#include "MidiSynth.h"
+
+class MyInstrumentDSP
+{
+public:
+  MyInstrumentDSP()
+  {
+    // Initialize with 16 voices for MPE
+    for(int i = 0; i < 16; i++)
+    {
+      mSynth.AddVoice(new MyVoice(), 0);
+    }
+    
+    // Enable basic MPE mode (zone 0 = channels 2-16)
+    mSynth.InitBasicMPE();
+  }
+  
+  MidiSynth mSynth {VoiceAllocator::kPolyModePoly};
+};
+```
+
+### InitBasicMPE
+
+The `InitBasicMPE()` method sets up a single MPE zone:
+
+```cpp title="IPlug/Extras/Synth/MidiSynth.h:68"
+void InitBasicMPE()
+{
+  SetMPEZones(0, 16);
+}
+```
+
+This configures:
+- **Lower Zone**: Channels 2-16 for note expression
+- **Manager Channel**: Channel 1 for global parameters
+
+## MPE Zones
+
+MPE supports two zones for split keyboard setups:
+
+```cpp title="Advanced MPE Zone Setup"
+// Lower zone: channels 2-8
+mSynth.SetMPEZones(0, 8);  
+
+// Split keyboard: lower + upper zones
+mSynth.SetMPEZones(8, 8); // 8 lower, 8 upper
+```
+
+<Info>
+**Lower Zone**: Channels 2 to (n+1), manager channel 1
+**Upper Zone**: Channels 16 down to (16-n), manager channel 16
+</Info>
+
+## Pitch Bend Range
+
+MPE typically uses ±48 semitones, but you can customize:
+
+```cpp title="Setting Pitch Bend Range"
+// Default non-MPE range
+mSynth.SetPitchBendRange(2); // ±2 semitones
+
+// MPE standard
+mSynth.SetPitchBendRange(48); // ±48 semitones
+
+// Roli Seaboard default  
+mSynth.SetPitchBendRange(24); // ±24 semitones
+```
+
+In the IPlugInstrument example, this is controllable from the UI:
+
+```cpp title="IPlugInstrument.cpp:160"
+bool IPlugInstrument::OnMessage(int msgTag, int ctrlTag, int dataSize, 
+                                const void* pData)
+{
+  if(ctrlTag == kCtrlTagBender && 
+     msgTag == IWheelControl::kMessageTagSetPitchBendRange)
+  {
+    const int bendRange = *static_cast<const int*>(pData);
+    mDSP.mSynth.SetPitchBendRange(bendRange);
+  }
+  
+  return false;
+}
+```
+
+## Voice Implementation
+
+Voices receive per-note expression through control inputs:
+
+```cpp title="IPlugInstrument_DSP.h:53"
+void ProcessSamplesAccumulating(sample** inputs, sample** outputs, 
+                                int nInputs, int nOutputs,
+                                int startIdx, int nFrames) override
+{
+  // Read per-note controls
+  double pitch = mInputs[kVoiceControlPitch].endValue;
+  double pitchBend = mInputs[kVoiceControlPitchBend].endValue;  // MPE!
+  double pressure = mInputs[kVoiceControlPressure].endValue;     // MPE!
+  double timbre = mInputs[kVoiceControlTimbre].endValue;         // MPE!
+  
+  // Convert to frequency (1v/oct space)
+  double freq = 440. * pow(2., pitch + pitchBend);
+  
+  for(int i = startIdx; i < startIdx + nFrames; i++)
+  {
+    // Use pressure and timbre for expression
+    sample filterCutoff = timbre * 10000.0;
+    sample amplitude = pressure * mGain;
+    
+    outputs[0][i] += ProcessVoice(freq, filterCutoff) * amplitude;
+    outputs[1][i] = outputs[0][i];
+  }
+}
+```
+
+## Voice Control Inputs
+
+The `SynthVoice` base class provides these control inputs:
+
+```cpp title="Available Voice Controls"
+enum EVoiceControlChannel
+{
+  kVoiceControlGate,        // Note on/off
+  kVoiceControlPitch,       // Base pitch (MIDI note number in 1v/oct)
+  kVoiceControlVelocity,    // Note-on velocity
+  kVoiceControlPressure,    // Channel pressure (MPE)
+  kVoiceControlTimbre,      // CC74 (MPE)
+  kVoiceControlPitchBend,   // Per-note pitch bend (MPE)
+  kNumVoiceControlChannels
+};
+```
+
+### Sample-Accurate Control
+
+For smooth modulation, read control ramps:
+
+```cpp title="IPlugInstrument_DSP.h:61"
+// Get entire ramp for sample-accurate changes
+mInputs[kVoiceControlTimbre].Write(mTimbreBuffer.Get(), startIdx, nFrames);
+
+for(int i = startIdx; i < startIdx + nFrames; i++)
+{
+  sample timbre = mTimbreBuffer.Get()[i - startIdx];
+  // Use sample-accurate timbre value
+}
+```
+
+## Host Support
+
+MPE support varies by host:
+
+<CardGroup cols={2}>
+  <Card title="Full Support" icon="check">
+    - Bitwig Studio
+    - Logic Pro
+    - Ableton Live 11+
+    - Reaper
+  </Card>
+  
+  <Card title="Limited/None" icon="xmark">
+    - Pro Tools (AAX)
+    - Some older hosts
+  </Card>
+</CardGroup>
+
+## Testing MPE
+
+<Steps>
+  <Step title="Enable MPE in config.h">
+    ```cpp
+    #define PLUG_DOES_MPE 1
+    ```
+  </Step>
+  
+  <Step title="Initialize MPE mode">
+    ```cpp
+    mSynth.InitBasicMPE();
+    ```
+  </Step>
+  
+  <Step title="Test with virtual controller">
+    Use Bitwig's virtual MPE controller or Roli Dashboard for testing without hardware
+  </Step>
+  
+  <Step title="Verify per-note expression">
+    Check that pitch bend, pressure, and timbre work independently per note
+  </Step>
+</Steps>
+
+## MPE Configuration Messages
+
+Hosts send MPE Configuration Messages (MCM) to configure zones:
+
+```
+RPN 6 (MPE Configuration)
+- Data: Number of member channels
+- Lower zone: Channel 1
+- Upper zone: Channel 16
+```
+
+The `MidiSynth` class handles these automatically when MPE is enabled.
+
+## Best Practices
+
+<Tabs>
+  <Tab title="Voice Count">
+    Allocate enough voices for MPE:
+    ```cpp
+    // 15 member channels + overhead
+    for(int i = 0; i < 16; i++)
+      mSynth.AddVoice(new Voice(), 0);
+    ```
+  </Tab>
+  
+  <Tab title="Pitch Bend Range">
+    Use wide range for MPE:
+    ```cpp
+    mSynth.SetPitchBendRange(48); // ±4 octaves
+    ```
+  </Tab>
+  
+  <Tab title="Pressure Mapping">
+    Map pressure to both amplitude and timbre:
+    ```cpp
+    sample gain = pressure * mVelocity;
+    sample brightness = pressure * 0.5 + 0.5;
+    ```
+  </Tab>
+  
+  <Tab title="Glide/Portamento">
+    Disable glide for MPE (pitch bend handles slides):
+    ```cpp
+    mSynth.SetNoteGlideTime(0.0);
+    ```
+  </Tab>
+</Tabs>
+
+## Fallback for Non-MPE
+
+Support both MPE and standard MIDI:
+
+```cpp title="Dual-Mode Support"
+void SetMPEMode(bool enable)
+{
+  if(enable)
+  {
+    mSynth.InitBasicMPE();
+    mSynth.SetPitchBendRange(48);
+  }
+  else
+  {
+    mSynth.SetMPEZones(0, 0); // Disable MPE
+    mSynth.SetPitchBendRange(2);
+  }
+}
+```
+
+## See Also
+
+- [IPlugInstrument Example](@Examples/IPlugInstrument) - Full MPE implementation
+- [MidiSynth Documentation](@IPlug/Extras/Synth/MidiSynth.h) - Voice allocator with MPE
+- [Synthesis](/synthesis) - Voice management and MIDI handling
+- [MPE Specification](https://midi.org/mpe) - Official MIDI MPE standard
+
+<Tip>
+Test with a virtual MPE controller before investing in hardware. Bitwig Studio includes an excellent MPE test keyboard.
+</Tip>

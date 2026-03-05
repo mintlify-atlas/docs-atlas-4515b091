@@ -1,0 +1,524 @@
+---
+title: 'IGraphics Controls'
+description: 'Built-in UI controls including knobs, sliders, buttons, and visualizations'
+---
+
+## Control Hierarchy
+
+All IGraphics controls derive from the `IControl` base class:
+
+```cpp
+class IControl {
+  // Base class for all UI widgets
+  virtual void Draw(IGraphics& g) = 0;  // Render the control
+  virtual void OnMouseDown(float x, float y, const IMouseMod& mod);
+  virtual void OnMouseDrag(float x, float y, float dX, float dY, const IMouseMod& mod);
+  // ... more event handlers
+};
+```
+
+Controls are categorized into:
+
+<CardGroup cols={3}>
+  <Card title="IVControls" icon="vector-square">
+    Vector/SVG-based controls
+  </Card>
+  <Card title="IBControls" icon="image">
+    Bitmap-based controls
+  </Card>
+  <Card title="ISVGControls" icon="shapes">
+    SVG image controls
+  </Card>
+</CardGroup>
+
+## Vector Controls (IVControls)
+
+Vector controls use the IGraphics drawing API for scalable, styleable widgets.
+
+### IVKnobControl
+
+A rotary knob with customizable appearance:
+
+```cpp IVKnobControl.h:262-275
+IVKnobControl(const IRECT& bounds, int paramIdx,
+              const char* label = "",
+              const IVStyle& style = DEFAULT_STYLE,
+              bool valueIsEditable = false, bool valueInWidget = false,
+              float a1 = -135.f, float a2 = 135.f, float aAnchor = -135.f,
+              EDirection direction = EDirection::Vertical, 
+              double gearing = DEFAULT_GEARING, float trackSize = 2.f);
+
+// Example usage
+pGraphics->AttachControl(
+  new IVKnobControl(bounds.GetCentredInside(100), kParamGain, "Gain", 
+                    DEFAULT_STYLE, true)
+);
+```
+
+<Info>
+- `a1`, `a2`: Start and end angles in degrees (0° = up)
+- `aAnchor`: Anchor angle for bipolar knobs
+- `gearing`: Mouse sensitivity multiplier
+- `valueIsEditable`: Double-click for text entry
+</Info>
+
+### IVSliderControl
+
+Vertical or horizontal slider:
+
+```cpp IVSliderControl.h:319-322
+IVSliderControl(const IRECT& bounds, int paramIdx = kNoParameter, 
+                const char* label = "", const IVStyle& style = DEFAULT_STYLE, 
+                bool valueIsEditable = false, EDirection dir = EDirection::Vertical, 
+                double gearing = DEFAULT_GEARING, float handleSize = 8.f, 
+                float trackSize = 2.f, bool handleInsideTrack = false);
+
+// Vertical slider
+pGraphics->AttachControl(
+  new IVSliderControl(bounds, kParamCutoff, "Cutoff", style, true, 
+                      EDirection::Vertical)
+);
+
+// Horizontal slider
+pGraphics->AttachControl(
+  new IVSliderControl(bounds, kParamPan, "Pan", style, true, 
+                      EDirection::Horizontal)
+);
+```
+
+### IVButtonControl
+
+Momentary button with click animation:
+
+```cpp IVButtonControl.h:64
+IVButtonControl(const IRECT& bounds, IActionFunction aF = SplashClickActionFunc, 
+                const char* label = "", const IVStyle& style = DEFAULT_STYLE, 
+                bool labelInButton = true, bool valueInButton = true, 
+                EVShape shape = EVShape::Rectangle);
+
+// Example with action function
+pGraphics->AttachControl(new IVButtonControl(bounds, 
+  [](IControl* pCaller) {
+    SplashClickActionFunc(pCaller);  // Built-in splash animation
+    DBGMSG("Button clicked!\n");
+  }, 
+  "Click Me", style)
+);
+```
+
+### IVSwitchControl
+
+Multi-state switch control:
+
+```cpp IVSwitchControl.h:77-79
+IVSwitchControl(const IRECT& bounds, int paramIdx = kNoParameter, 
+                const char* label = "", const IVStyle& style = DEFAULT_STYLE, 
+                bool valueInButton = true);
+
+// 4-state filter mode switch
+pGraphics->AttachControl(
+  new IVSwitchControl(bounds, kParamFilterMode, "Mode", style)
+);
+```
+
+### IVToggleControl
+
+Two-state toggle with custom on/off text:
+
+```cpp IVToggleControl.h:94-96
+IVToggleControl(const IRECT& bounds, int paramIdx = kNoParameter, 
+                const char* label = "", const IVStyle& style = DEFAULT_STYLE, 
+                const char* offText = "OFF", const char* onText = "ON");
+
+pGraphics->AttachControl(
+  new IVToggleControl(bounds, kParamBypass, "Bypass", style, "OFF", "ON")
+);
+```
+
+### IVTabSwitchControl
+
+Tab-based multi-switch:
+
+```cpp IVTabSwitchControl.h:160
+IVTabSwitchControl(const IRECT& bounds, int paramIdx = kNoParameter, 
+                   const std::vector<const char*>& options = {}, 
+                   const char* label = "", const IVStyle& style = DEFAULT_STYLE, 
+                   EVShape shape = EVShape::Rectangle, 
+                   EDirection direction = EDirection::Horizontal);
+
+pGraphics->AttachControl(new IVTabSwitchControl(
+  bounds, kParamWaveform, 
+  {"Sine", "Triangle", "Square", "Saw"}, 
+  "Waveform", style, EVShape::EndsRounded, EDirection::Horizontal)
+);
+```
+
+### IVRadioButtonControl
+
+Radio button group:
+
+```cpp IVRadioButtonControl.h:211-212
+IVRadioButtonControl(const IRECT& bounds, int paramIdx = kNoParameter, 
+                     const std::initializer_list<const char*>& options = {}, 
+                     const char* label = "", const IVStyle& style = DEFAULT_STYLE, 
+                     EVShape shape = EVShape::Ellipse, 
+                     EDirection direction = EDirection::Vertical, 
+                     float buttonSize = 10.f);
+
+pGraphics->AttachControl(new IVRadioButtonControl(
+  bounds, kParamOscType, 
+  {"Sine", "Square", "Triangle", "Saw"}, 
+  "Oscillator", style, EVShape::Ellipse, EDirection::Vertical, 10.f)
+);
+```
+
+### IVXYPadControl
+
+Two-dimensional XY pad for controlling two parameters:
+
+```cpp IVXYPadControl.h:383
+IVXYPadControl(const IRECT& bounds, 
+               const std::initializer_list<int>& params, 
+               const char* label = "", const IVStyle& style = DEFAULT_STYLE, 
+               float handleRadius = 10.f, bool trackClipsHandle = true, 
+               bool drawCross = true);
+
+pGraphics->AttachControl(new IVXYPadControl(
+  bounds, {kParamCutoff, kParamResonance}, "Filter", style, 12.f)
+);
+```
+
+### IVRangeSliderControl
+
+Dual-handle range slider:
+
+```cpp IVRangeSliderControl.h:359
+IVRangeSliderControl(const IRECT& bounds, 
+                     const std::initializer_list<int>& params, 
+                     const char* label = "", const IVStyle& style = DEFAULT_STYLE, 
+                     EDirection dir = EDirection::Vertical, bool onlyHandle = false, 
+                     float handleSize = 8.f, float trackSize = 2.f);
+
+pGraphics->AttachControl(new IVRangeSliderControl(
+  bounds, {kParamLowFreq, kParamHighFreq}, "Range", style, 
+  EDirection::Horizontal, false, 8.f, 2.f)
+);
+```
+
+## Bitmap Controls (IBControls)
+
+Bitmap controls use image files for their appearance.
+
+### IBKnobControl
+
+Knob using multi-frame bitmap:
+
+```cpp IBKnobControl.h:742-744
+IBKnobControl(const IRECT& bounds, const IBitmap& bitmap, int paramIdx, 
+              EDirection direction = EDirection::Vertical, 
+              double gearing = DEFAULT_GEARING);
+
+// Load 60-frame knob bitmap
+const IBitmap knobBitmap = pGraphics->LoadBitmap("knob.png", 60);
+pGraphics->AttachControl(
+  new IBKnobControl(bounds.GetCentredInside(60), knobBitmap, kParamGain)
+);
+```
+
+<Note>
+The bitmap should contain frames stacked vertically or horizontally. The frame count is specified when loading.
+</Note>
+
+### IBKnobRotaterControl
+
+Knob that rotates a single image:
+
+```cpp IBKnobRotaterControl.h:759-760
+IBKnobRotaterControl(const IRECT& bounds, const IBitmap& bitmap, int paramIdx);
+
+const IBitmap pointer = pGraphics->LoadBitmap("pointer.png");
+pGraphics->AttachControl(
+  new IBKnobRotaterControl(bounds, pointer, kParamGain)
+);
+```
+
+### IBButtonControl
+
+Button using multi-frame bitmap:
+
+```cpp IBButtonControl.h:705-707
+IBButtonControl(const IRECT& bounds, const IBitmap& bitmap, 
+                IActionFunction aF = DefaultClickActionFunc);
+
+const IBitmap buttonBitmap = pGraphics->LoadBitmap("button.png", 2); // off/on
+pGraphics->AttachControl(new IBButtonControl(bounds, buttonBitmap, 
+  [](IControl* pCaller) {
+    // Button action
+  })
+);
+```
+
+### IBSwitchControl
+
+Multi-state switch using bitmap:
+
+```cpp IBSwitchControl.h:729
+IBSwitchControl(const IRECT& bounds, const IBitmap& bitmap, 
+                int paramIdx = kNoParameter);
+
+const IBitmap switchBitmap = pGraphics->LoadBitmap("switch.png", 2, true);
+pGraphics->AttachControl(
+  new IBSwitchControl(bounds, switchBitmap, kParamBypass)
+);
+```
+
+### IBSliderControl
+
+Slider using handle and track bitmaps:
+
+```cpp IBSliderControl.h:774-776
+IBSliderControl(const IRECT& bounds, const IBitmap& handleBitmap, 
+                const IBitmap& trackBitmap = IBitmap(), 
+                int paramIdx = kNoParameter, EDirection dir = EDirection::Vertical, 
+                double gearing = DEFAULT_GEARING);
+
+const IBitmap handle = pGraphics->LoadBitmap("slider_handle.png");
+const IBitmap track = pGraphics->LoadBitmap("slider_track.png");
+pGraphics->AttachControl(
+  new IBSliderControl(bounds, handle, track, kParamVolume, EDirection::Vertical)
+);
+```
+
+## SVG Controls (ISVGControls)
+
+Controls that use SVG vector images:
+
+### ISVGKnobControl
+
+Rotating SVG knob:
+
+```cpp ISVGKnobControl.h:574
+ISVGKnobControl(const IRECT& bounds, const ISVG& svg, int paramIdx = kNoParameter);
+
+const ISVG knobSVG = pGraphics->LoadSVG("knob.svg");
+pGraphics->AttachControl(
+  new ISVGKnobControl(bounds.GetCentredInside(80), knobSVG, kParamGain)
+);
+```
+
+### ISVGButtonControl
+
+SVG button with on/off states:
+
+```cpp ISVGButtonControl.h:594
+ISVGButtonControl(const IRECT& bounds, IActionFunction aF, 
+                  const ISVG& offImage, const ISVG& onImage);
+
+// Or with color override:
+ISVGButtonControl(const IRECT& bounds, IActionFunction aF, const ISVG& image, 
+                  const std::array<IColor, 4> colors, 
+                  EColorReplacement colorReplacement = EColorReplacement::Fill);
+
+const ISVG icon = pGraphics->LoadSVG("power.svg");
+pGraphics->AttachControl(new ISVGButtonControl(
+  bounds, [](IControl* p) { /* action */ }, icon,
+  {COLOR_BLACK, COLOR_GREEN, COLOR_DARK_GRAY, COLOR_LIGHT_GRAY},
+  EColorReplacement::Fill)
+);
+```
+
+### ISVGSliderControl
+
+Slider using SVG handle and track:
+
+```cpp ISVGSliderControl.h:684
+ISVGSliderControl(const IRECT& bounds, const ISVG& handleSvg, 
+                  const ISVG& trackSVG, int paramIdx = kNoParameter, 
+                  EDirection dir = EDirection::Vertical, 
+                  double gearing = DEFAULT_GEARING);
+
+const ISVG handle = pGraphics->LoadSVG("handle.svg");
+const ISVG track = pGraphics->LoadSVG("track.svg");
+pGraphics->AttachControl(
+  new ISVGSliderControl(bounds, handle, track, kParamCutoff)
+);
+```
+
+## Visualization Controls
+
+### IVMeterControl
+
+Level meter with optional peak hold:
+
+```cpp IVMeterControl.h (from IControls.h)
+IVMeterControl<N>(const IRECT& bounds, const char* label = "", 
+                  const IVStyle& style = DEFAULT_STYLE, 
+                  EDirection dir = EDirection::Vertical, 
+                  const std::initializer_list<const char*>& trackNames = {});
+
+// Stereo meter
+pGraphics->AttachControl(
+  new IVMeterControl<2>(bounds, "Meter", style, EDirection::Vertical, 
+                         {"L", "R"}), 
+  kCtrlTagMeter
+);
+
+// Send data from DSP
+mMeterSender.ProcessBlock(outputs, nFrames, kCtrlTagMeter);
+```
+
+### IVScopeControl
+
+Oscilloscope display:
+
+```cpp IVScopeControl.h (from IControls.h)
+IVScopeControl<NChannels, BufferSize>(const IRECT& bounds, 
+                                       const char* label = "", 
+                                       const IVStyle& style = DEFAULT_STYLE);
+
+const int kScopeBufferSize = 512;
+pGraphics->AttachControl(
+  new IVScopeControl<2, kScopeBufferSize>(bounds, "Scope", 
+    style.WithColor(kBG, COLOR_BLACK).WithColor(kFG, COLOR_GREEN)),
+  kCtrlTagScope
+);
+
+// Send data from DSP
+mScopeSender.ProcessBlock(outputs, nFrames, kCtrlTagScope);
+```
+
+### IVKeyboardControl
+
+MIDI keyboard widget:
+
+```cpp IVKeyboardControl.h (from IControls.h)
+IVKeyboardControl(const IRECT& bounds, int minNote = 36, int maxNote = 72);
+
+pGraphics->AttachControl(
+  new IVKeyboardControl(bounds, 36, 84)  // C2 to C7
+)->SetActionFunction([this](IControl* pControl) {
+  // Handle note on/off
+});
+```
+
+### IVSpectrumAnalyzerControl
+
+Frequency spectrum analyzer:
+
+```cpp IVSpectrumAnalyzerControl.h (from IControls.h)
+IVSpectrumAnalyzerControl<>(const IRECT& bounds, const char* label = "", 
+                            const IVStyle& style = DEFAULT_STYLE);
+
+pGraphics->AttachControl(
+  new IVSpectrumAnalyzerControl<>(bounds, "Spectrum", style),
+  kCtrlTagSpectrum
+);
+```
+
+## Styling Vector Controls
+
+All IVControls support the `IVStyle` styling system:
+
+```cpp
+const IVStyle style = DEFAULT_STYLE
+  .WithColor(kBG, COLOR_DARK_GRAY)      // Background
+  .WithColor(kFG, COLOR_WHITE)          // Foreground
+  .WithColor(kPR, COLOR_BLUE)           // Pressed
+  .WithColor(kFR, COLOR_BLACK)          // Frame
+  .WithColor(kHL, COLOR_LIGHT_GRAY)     // Highlight
+  .WithColor(kSH, COLOR_BLACK)          // Shadow
+  .WithRoundness(0.5f)                  // 0-1, corner radius
+  .WithFrameThickness(2.f)              // Frame line width
+  .WithShadowOffset(3.f)                // Shadow distance
+  .WithDrawFrame(true)                  // Enable frame
+  .WithDrawShadows(true)                // Enable shadows
+  .WithEmboss(true)                     // Embossed look
+  .WithShowLabel(true)                  // Show label
+  .WithShowValue(true)                  // Show value
+  .WithWidgetFrac(0.8f)                 // Widget size fraction
+  .WithLabelText(IText(14.f, COLOR_WHITE))
+  .WithValueText(IText(12.f, COLOR_LIGHT_GRAY));
+```
+
+## Text Controls
+
+### ITextControl
+
+Static text label:
+
+```cpp
+pGraphics->AttachControl(
+  new ITextControl(bounds, "Label", IText(16.f, COLOR_WHITE))
+);
+```
+
+### IEditableTextControl
+
+Editable text field:
+
+```cpp
+pGraphics->AttachControl(
+  new IEditableTextControl(bounds, "Edit me", IText(14.f))
+);
+```
+
+### ICaptionControl
+
+Parameter value display:
+
+```cpp
+pGraphics->AttachControl(
+  new ICaptionControl(bounds, kParamGain, IText(24.f), COLOR_WHITE, false)
+);
+```
+
+## Container Controls
+
+### IVGroupControl
+
+Visual grouping with frame:
+
+```cpp IVGroupControl.h:460
+IVGroupControl(const IRECT& bounds, const char* label = "", 
+               float labelOffset = 10.f, const IVStyle& style = DEFAULT_STYLE);
+
+// Group by bounds
+pGraphics->AttachControl(
+  new IVGroupControl(bounds, "Oscillator", 10.f, style)
+);
+
+// Or group by control group name
+pGraphics->AttachControl(
+  new IVGroupControl("Filter", "filtercontrols", 10.f, 30.f, 10.f, 10.f, style)
+);
+```
+
+### IVPanelControl
+
+Simple styled panel:
+
+```cpp IVPanelControl.h:500
+IVPanelControl(const IRECT& bounds, const char* label = "", 
+               const IVStyle& style = ...);
+
+pGraphics->AttachControl(
+  new IVPanelControl(bounds, "", style.WithColor(kFG, COLOR_MID_GRAY))
+);
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Custom Controls" icon="code" href="./custom-controls">
+    Build your own controls
+  </Card>
+  <Card title="Responsive UI" icon="mobile" href="./responsive-ui">
+    Handle resizing and scaling
+  </Card>
+  <Card title="Getting Started" icon="rocket" href="./getting-started">
+    Create your first UI
+  </Card>
+  <Card title="Drawing Backends" icon="palette" href="./drawing-backends">
+    Learn about NanoVG vs Skia
+  </Card>
+</CardGroup>

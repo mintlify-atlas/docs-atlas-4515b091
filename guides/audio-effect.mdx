@@ -1,0 +1,455 @@
+---
+title: Building Audio Effects
+description: Create audio effect plugins with DSP processing and parameters
+---
+
+## Overview
+
+Audio effects process audio in real-time, modifying the input signal and sending it to the output. Examples include EQ, compression, reverb, delay, and distortion.
+
+## IPlugEffect Template
+
+The `IPlugEffect` example demonstrates a minimal audio effect with:
+
+- Single gain parameter
+- Stereo processing
+- IGraphics UI with knob control
+- Real-time safe DSP
+
+### Project Structure
+
+<Tabs>
+<Tab title="Header">
+```cpp IPlugEffect.h
+#pragma once
+
+#include "IPlug_include_in_plug_hdr.h"
+
+const int kNumPresets = 1;
+
+enum EParams
+{
+  kGain = 0,
+  kNumParams
+};
+
+using namespace iplug;
+using namespace igraphics;
+
+class IPlugEffect final : public Plugin
+{
+public:
+  IPlugEffect(const InstanceInfo& info);
+
+#if IPLUG_DSP
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+#endif
+};
+```
+
+**Key Points:**
+- Inherit from `Plugin` base class
+- Define parameters in `EParams` enum
+- Override `ProcessBlock` for audio processing
+- Use `#if IPLUG_DSP` to conditionally compile DSP code
+</Tab>
+
+<Tab title="Source">
+```cpp IPlugEffect.cpp
+#include "IPlugEffect.h"
+#include "IPlug_include_in_plug_src.h"
+#include "IControls.h"
+
+IPlugEffect::IPlugEffect(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kGain)->InitDouble("Gain", 0., 0., 100.0, 0.01, "%");
+
+#if IPLUG_EDITOR
+  mMakeGraphicsFunc = [&]() {
+    return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS, 
+                        GetScaleForScreen(PLUG_WIDTH, PLUG_HEIGHT));
+  };
+  
+  mLayoutFunc = [&](IGraphics* pGraphics) {
+    pGraphics->AttachCornerResizer(EUIResizerMode::Scale, false);
+    pGraphics->AttachPanelBackground(COLOR_GRAY);
+    pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
+    const IRECT bounds = pGraphics->GetBounds();
+    const IRECT innerBounds = bounds.GetPadded(-10.f);
+    pGraphics->AttachControl(new ITextControl(innerBounds.GetMidVPadded(50), 
+                                              "Hello iPlug 2!", IText(50)));
+    pGraphics->AttachControl(new IVKnobControl(
+                              innerBounds.GetCentredInside(100).GetVShifted(-100), 
+                              kGain));
+  };
+#endif
+}
+
+#if IPLUG_DSP
+void IPlugEffect::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kGain)->Value() / 100.;
+  const int nChans = NOutChansConnected();
+  
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+}
+#endif
+```
+</Tab>
+
+<Tab title="Config">
+```cpp config.h
+#define PLUG_NAME "IPlugEffect"
+#define PLUG_MFR "AcmeInc"
+#define PLUG_VERSION_HEX 0x00010000
+#define PLUG_VERSION_STR "1.0.0"
+#define PLUG_UNIQUE_ID 'Ipef'
+#define PLUG_MFR_ID 'Acme'
+
+#define PLUG_CHANNEL_IO "1-1 2-2"
+
+#define PLUG_LATENCY 0
+#define PLUG_TYPE 0              // 0 = Effect
+#define PLUG_DOES_MIDI_IN 0
+#define PLUG_DOES_MIDI_OUT 0
+#define PLUG_HAS_UI 1
+#define PLUG_WIDTH 600
+#define PLUG_HEIGHT 600
+#define PLUG_FPS 60
+
+#define VST3_SUBCATEGORY "Fx"
+#define AAX_PLUG_CATEGORY_STR "Effect"
+```
+
+**Channel Configuration:**
+- `"1-1 2-2"` = Mono→Mono OR Stereo→Stereo
+- `"2-2"` = Stereo only
+- See [Channel Routing](/reference/channel-routing) for more options
+</Tab>
+</Tabs>
+
+## Creating an Effect Plugin
+
+<Steps>
+
+### Duplicate the Template
+
+```bash
+cd iPlug2/Examples
+python duplicate.py IPlugEffect MyCompressor MyCompany
+cd MyCompressor
+```
+
+### Define Parameters
+
+Edit the header to add parameters:
+
+```cpp MyCompressor.h
+enum EParams
+{
+  kThreshold = 0,
+  kRatio,
+  kAttack,
+  kRelease,
+  kMakeupGain,
+  kNumParams
+};
+```
+
+### Initialize Parameters
+
+In the constructor, initialize each parameter:
+
+```cpp MyCompressor.cpp
+MyCompressor::MyCompressor(const InstanceInfo& info)
+: Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kThreshold)->InitDouble("Threshold", -20., -60., 0., 0.1, "dB");
+  GetParam(kRatio)->InitDouble("Ratio", 4., 1., 20., 0.1);
+  GetParam(kAttack)->InitDouble("Attack", 10., 0.1, 100., 0.1, "ms", 
+                                 IParam::kFlagsNone, "", 
+                                 IParam::ShapePowCurve(3.));
+  GetParam(kRelease)->InitDouble("Release", 100., 10., 1000., 0.1, "ms",
+                                  IParam::kFlagsNone, "",
+                                  IParam::ShapePowCurve(3.));
+  GetParam(kMakeupGain)->InitGain("Makeup Gain");
+  
+  // ... UI code
+}
+```
+
+### Implement DSP
+
+Add processing logic in `ProcessBlock`:
+
+```cpp
+void MyCompressor::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double threshold = GetParam(kThreshold)->Value();
+  const double ratio = GetParam(kRatio)->Value();
+  const double attack = GetParam(kAttack)->Value();
+  const double release = GetParam(kRelease)->Value();
+  const double makeupGain = GetParam(kMakeupGain)->DBToAmp();
+  
+  const int nChans = NOutChansConnected();
+  
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      // Your DSP algorithm here
+      outputs[c][s] = inputs[c][s] * makeupGain;
+    }
+  }
+}
+```
+
+### Build UI
+
+Add controls in `mLayoutFunc`:
+
+```cpp
+mLayoutFunc = [&](IGraphics* pGraphics) {
+  pGraphics->AttachPanelBackground(COLOR_GRAY);
+  pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
+  
+  const IRECT bounds = pGraphics->GetBounds().GetPadded(-20);
+  
+  pGraphics->AttachControl(new IVKnobControl(
+    bounds.GetGridCell(0, 3, 2).GetCentredInside(90), 
+    kThreshold, "Threshold"));
+  
+  pGraphics->AttachControl(new IVKnobControl(
+    bounds.GetGridCell(1, 3, 2).GetCentredInside(90), 
+    kRatio, "Ratio"));
+  
+  pGraphics->AttachControl(new IVKnobControl(
+    bounds.GetGridCell(2, 3, 2).GetCentredInside(90), 
+    kMakeupGain, "Makeup"));
+  
+  pGraphics->AttachControl(new IVSliderControl(
+    bounds.GetGridCell(0, 1, 2).GetMidVPadded(40), 
+    kAttack, "Attack"));
+  
+  pGraphics->AttachControl(new IVSliderControl(
+    bounds.GetGridCell(1, 1, 2).GetMidVPadded(40), 
+    kRelease, "Release"));
+};
+```
+
+</Steps>
+
+## Parameter Types
+
+iPlug2 provides initialization methods for common parameter types:
+
+<Tabs>
+<Tab title="Continuous">
+```cpp
+// Generic double (0-100%)
+GetParam(kGain)->InitDouble("Gain", 0., 0., 100., 0.01, "%");
+
+// Frequency (20 Hz - 20 kHz, logarithmic)
+GetParam(kFreq)->InitFrequency("Frequency", 1000., 20., 20000.);
+
+// Gain in dB (-60 to +12 dB)
+GetParam(kGain)->InitGain("Gain", 0., -60., 12.);
+
+// Percentage (0-100%)
+GetParam(kMix)->InitPercentage("Mix", 100.);
+```
+</Tab>
+
+<Tab title="Discrete">
+```cpp
+// Boolean (on/off)
+GetParam(kBypass)->InitBool("Bypass", false);
+
+// Integer range
+GetParam(kStages)->InitInt("Stages", 4, 1, 16);
+
+// Enumeration
+GetParam(kMode)->InitEnum("Mode", 0, 
+  {"Vintage", "Modern", "Clean"});
+```
+</Tab>
+
+<Tab title="Time">
+```cpp
+// Seconds
+GetParam(kDelay)->InitSeconds("Delay Time", 0.5, 0.001, 2.0);
+
+// Milliseconds with power curve
+GetParam(kAttack)->InitDouble("Attack", 10., 1., 1000., 0.1, "ms",
+                               IParam::kFlagsNone, "",
+                               IParam::ShapePowCurve(3.));
+```
+</Tab>
+</Tabs>
+
+## Real-Time Safety
+
+<Warning>
+**ProcessBlock must be real-time safe**. Avoid:
+- Memory allocation/deallocation (`new`, `delete`, `malloc`, `free`)
+- Locks and mutexes
+- File I/O
+- System calls
+- Logging/printing (except debug builds)
+</Warning>
+
+### Safe Practices
+
+```cpp
+void MyEffect::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  // ✅ Good: Read parameter values
+  const double gain = GetParam(kGain)->Value();
+  
+  // ✅ Good: Use pre-allocated buffers
+  for (int s = 0; s < nFrames; s++) {
+    mBuffer[s] = inputs[0][s];
+  }
+  
+  // ❌ Bad: Allocate memory
+  // std::vector<double> buffer(nFrames);
+  
+  // ❌ Bad: Use locks
+  // std::lock_guard<std::mutex> lock(mMutex);
+  
+  // ❌ Bad: Log output
+  // printf("Processing %d frames\n", nFrames);
+}
+```
+
+<Info>
+Use `OnReset()` to allocate buffers and initialize DSP state when sample rate changes.
+</Info>
+
+## Channel Configuration
+
+Define supported channel layouts in `config.h`:
+
+```cpp
+// Mono or Stereo
+#define PLUG_CHANNEL_IO "1-1 2-2"
+
+// Stereo to Stereo only
+#define PLUG_CHANNEL_IO "2-2"
+
+// Mono to Stereo (upmix)
+#define PLUG_CHANNEL_IO "1-2"
+
+// Surround (5.1)
+#define PLUG_CHANNEL_IO "6-6"
+
+// Multiple configurations
+#define PLUG_CHANNEL_IO "1-1 2-2 4-4"
+```
+
+## Advanced Features
+
+<CardGroup cols={2}>
+
+<Card title="State Management" icon="floppy-disk">
+```cpp
+bool SerializeState(IByteChunk& chunk) override;
+int UnserializeState(const IByteChunk& chunk, int pos) override;
+```
+Save/load custom plugin state beyond parameters
+</Card>
+
+<Card title="Sample Rate Changes" icon="rotate">
+```cpp
+void OnReset() override {
+  // Reinitialize DSP for new sample rate
+  mFilter.SetSampleRate(GetSampleRate());
+}
+```
+Handle sample rate and buffer size changes
+</Card>
+
+<Card title="Latency Reporting" icon="clock">
+```cpp
+SetLatency(mDelayLine.GetLatencySamples());
+```
+Report processing latency to host
+</Card>
+
+<Card title="Parameter Changes" icon="sliders">
+```cpp
+void OnParamChange(int paramIdx) override {
+  // React to parameter changes from DSP thread
+}
+```
+Respond to automation and user input
+</Card>
+
+</CardGroup>
+
+## Example: Simple Delay
+
+```cpp
+class SimpleDelay : public Plugin
+{
+public:
+  SimpleDelay(const InstanceInfo& info)
+  : Plugin(info, MakeConfig(kNumParams, kNumPresets))
+  {
+    GetParam(kDelayTime)->InitSeconds("Delay Time", 0.5, 0.001, 2.0);
+    GetParam(kFeedback)->InitPercentage("Feedback", 50.);
+    GetParam(kMix)->InitPercentage("Mix", 50.);
+  }
+  
+  void OnReset() override {
+    const int maxDelaySamples = static_cast<int>(GetSampleRate() * 2.0);
+    mDelayLine.Resize(maxDelaySamples);
+  }
+  
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override {
+    const double delayTime = GetParam(kDelayTime)->Value();
+    const double feedback = GetParam(kFeedback)->Value() / 100.;
+    const double mix = GetParam(kMix)->Value() / 100.;
+    
+    const int delaySamples = static_cast<int>(delayTime * GetSampleRate());
+    
+    for (int s = 0; s < nFrames; s++) {
+      const double input = inputs[0][s];
+      const double delayed = mDelayLine.Read(delaySamples);
+      const double feedbackSample = input + delayed * feedback;
+      
+      mDelayLine.Write(feedbackSample);
+      outputs[0][s] = input * (1. - mix) + delayed * mix;
+    }
+  }
+  
+private:
+  WDL_TypedBuf<sample> mDelayLine;
+  int mWritePos = 0;
+};
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="Parameters" href="/reference/parameters">
+Deep dive into parameter types and shapes
+</Card>
+
+<Card title="DSP Utilities" href="/reference/dsp">
+Built-in DSP helpers and utilities
+</Card>
+
+<Card title="IGraphics" href="/reference/igraphics">
+Build custom user interfaces
+</Card>
+
+<Card title="Testing" href="/guides/testing">
+Validate your plugin in different hosts
+</Card>
+
+</CardGroup>

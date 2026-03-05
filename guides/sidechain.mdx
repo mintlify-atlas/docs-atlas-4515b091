@@ -1,0 +1,515 @@
+---
+title: Sidechain Input Processing
+description: Build audio effects with sidechain inputs for compression, gating, and ducking
+---
+
+## Overview
+
+Sidechain inputs allow an audio effect to respond to an external audio source. Common uses include:
+
+- **Compressors** - Compress based on external signal (ducking)
+- **Gates** - Open/close gate based on trigger signal
+- **Vocoders** - Modulate carrier with external modulator
+- **Envelope Followers** - Extract amplitude from external source
+
+## IPlugSideChain Template
+
+The `IPlugSideChain` example demonstrates:
+
+- Multiple input buses (main + sidechain)
+- Per-channel connection detection
+- Visual feedback for connected channels
+- Workarounds for Logic/Garageband sidechain bugs
+
+### Channel Configuration
+
+```cpp config.h
+#define PLUG_CHANNEL_IO "\
+1-1 \
+1.1-1 \
+1.2-1 \
+1.2-2 \
+2.1-1 \
+2.1-2 \
+2-2 \
+2.2-2"
+
+#define PLUG_TYPE 0  // Audio Effect
+```
+
+<Note>
+**Channel IO Format:** `InputBuses.InputChannels-OutputChannels`
+
+- `"2-2"` = 2 channels in, 2 channels out (single bus)
+- `"1.2-2"` = 1 main bus (1 channel) + sidechain bus (2 channels) → 2 out
+- `"2.2-2"` = 2 main channels + 2 sidechain channels → 2 out
+</Note>
+
+## Basic Structure
+
+<Tabs>
+<Tab title="Header">
+```cpp IPlugSideChain.h
+#pragma once
+
+#include "IPlug_include_in_plug_hdr.h"
+#include "ISender.h"
+#include "IControls.h"
+
+enum EParams
+{
+  kGain = 0,
+  kNumParams
+};
+
+enum ECtrlTags
+{
+  kCtrlTagInputMeter = 0,
+  kCtrlTagOutputMeter,
+  kNumCtrlTags
+};
+
+using namespace iplug;
+using namespace igraphics;
+
+class IPlugSideChain final : public Plugin
+{
+public:
+  IPlugSideChain(const InstanceInfo& info);
+  
+  void OnIdle() override;
+  
+#if IPLUG_DSP
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  void OnActivate(bool enable) override;
+  void OnReset() override;
+  void GetBusName(ERoute direction, int busIdx, int nBuses, WDL_String& str) const override;
+#endif
+
+  bool mInputChansConnected[4] = {};   // Track connection state
+  bool mOutputChansConnected[2] = {};
+  bool mSendUpdate = false;
+  
+  IPeakAvgSender<4> mInputPeakSender;   // 4 input channels
+  IPeakAvgSender<2> mOutputPeakSender;  // 2 output channels
+};
+```
+
+**Key Components:**
+- `GetBusName()` - Name input buses (Main/SideChain)
+- `IsChannelConnected()` - Detect active channels
+- `IPeakAvgSender` - Meter for all channels
+- Track connection state for UI feedback
+</Tab>
+
+<Tab title="Initialization">
+```cpp IPlugSideChain.cpp
+IPlugSideChain::IPlugSideChain(const InstanceInfo& info)
+: Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+#if IPLUG_DSP
+  // Label each input channel
+  SetChannelLabel(ERoute::kInput, 0, "Main L");
+  SetChannelLabel(ERoute::kInput, 1, "Main R");
+  SetChannelLabel(ERoute::kInput, 2, "SideChain L");
+  SetChannelLabel(ERoute::kInput, 3, "SideChain R");
+#endif
+
+  GetParam(kGain)->InitGain("Gain");
+  
+  // ... UI code
+}
+```
+</Tab>
+
+<Tab title="Bus Names">
+```cpp
+void IPlugSideChain::GetBusName(ERoute direction, int busIdx, 
+                                 int nBuses, WDL_String& str) const
+{
+  if (direction == ERoute::kInput)
+  {
+    if (busIdx == 0)
+      str.Set("Main Input");
+    else
+      str.Set("SideChain");
+  }
+  else
+  {
+    str.Set("Output");
+  }
+}
+```
+
+**Bus Naming:**
+- `busIdx 0` = Main input bus
+- `busIdx 1` = Sidechain input bus
+- Hosts use these names in routing UI
+</Tab>
+
+<Tab title="Processing">
+```cpp
+void IPlugSideChain::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kGain)->DBToAmp();
+  const int nChans = NOutChansConnected();
+  
+  // Track connection changes
+  for (int i = 0; i < 4; i++) {
+    bool connected = IsChannelConnected(ERoute::kInput, i);
+    if (connected != mInputChansConnected[i]) {
+      mInputChansConnected[i] = connected;
+      mSendUpdate = true;
+    }
+  }
+  
+  for (int i = 0; i < 2; i++) {
+    bool connected = IsChannelConnected(ERoute::kOutput, i);
+    if (connected != mOutputChansConnected[i]) {
+      mOutputChansConnected[i] = connected;
+      mSendUpdate = true;
+    }
+  }
+  
+  // Process main inputs with gain
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+  
+  // Send meter data for all channels
+  mInputPeakSender.ProcessBlock(inputs, nFrames, kCtrlTagInputMeter, 4, 0);
+  mOutputPeakSender.ProcessBlock(outputs, nFrames, kCtrlTagOutputMeter, 2, 0);
+}
+```
+</Tab>
+</Tabs>
+
+## Creating a Sidechain Effect
+
+<Steps>
+
+### Duplicate Template
+
+```bash
+cd iPlug2/Examples
+python duplicate.py IPlugSideChain MySidechainCompressor MyCompany
+cd MySidechainCompressor
+```
+
+### Configure Channels
+
+Edit `config.h` to define input/output routing:
+
+```cpp config.h
+// Stereo main + stereo sidechain → stereo out
+#define PLUG_CHANNEL_IO "\
+2-2 \
+2.2-2"
+
+// Or more flexible configurations:
+// #define PLUG_CHANNEL_IO "\
+// 1-1 \
+// 1.1-1 \
+// 2-2 \
+// 2.2-2"
+```
+
+### Label Channels
+
+```cpp
+MySidechainCompressor::MySidechainCompressor(const InstanceInfo& info)
+: Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+#if IPLUG_DSP
+  SetChannelLabel(ERoute::kInput, 0, "Input L");
+  SetChannelLabel(ERoute::kInput, 1, "Input R");
+  SetChannelLabel(ERoute::kInput, 2, "SC L");
+  SetChannelLabel(ERoute::kInput, 3, "SC R");
+  
+  SetChannelLabel(ERoute::kOutput, 0, "Output L");
+  SetChannelLabel(ERoute::kOutput, 1, "Output R");
+#endif
+}
+```
+
+### Implement Compression
+
+```cpp
+void MySidechainCompressor::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double threshold = GetParam(kThreshold)->Value();
+  const double ratio = GetParam(kRatio)->Value();
+  const double attack = GetParam(kAttack)->Value() * 0.001;  // ms to seconds
+  const double release = GetParam(kRelease)->Value() * 0.001;
+  
+  const int nChans = NOutChansConnected();
+  const bool scConnected = IsChannelConnected(ERoute::kInput, 2);
+  
+  for (int s = 0; s < nFrames; s++) {
+    // Get sidechain level (or main input if SC not connected)
+    double scLevel = 0.0;
+    if (scConnected) {
+      // Use sidechain input (channels 2-3)
+      scLevel = std::max(std::abs(inputs[2][s]), std::abs(inputs[3][s]));
+    } else {
+      // Use main input (channels 0-1)
+      scLevel = std::max(std::abs(inputs[0][s]), std::abs(inputs[1][s]));
+    }
+    
+    // Convert to dB
+    const double scLevelDB = 20.0 * std::log10(scLevel + 1e-10);
+    
+    // Calculate gain reduction
+    double gainReduction = 0.0;
+    if (scLevelDB > threshold) {
+      const double over = scLevelDB - threshold;
+      gainReduction = over * (1.0 - 1.0 / ratio);
+    }
+    
+    // Apply envelope follower
+    const double coeff = (gainReduction > mEnvelope) ? attack : release;
+    mEnvelope += (gainReduction - mEnvelope) * coeff;
+    
+    // Convert to linear gain
+    const double gain = std::pow(10.0, -mEnvelope / 20.0);
+    
+    // Apply compression to main inputs
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+}
+```
+
+### Add UI Meters
+
+```cpp
+mLayoutFunc = [&](IGraphics* pGraphics) {
+  pGraphics->AttachPanelBackground(COLOR_GRAY);
+  
+  const IRECT bounds = pGraphics->GetBounds().GetPadded(-10);
+  
+  // Input meters (4 channels: Main L/R + SC L/R)
+  pGraphics->AttachControl(
+    new IVPeakAvgMeterControl<4>(
+      bounds.GetFromLeft(200), 
+      "Inputs",
+      DEFAULT_STYLE,
+      EDirection::Horizontal,
+      {"Main L", "Main R", "SC L", "SC R"}),
+    kCtrlTagInputMeter);
+  
+  // Output meters (2 channels)
+  pGraphics->AttachControl(
+    new IVPeakAvgMeterControl<2>(
+      bounds.GetFromRight(100), 
+      "Outputs",
+      DEFAULT_STYLE,
+      EDirection::Vertical,
+      {"L", "R"}),
+    kCtrlTagOutputMeter);
+  
+  // Parameter controls in center
+  const IRECT controlArea = bounds.GetReducedFromLeft(220).GetReducedFromRight(120);
+  // Add knobs/sliders here...
+};
+```
+
+</Steps>
+
+## Channel Detection
+
+### Checking Connections
+
+```cpp
+bool mainLConnected = IsChannelConnected(ERoute::kInput, 0);
+bool mainRConnected = IsChannelConnected(ERoute::kInput, 1);
+bool scLConnected = IsChannelConnected(ERoute::kInput, 2);
+bool scRConnected = IsChannelConnected(ERoute::kInput, 3);
+
+if (scLConnected || scRConnected) {
+  // Use sidechain signal
+} else {
+  // Fall back to main input
+}
+```
+
+### UI Feedback
+
+```cpp
+void OnIdle() override
+{
+  mInputPeakSender.TransmitData(*this);
+  mOutputPeakSender.TransmitData(*this);
+  
+  // Update connection status in UI
+  if (mSendUpdate && GetUI()) {
+    auto* meter = GetUI()->GetControlWithTag(kCtrlTagInputMeter)
+                        ->As<IVMeterControl<4>>();
+    
+    meter->SetTrackName(0, mInputChansConnected[0] ? 
+                           "Main L (Connected)" : "Main L (Not connected)");
+    meter->SetTrackName(1, mInputChansConnected[1] ? 
+                           "Main R (Connected)" : "Main R (Not connected)");
+    meter->SetTrackName(2, mInputChansConnected[2] ? 
+                           "SC L (Connected)" : "SC L (Not connected)");
+    meter->SetTrackName(3, mInputChansConnected[3] ? 
+                           "SC R (Connected)" : "SC R (Not connected)");
+    
+    GetUI()->SetAllControlsDirty();
+    mSendUpdate = false;
+  }
+}
+```
+
+## Host-Specific Workarounds
+
+### Logic/Garageband Sidechain Bug
+
+<Warning>
+Logic and Garageband have a bug where sidechain inputs receive copies of the main input when no sidechain is routed.
+</Warning>
+
+```cpp IPlugSideChain.cpp (lines 124-136)
+#if defined OS_MAC && defined AU_API
+  if (GetHost() == kHostLogic || GetHost() == kHostGarageBand) {
+    const int sz = nFrames * sizeof(sample);
+    
+    // Check if sidechain buffers match main buffers
+    if (!memcmp(inputs[0], inputs[2], sz)) {
+      memset(inputs[2], 0, sz);  // Zero out duplicate
+      mInputChansConnected[2] = false;
+    }
+    
+    if (!memcmp(inputs[1], inputs[3], sz)) {
+      memset(inputs[3], 0, sz);
+      mInputChansConnected[3] = false;
+    }
+  }
+#endif
+```
+
+**Better Solution:**
+Add a "Sidechain Enable" button in your UI rather than relying solely on host routing detection.
+
+## Common Sidechain Effects
+
+### Sidechain Compressor (Ducking)
+
+```cpp
+// Duck main signal based on sidechain level
+for (int s = 0; s < nFrames; s++) {
+  const double scLevel = std::abs(inputs[2][s]);  // Sidechain
+  const double scDB = 20.0 * std::log10(scLevel + 1e-10);
+  
+  double gainReduction = 0.0;
+  if (scDB > threshold) {
+    gainReduction = (scDB - threshold) * (1.0 - 1.0 / ratio);
+  }
+  
+  mEnvelope += (gainReduction - mEnvelope) * 
+               ((gainReduction > mEnvelope) ? attack : release);
+  
+  const double gain = std::pow(10.0, -mEnvelope / 20.0);
+  outputs[0][s] = inputs[0][s] * gain;  // Apply to main
+}
+```
+
+### Sidechain Gate
+
+```cpp
+// Open gate when sidechain exceeds threshold
+for (int s = 0; s < nFrames; s++) {
+  const double scLevel = std::abs(inputs[2][s]);
+  const double scDB = 20.0 * std::log10(scLevel + 1e-10);
+  
+  const double targetGain = (scDB > threshold) ? 1.0 : 0.0;
+  const double coeff = (targetGain > mGateState) ? attack : release;
+  
+  mGateState += (targetGain - mGateState) * coeff;
+  outputs[0][s] = inputs[0][s] * mGateState;
+}
+```
+
+### Envelope Follower
+
+```cpp
+// Extract envelope from sidechain, apply to main
+for (int s = 0; s < nFrames; s++) {
+  const double scLevel = std::abs(inputs[2][s]);
+  
+  // Smooth envelope
+  const double coeff = (scLevel > mEnvelope) ? attack : release;
+  mEnvelope += (scLevel - mEnvelope) * coeff;
+  
+  // Modulate main signal
+  const double mod = mEnvelope * depth;
+  outputs[0][s] = inputs[0][s] * (1.0 - depth + mod);
+}
+```
+
+## Bus Configuration
+
+### Multiple Buses
+
+iPlug2 supports multiple input/output buses:
+
+```cpp
+// Get number of buses
+const int nInputBuses = NInputBuses();
+const int nOutputBuses = NOutputBuses();
+
+// Get bus information
+const IBusInfo* busInfo = GetBusInfo(ERoute::kInput, busIdx);
+const int busChannels = busInfo->NChans();
+```
+
+### Channel Indexing
+
+Channels are indexed sequentially across buses:
+
+```
+Bus 0 (Main):    channels 0-1  (stereo)
+Bus 1 (SC):      channels 2-3  (stereo)
+               
+inputs[0] = Main L
+inputs[1] = Main R
+inputs[2] = SC L
+inputs[3] = SC R
+```
+
+## Testing
+
+<Note>
+**Testing Sidechain:**
+1. Load plugin in DAW
+2. Route audio to main input
+3. Route separate audio to sidechain input
+4. Verify meters show correct connections
+5. Test with no sidechain routed (should fall back gracefully)
+6. Test in Logic (known bugs with sidechain routing)
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="Audio Effect" href="/guides/audio-effect">
+Core audio processing concepts
+</Card>
+
+<Card title="Channel Routing" href="/reference/channel-routing">
+Advanced channel configuration
+</Card>
+
+<Card title="Metering" href="/reference/metering">
+Visual level meters and analysis
+</Card>
+
+<Card title="DSP Utilities" href="/reference/dsp">
+Envelope followers and dynamics
+</Card>
+
+</CardGroup>

@@ -1,0 +1,675 @@
+---
+title: IPlugControls Example
+description: A comprehensive showcase of all available UI controls in the IControls library
+---
+
+IPlugControls is a comprehensive demonstration of every UI control available in iPlug2's IControls library. This example serves as both a reference and a testbed for visual customization.
+
+## What You'll Learn
+
+<CardGroup cols={2}>
+  <Card title="Control Types" icon="grid">
+    Every available control: knobs, sliders, buttons, meters, and more
+  </Card>
+  <Card title="Bitmap Controls" icon="image">
+    Using PNG and SVG graphics for custom control appearances
+  </Card>
+  <Card title="Vector Styling" icon="palette">
+    Customizing IVectorBase controls with colors, shapes, and effects
+  </Card>
+  <Card title="Data Visualization" icon="chart-line">
+    Scopes, meters, and realtime display controls
+  </Card>
+</CardGroup>
+
+## Project Structure
+
+```
+Examples/IPlugControls/
+├── IPlugControls.h           # Plugin class and enums
+├── IPlugControls.cpp         # Implementation with all controls
+├── config.h                  # Plugin configuration
+├── IconsForkAwesome.h        # Font Awesome icon definitions
+├── IconsFontaudio.h          # Audio-specific icon definitions
+└── resources/                # Images, SVGs, and fonts
+```
+
+## Parameters and Control Tags
+
+### Parameters
+
+The example uses minimal parameters:
+
+```cpp IPlugControls.h
+enum EParams
+{
+  kParamGain = 0,
+  kParamMode,
+  kParamFreq1,
+  kParamFreq2,
+  kNumParams
+};
+```
+
+### Control Tags
+
+Controls that need direct access are tagged:
+
+```cpp IPlugControls.h
+enum EControlTags
+{
+  kCtrlTagDialogResult = 0,
+  kCtrlTagVectorButton,
+  kCtrlTagVectorSliderV,
+  kCtrlTagVectorSliderH,
+  kCtrlTagTabSwitch,
+  kCtrlTagRadioButton,
+  kCtrlTagScope,
+  kCtrlTagDisplay,
+  kCtrlTagMeter,
+  kCtrlTagPeakAvgMeter,
+  kCtrlTagRTText,
+  kCtrlTagRedLED,
+  kCtrlTagGreenLED,
+  kCtrlTagBlueLED,
+  kCtrlTagAboutBox,
+  kCtrlTags
+};
+```
+
+<Info>
+Control tags allow you to reference specific controls later, especially for sending realtime data from the DSP thread.
+</Info>
+
+## Control Categories
+
+The example is organized into distinct control families:
+
+### Basic Text Controls
+
+```cpp IPlugControls.cpp
+// Static text display
+pGraphics->AttachControl(new ITextControl(
+  nextCell().GetFromTop(20.f), 
+  "Result...", 
+  DEFAULT_TEXT, 
+  COLOR_LIGHT_GRAY
+), kCtrlTagDialogResult);
+
+// Clickable URL
+pGraphics->AttachControl(new IURLControl(
+  sameCell().SubRectVertical(4, 2).GetMidVPadded(10.f), 
+  "IURLControl", 
+  "https://iplug2.github.io", 
+  DEFAULT_TEXT
+));
+
+// Editable text
+pGraphics->AttachControl(new IEditableTextControl(
+  sameCell().SubRectVertical(4, 3).GetMidVPadded(10.f), 
+  "IEditableTextControl", 
+  DEFAULT_TEXT
+));
+
+// Text toggle with icons
+pGraphics->AttachControl(new ITextToggleControl(
+  sameCell().SubRectVertical(4, 1).GetGridCell(1, 0, 3, 3), 
+  nullptr, 
+  ICON_FK_SQUARE_O,      // Unchecked icon
+  ICON_FK_CHECK_SQUARE,  // Checked icon
+  forkAwesomeText
+));
+```
+
+### Bitmap Controls
+
+Bitmap controls use PNG images for custom appearances:
+
+```cpp IPlugControls.cpp
+// Load bitmaps
+const IBitmap knobBitmap = pGraphics->LoadBitmap(PNGKNOB_FN, 60);  // 60 frames
+const IBitmap switchBitmap = pGraphics->LoadBitmap(PNGSWITCH_FN, 2, true);
+const IBitmap buttonBitmap = pGraphics->LoadBitmap(PNGBUTTON_FN, 10);
+const IBitmap sliderHandleBitmap = pGraphics->LoadBitmap(PNGSLIDERHANDLE_FN);
+const IBitmap sliderTrackBitmap = pGraphics->LoadBitmap(PNGSLIDERTRACK_FN);
+
+// Bitmap knob (filmstrip)
+pGraphics->AttachControl(new IBKnobControl(
+  sameCell().GetPadded(-5.), 
+  knobBitmap, 
+  kParamGain
+));
+
+// Bitmap button
+pGraphics->AttachControl(new IBButtonControl(
+  sameCell().FracRectVertical(0.6f, true), 
+  buttonBitmap, 
+  [](IControl* pCaller) {
+    pCaller->SetAnimation([](IControl* pCaller){
+      auto progress = pCaller->GetAnimationProgress();
+      if(progress > 1.) {
+        pCaller->OnEndAnimation();
+        return;
+      }
+      pCaller->SetValue(Clip(progress + .5, 0., 1.));
+    }, 100);
+  }
+));
+
+// Bitmap slider
+pGraphics->AttachControl(new IBSliderControl(
+  sameCell().GetCentredInside((float) sliderHandleBitmap.W(), 100.f), 
+  sliderHandleBitmap, 
+  sliderTrackBitmap, 
+  kParamGain, 
+  EDirection::Vertical
+));
+```
+
+<Tip>
+Bitmap filmstrips should have frames arranged vertically for knobs and horizontally for switches.
+</Tip>
+
+### SVG Controls
+
+SVG controls use scalable vector graphics:
+
+```cpp IPlugControls.cpp
+// Load SVGs
+const ISVG sliderHandleSVG = pGraphics->LoadSVG(SVGSLIDERHANDLE_FN);
+const ISVG sliderTrackSVG = pGraphics->LoadSVG(SVGSLIDERTRACK_FN);
+const ISVG knobSVG = pGraphics->LoadSVG(SVGKNOBROTATE_FN);
+
+// SVG knob (rotates the graphic)
+pGraphics->AttachControl(new ISVGKnobControl(
+  sameCell().GetCentredInside(100), 
+  knobSVG, 
+  kParamGain
+));
+
+// SVG slider
+pGraphics->AttachControl(new ISVGSliderControl(
+  sameCell().GetCentredInside(30, 100), 
+  sliderHandleSVG, 
+  sliderTrackSVG, 
+  kParamGain, 
+  EDirection::Vertical
+));
+```
+
+<Info>
+SVG controls scale perfectly at any resolution and are ideal for high-DPI displays.
+</Info>
+
+### IVector Controls
+
+IVector controls are procedurally drawn and highly customizable:
+
+```cpp IPlugControls.cpp
+// Define a reusable style
+const IVStyle style {
+  true,  // Show label
+  true,  // Show value
+  {
+    DEFAULT_BGCOLOR,   // Background
+    DEFAULT_FGCOLOR,   // Foreground
+    DEFAULT_PRCOLOR,   // Pressed
+    COLOR_BLACK,       // Frame
+    DEFAULT_HLCOLOR,   // Highlight
+    DEFAULT_SHCOLOR,   // Shadow
+    COLOR_BLACK,       // Extra 1
+    DEFAULT_X2COLOR,   // Extra 2
+    DEFAULT_X3COLOR    // Extra 3
+  },
+  IText(12.f, EAlign::Center)  // Label text
+};
+
+// Vector knob
+pGraphics->AttachControl(new IVKnobControl(
+  nextCell().GetCentredInside(110.), 
+  kParamGain, 
+  "IVKnobControl", 
+  style, 
+  true  // Show pointer/indicator
+));
+
+// Vector slider
+pGraphics->AttachControl(new IVSliderControl(
+  nextCell(), 
+  kParamGain, 
+  "IVSliderControl", 
+  style.WithRoundness(1.f),  // Modify style
+  true,                       // Show label
+  EDirection::Vertical,       // Direction
+  DEFAULT_GEARING,            // Mouse sensitivity
+  6.f,                        // Track size
+  6.f,                        // Handle size
+  true                        // Show value
+));
+
+// Range slider (two parameters)
+pGraphics->AttachControl(new IVRangeSliderControl(
+  sameCell().SubRectVertical(3, 1), 
+  {kParamFreq1, kParamFreq2},  // Two parameter IDs
+  "IVRangeSliderControl", 
+  style, 
+  EDirection::Horizontal
+));
+```
+
+### Button Controls
+
+```cpp IPlugControls.cpp
+// Simple button with action
+auto button1action = [pGraphics](IControl* pCaller) {
+  SplashClickActionFunc(pCaller);
+  pGraphics->ShowMessageBox("Message", "Title", kMB_YESNO, 
+    [&](EMsgBoxResult result) {
+      WDL_String str;
+      str.SetFormatted(32, "%s pressed", kMessageResultStrs[result]);
+      pGraphics->GetControlWithTag(kCtrlTagDialogResult)
+        ->As<ITextControl>()->SetStr(str.Get());
+    }
+  );
+};
+
+pGraphics->AttachControl(new IVButtonControl(
+  nextCell().SubRectVertical(3, 0), 
+  button1action, 
+  "IVButtonControl", 
+  style, 
+  false  // Don't draw value text
+));
+
+// Toggle button
+pGraphics->AttachControl(new IVToggleControl(
+  sameCell().SubRectVertical(3, 1), 
+  SplashClickActionFunc, 
+  "IVToggleControl", 
+  style.WithValueText(forkAwesomeText), 
+  "",                // Off text
+  ICON_FK_CHECK      // On text (icon)
+));
+
+// Menu button
+pGraphics->AttachControl(new IVMenuButtonControl(
+  sameCell().SubRectVertical(3, 2), 
+  kParamMode, 
+  "IVMenuButtonControl", 
+  style
+));
+```
+
+### Switch Controls
+
+```cpp IPlugControls.cpp
+// Standard switch
+pGraphics->AttachControl(new IVSwitchControl(
+  nextCell().SubRectVertical(3, 0), 
+  kParamMode, 
+  "IVSwitchControl", 
+  style.WithValueText(IText(24.f, EAlign::Center))
+));
+
+// Radio buttons
+pGraphics->AttachControl(new IVRadioButtonControl(
+  nextCell().GetCentredInside(110.), 
+  kParamMode, 
+  {"one", "two", "three", "four"},  // Options
+  "IVRadioButtonControl", 
+  style, 
+  EVShape::Ellipse,    // Shape
+  EDirection::Vertical, // Layout
+  10.f                  // Spacing
+));
+
+// Tab switch with icons
+pGraphics->AttachControl(new IVTabSwitchControl(
+  nextCell().SubRectVertical(3, 0), 
+  SplashClickActionFunc, 
+  {ICON_FAU_FILTER_LOWPASS, ICON_FAU_FILTER_BANDPASS, ICON_FAU_FILTER_HIGHPASS}, 
+  "IVTabSwitchControl", 
+  style.WithValueText(fontaudioText), 
+  EVShape::EndsRounded
+));
+
+// Slide switch
+pGraphics->AttachControl(new IVSlideSwitchControl(
+  sameCell().SubRectVertical(3, 1), 
+  kParamMode, 
+  "IVSlideSwitchControl", 
+  style, 
+  true  // Horizontal
+));
+```
+
+### XY Pad and Multi-Slider
+
+```cpp IPlugControls.cpp
+// XY pad controlling two parameters
+pGraphics->AttachControl(new IVXYPadControl(
+  nextCell(), 
+  {kParamFreq1, kParamFreq2}, 
+  "IVXYPadControl", 
+  style
+));
+
+// Multi-slider for controlling multiple values
+pGraphics->AttachControl(new IVMultiSliderControl<4>(
+  nextCell(), 
+  "IVMultiSliderControl", 
+  style
+));
+```
+
+### Visualization Controls
+
+```cpp IPlugControls.cpp
+// Linear meter
+pGraphics->AttachControl(new IVMeterControl<2>(
+  nextCell(), 
+  "IVMeterControl - Lin", 
+  style.WithColor(kFG, COLOR_WHITE.WithOpacity(0.3f)), 
+  EDirection::Vertical, 
+  {"L", "R"}  // Channel labels
+), kCtrlTagMeter);
+
+// Peak/Average meter (logarithmic)
+pGraphics->AttachControl(new IVPeakAvgMeterControl<2>(
+  nextCell(), 
+  "IVPeakAvgMeterControl - Log", 
+  style.WithColor(kFG, COLOR_WHITE.WithOpacity(0.3f))
+), kCtrlTagPeakAvgMeter);
+
+// Oscilloscope
+pGraphics->AttachControl(new IVScopeControl<2, kScopeBufferSize*2>(
+  nextCell(), 
+  "IVScopeControl", 
+  style.WithColor(kFG, COLOR_BLACK)
+), kCtrlTagScope);
+
+// Waveform display
+pGraphics->AttachControl(new IVDisplayControl(
+  nextCell(), 
+  "IVDisplayControl", 
+  style, 
+  EDirection::Vertical, 
+  -1.,   // Min value
+  1.,    // Max value
+  0.,    // Initial offset
+  512    // Buffer size
+), kCtrlTagDisplay);
+```
+
+### Keyboard and Wheel Controls
+
+```cpp IPlugControls.cpp
+// Piano keyboard
+pGraphics->AttachControl(new IVKeyboardControl(
+  keyboardBounds, 
+  36,  // Start note (C1)
+  72   // End note (C5)
+), kCtrlTagKeyboard)->SetActionFunction([this](IControl* pControl){
+  this->FlashBlueLED();
+});
+
+// Pitch bend wheel
+pGraphics->AttachControl(new IWheelControl(
+  wheelsBounds.FracRectHorizontal(0.5)
+), kCtrlTagBender);
+
+// Mod wheel
+pGraphics->AttachControl(new IWheelControl(
+  wheelsBounds.FracRectHorizontal(0.5, true), 
+  IMidiMsg::EControlChangeMsg::kModWheel
+));
+```
+
+### LED Indicators
+
+```cpp IPlugControls.cpp
+// LED with manual control
+pGraphics->AttachControl(new ILEDControl(
+  sameCell().SubRectVertical(4, 1).SubRectHorizontal(3, 0).GetCentredInside(20.f), 
+  COLOR_RED
+), kCtrlTagRedLED);
+
+pGraphics->AttachControl(new ILEDControl(
+  sameCell().SubRectVertical(4, 1).SubRectHorizontal(3, 1).GetCentredInside(20.f), 
+  COLOR_GREEN
+), kCtrlTagGreenLED);
+
+// LED with decay animation
+pGraphics->AttachControl(new ILEDControl(
+  sameCell().SubRectVertical(4, 1).SubRectHorizontal(3, 2).GetCentredInside(20.f), 
+  0.5f  // Decay time
+), kCtrlTagBlueLED);
+```
+
+Trigger LED with decay:
+
+```cpp IPlugControls.cpp
+void IPlugControls::FlashBlueLED()
+{
+  GetUI()->GetControlWithTag(kCtrlTagBlueLED)
+    ->As<ILEDControl>()->TriggerWithDecay(1000);
+}
+```
+
+### Plot Control
+
+```cpp IPlugControls.cpp
+// Plot multiple functions
+pGraphics->AttachControl(new IVPlotControl(
+  nextCell(), 
+  {
+    {COLOR_RED,   [](double x){ return std::sin(x * 6.2); }},
+    {COLOR_BLUE,  [](double x){ return std::cos(x * 6.2); }},
+    {COLOR_GREEN, [](double x){ return x > 0.5; }}
+  }, 
+  32,  // Number of points
+  "IVPlotControl", 
+  style
+));
+```
+
+### Custom Lambda Control
+
+```cpp IPlugControls.cpp
+// Completely custom drawing
+pGraphics->AttachControl(new ILambdaControl(
+  sameCell().GetScaledAboutCentre(0.5),
+  [](ILambdaControl* pCaller, IGraphics& g, IRECT& r) {
+    const float radius = r.W();
+    const float x = r.MW();
+    const float y = r.MH();
+    const float rotate = float(pCaller->GetAnimationProgress() * PI);
+    
+    for(int index = 0, limit = 40; index < limit; ++index)
+    {
+      float firstAngle = float((index * 2 * PI) / limit);
+      float secondAngle = float(((index + 1) * 2 * PI) / limit);
+      
+      g.PathTriangle(
+        x, y,
+        x + std::sin(firstAngle + rotate) * radius, 
+        y + std::cos(firstAngle + rotate) * radius,
+        x + std::sin(secondAngle + rotate) * radius, 
+        y + std::cos(secondAngle + rotate) * radius
+      );
+      
+      if(index % 2)
+        g.PathFill(COLOR_RED);
+      else
+        g.PathFill(pCaller->mMouseInfo.ms.L ? COLOR_VIOLET : COLOR_BLUE);
+    }
+  }, 
+  1000,  // Animation duration
+  false  // Loop animation
+));
+```
+
+<Tip>
+ILambdaControl allows completely custom drawing without creating a new control class.
+</Tip>
+
+## Audio Processing for Visualization
+
+The example generates test signals for visualizing controls:
+
+```cpp IPlugControls.cpp
+void IPlugControls::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double phaseIncr1 = (1. / GetSampleRate()) * GetParam(kParamFreq1)->Value();
+  const double phaseIncr2 = (1. / GetSampleRate()) * GetParam(kParamFreq2)->Value();
+
+  for (int s = 0; s < nFrames; s++) {
+    static double phase1 = 0.;
+    static double phase2 = 0.;
+
+    outputs[0][s] = cos(phase1 += phaseIncr1);
+    outputs[1][s] = sin(phase2 += phaseIncr2);
+  }
+  
+  // Send data to UI controls
+  mDisplaySender.ProcessBlock(outputs, nFrames, kCtrlTagDisplay);
+  mScopeSender.ProcessBlock(outputs, nFrames, kCtrlTagScope);
+  mMeterSender.ProcessBlock(outputs, nFrames, kCtrlTagMeter);
+  mPeakAvgMeterSender.ProcessBlock(outputs, nFrames, kCtrlTagPeakAvgMeter);
+
+  // Store single value for RT text display
+  mLastOutputData.vals[0] = (float) outputs[0][0];
+  mRTTextSender.PushData(mLastOutputData);
+
+  // Zero outputs (visualization only)
+  for (int s = 0; s < nFrames; s++) {
+    outputs[0][s] = 0.;
+    outputs[1][s] = 0.;
+  }
+}
+```
+
+### Data Sender Classes
+
+Different sender types for different visualization needs:
+
+```cpp IPlugControls.h
+IBufferSender<2, kScopeBufferSize, kScopeBufferSize*2> mScopeSender;
+IBufferSender<1> mDisplaySender;
+IPeakSender<2> mMeterSender;
+ISender<1> mRTTextSender;
+IPeakAvgSender<2> mPeakAvgMeterSender { -90.0, true, 10.0f, 5.0f, 100.0f, 1000.0f };
+```
+
+<CardGroup cols={2}>
+  <Card title="IBufferSender" icon="buffer">
+    Sends audio buffers for scope/waveform display
+  </Card>
+  <Card title="IPeakSender" icon="chart-bar">
+    Sends peak values for simple meters
+  </Card>
+  <Card title="IPeakAvgSender" icon="wave-square">
+    Sends peak and average for professional meters
+  </Card>
+  <Card title="ISender" icon="paper-plane">
+    Generic data sender for custom visualizations
+  </Card>
+</CardGroup>
+
+## Style Customization Panel
+
+The example includes interactive style modification:
+
+```cpp IPlugControls.cpp
+// Dynamic style sliders
+for(auto label : {"Widget Frac", "Roundness", "Shadow Offset", "Frame Thickness", "Angle"})
+{
+  pGraphics->AttachControl(new IVSliderControl(
+    sameCell().GetGridCell(slider, 0, 5, 1), 
+    [pGraphics, slider](IControl* pCaller){
+      SplashClickActionFunc(pCaller);
+      pGraphics->ForControlInGroup("vcontrols", [pCaller, slider](IControl* pControl) {
+        IVectorBase* pVControl = pControl->As<IVectorBase>();
+        float val = static_cast<float>(pCaller->GetValue());
+        
+        switch (slider) {
+          case 0 : pVControl->SetWidgetFrac(val); break;
+          case 1 : pVControl->SetRoundness(val); break;
+          case 2 : pVControl->SetShadowOffset(val * 5.f); break;
+          case 3 : pVControl->SetFrameThickness(val * 5.f); break;
+          case 4 : pVControl->SetAngle(val * 360.f); break;
+          default: break;
+        }
+      });
+    }, 
+    label, 
+    style, 
+    true, 
+    EDirection::Horizontal
+  ));
+  slider++;
+}
+```
+
+<Info>
+The `ForControlInGroup` method allows batch operations on tagged controls.
+</Info>
+
+## Font Icons
+
+The example demonstrates two icon fonts:
+
+### Fork Awesome Icons
+
+```cpp IconsForkAwesome.h
+#define ICON_FK_CHECK "\uf00c"
+#define ICON_FK_SQUARE_O "\uf096"
+#define ICON_FK_CHECK_SQUARE "\uf14a"
+#define ICON_FK_CIRCLE_O "\uf10c"
+#define ICON_FK_CHECK_CIRCLE "\uf058"
+```
+
+### Fontaudio Icons
+
+```cpp IconsFontaudio.h
+#define ICON_FAU_FILTER_LOWPASS "\ue900"
+#define ICON_FAU_FILTER_BANDPASS "\ue901"
+#define ICON_FAU_FILTER_HIGHPASS "\ue902"
+```
+
+## Key Takeaways
+
+<CardGroup cols={2}>
+  <Card title="Control Variety" icon="layer-group">
+    Dozens of controls for every use case
+  </Card>
+  <Card title="Flexible Styling" icon="palette">
+    IVStyle allows comprehensive visual customization
+  </Card>
+  <Card title="Multiple Backends" icon="code-branch">
+    Bitmap, SVG, and vector rendering options
+  </Card>
+  <Card title="Realtime Data" icon="bolt">
+    ISender classes for thread-safe visualization
+  </Card>
+  <Card title="Icon Fonts" icon="icons">
+    Font Awesome and Fontaudio for scalable icons
+  </Card>
+  <Card title="Interactive Testing" icon="flask">
+    Live style modification to preview changes
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="IGraphics Guide" icon="arrow-right" href="/guide/igraphics">
+    Learn UI construction in depth
+  </Card>
+  <Card title="IControl Reference" icon="book" href="/api/icontrol">
+    Complete control API documentation
+  </Card>
+  <Card title="Custom Controls" icon="code" href="/guide/custom-controls">
+    Create your own control classes
+  </Card>
+</CardGroup>

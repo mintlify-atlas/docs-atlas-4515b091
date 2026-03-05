@@ -1,0 +1,849 @@
+---
+title: 'Audio Processing'
+description: 'Master real-time audio processing in iPlug2: ProcessBlock, sample rates, buffers, and real-time safety'
+icon: 'waveform'
+---
+
+## ProcessBlock Overview
+
+The `ProcessBlock()` method is the heart of your audio plugin. It's called repeatedly by the host on a **high-priority real-time audio thread**.
+
+```cpp
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override {
+  const double gain = GetParam(kGain)->Value() / 100.;
+  const int nChans = NOutChansConnected();
+  
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+}
+```
+
+<Info>
+From [IPlugProcessor.h:62-70](https://github.com/iPlug2/iPlug2/blob/master/IPlug/IPlugProcessor.h#L62-L70)
+</Info>
+
+### Method Signature
+
+```cpp
+virtual void ProcessBlock(
+  sample** inputs,   // Input audio buffers (non-interleaved)
+  sample** outputs,  // Output audio buffers (non-interleaved)
+  int nFrames        // Number of samples per channel this block
+);
+```
+
+<CardGroup cols={2}>
+  <Card title="Inputs" icon="right-to-bracket">
+    `inputs[channel][sample]`
+    
+    2D array of input buffers. Unconnected channels contain zeros.
+  </Card>
+  <Card title="Outputs" icon="right-from-bracket">
+    `outputs[channel][sample]`
+    
+    2D array of output buffers. Must write to all connected channels.
+  </Card>
+  <Card title="nFrames" icon="hashtag">
+    Block size in samples per channel. Can vary between calls (typically 32-2048).
+  </Card>
+  <Card title="sample" icon="wave-square">
+    Either `float` or `double` based on `SAMPLE_TYPE_DOUBLE` define.
+  </Card>
+</CardGroup>
+
+## Buffer Layout
+
+### Non-Interleaved (Planar) Format
+
+iPlug2 uses **non-interleaved** audio buffers, where each channel is a separate array:
+
+```cpp
+// Non-interleaved (iPlug2)
+inputs[0][0]  // Left channel, sample 0
+inputs[0][1]  // Left channel, sample 1  
+inputs[0][2]  // Left channel, sample 2
+inputs[1][0]  // Right channel, sample 0
+inputs[1][1]  // Right channel, sample 1
+inputs[1][2]  // Right channel, sample 2
+```
+
+<Warning>
+**NOT** interleaved like raw audio files:
+```cpp
+// Interleaved (NOT used in iPlug2)
+buffer[0]  // Left, sample 0
+buffer[1]  // Right, sample 0
+buffer[2]  // Left, sample 1
+buffer[3]  // Right, sample 1
+```
+</Warning>
+
+### Accessing Buffers
+
+```cpp
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+  // Get number of connected channels
+  const int nIn = NInChansConnected();
+  const int nOut = NOutChansConnected();
+  
+  // Per-sample processing (inner loop = samples)
+  for (int c = 0; c < nOut; c++) {
+    for (int s = 0; s < nFrames; s++) {
+      // Read from input channel c, sample s
+      sample input = inputs[c][s];
+      
+      // Process...
+      sample output = input * gain;
+      
+      // Write to output channel c, sample s
+      outputs[c][s] = output;
+    }
+  }
+  
+  // Or per-channel processing (inner loop = channels)
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nOut; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+}
+```
+
+<Tip>
+**Performance tip:** Inner loop = samples is usually faster due to CPU cache locality.
+</Tip>
+
+## Channel I/O
+
+Channel I/O configuration is defined in config.h:
+
+```cpp config.h
+#define PLUG_CHANNEL_IO "1-1 2-2"  // Mono-to-mono and stereo-to-stereo
+```
+
+### Common I/O Configurations
+
+<Tabs>
+  <Tab title="Stereo Effect">
+    ```cpp
+    #define PLUG_CHANNEL_IO "2-2"
+    ```
+    
+    ```cpp
+    void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+      for (int s = 0; s < nFrames; s++) {
+        sample left = inputs[0][s];
+        sample right = inputs[1][s];
+        
+        // Stereo processing
+        outputs[0][s] = ProcessLeft(left);
+        outputs[1][s] = ProcessRight(right);
+      }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Multi-Format">
+    ```cpp
+    #define PLUG_CHANNEL_IO "1-1 2-2"
+    ```
+    
+    Supports both mono and stereo. Use `NOutChansConnected()`:
+    
+    ```cpp
+    void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+      const int nChans = NOutChansConnected();  // 1 or 2
+      
+      for (int s = 0; s < nFrames; s++) {
+        for (int c = 0; c < nChans; c++) {
+          outputs[c][s] = Process(inputs[c][s]);
+        }
+      }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Sidechain">
+    ```cpp
+    #define PLUG_CHANNEL_IO "1.1-1 2.2-2"
+    ```
+    
+    Main input on bus 0, sidechain on bus 1:
+    
+    ```cpp
+    void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+      const int nChans = NOutChansConnected();
+      const int nBuses = MaxNBuses(ERoute::kInput);
+      
+      // Main input: inputs[0] and inputs[1] (stereo)
+      // Sidechain: inputs[2] and inputs[3] (stereo)
+      
+      for (int s = 0; s < nFrames; s++) {
+        sample mainL = inputs[0][s];
+        sample mainR = inputs[1][s];
+        sample scL = nBuses > 1 ? inputs[2][s] : 0.0;
+        sample scR = nBuses > 1 ? inputs[3][s] : 0.0;
+        
+        // Sidechain compression
+        double envelope = CalcEnvelope(scL, scR);
+        double gain = CalcGainReduction(envelope);
+        
+        outputs[0][s] = mainL * gain;
+        outputs[1][s] = mainR * gain;
+      }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Multi-Bus Output">
+    ```cpp
+    #define PLUG_CHANNEL_IO "0-2.2.2.2"  // 4 stereo outs
+    ```
+    
+    Example: Drum synthesizer with separate outputs:
+    
+    ```cpp
+    void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+      // Bus 0: outputs[0], outputs[1] (kick)
+      // Bus 1: outputs[2], outputs[3] (snare)
+      // Bus 2: outputs[4], outputs[5] (hi-hat)
+      // Bus 3: outputs[6], outputs[7] (tom)
+      
+      for (int s = 0; s < nFrames; s++) {
+        sample kick = mKickSynth.Process();
+        sample snare = mSnareSynth.Process();
+        sample hihat = mHiHatSynth.Process();
+        sample tom = mTomSynth.Process();
+        
+        outputs[0][s] = outputs[1][s] = kick;   // Kick L+R
+        outputs[2][s] = outputs[3][s] = snare;  // Snare L+R
+        outputs[4][s] = outputs[5][s] = hihat;  // Hi-hat L+R
+        outputs[6][s] = outputs[7][s] = tom;    // Tom L+R
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Channel I/O String Format
+
+```
+"inputs-outputs" or "bus1.bus2.busN-bus1.bus2.busN"
+
+Examples:
+"1-1"        = Mono to mono
+"2-2"        = Stereo to stereo
+"1-1 2-2"    = Both mono and stereo (VST3 supports multiple configs)
+"1.1-1"      = Mono main + mono sidechain → mono out
+"2.2-2"      = Stereo main + stereo sidechain → stereo out
+"0-2.2"      = No input, 2 stereo outputs (instrument)
+"2-2.2.2.2"  = Stereo in, 4 stereo outputs
+```
+
+<Note>
+From [IPlugProcessor.h:256-265](https://github.com/iPlug2/iPlug2/blob/master/IPlug/IPlugProcessor.h#L256-L265) - `ParseChannelIOStr()` parses this format.
+</Note>
+
+## Sample Rate and Block Size
+
+### Getting Current Settings
+
+```cpp
+double sampleRate = GetSampleRate();  // e.g., 44100.0, 48000.0
+int blockSize = GetBlockSize();       // e.g., 512 (varies per call)
+```
+
+<Warning>
+`GetBlockSize()` returns the **maximum** block size. Actual `nFrames` in `ProcessBlock()` can be smaller!
+</Warning>
+
+### OnReset() - Initialize DSP
+
+`OnReset()` is called when:
+- Plugin is first activated
+- Sample rate changes
+- I/O configuration changes
+
+```cpp
+void OnReset() override {
+  // Now we know the sample rate - initialize DSP
+  const double sr = GetSampleRate();
+  
+  // Allocate delay buffer (1 second max)
+  mDelayBuffer.Resize(static_cast<int>(sr));
+  
+  // Calculate filter coefficients
+  mFilter.SetSampleRate(sr);
+  mFilter.CalcCoefficients();
+  
+  // Clear state
+  mPhase = 0.0;
+  mEnvelope = 0.0;
+  
+  TRACE;  // Log that OnReset was called
+}
+```
+
+<Tip>
+Allocate all DSP buffers in `OnReset()`, not in the constructor, so they're sized correctly for the sample rate.
+</Tip>
+
+### OnActivate() - Plugin Enable/Disable
+
+```cpp
+void OnActivate(bool active) override {
+  if (active) {
+    // Plugin activated - clear buffers
+    mDelayBuffer.Clear();
+    mPhase = 0.0;
+  } else {
+    // Plugin deactivated - could free resources
+    // (Usually not necessary)
+  }
+}
+```
+
+<Note>
+Not all hosts support `OnActivate()` reliably. Use `OnReset()` for critical initialization.
+</Note>
+
+## Real-Time Safety
+
+`ProcessBlock()` runs on a **high-priority real-time thread**. Breaking real-time safety causes audio dropouts (glitches, clicks, pops).
+
+### ❌ NEVER Do These in ProcessBlock
+
+<Warning>
+**Memory allocation/deallocation:**
+```cpp
+// ❌ BAD
+std::vector<double> buffer(nFrames);  // Allocates!
+delete pOldBuffer;                     // Deallocates!
+
+// ✅ GOOD - Pre-allocate in OnReset()
+mBuffer.Resize(GetBlockSize());  // Do this in OnReset()
+```
+</Warning>
+
+<Warning>
+**Mutex locks (blocking):**
+```cpp
+// ❌ BAD
+mMutex.lock();
+// ... process ...
+mMutex.unlock();
+
+// ✅ GOOD - Use lock-free queue (ISender)
+mSender.PushData({kTag}, {value});  // Lock-free
+```
+</Warning>
+
+<Warning>
+**File I/O:**
+```cpp
+// ❌ BAD
+fwrite(outputs[0], sizeof(sample), nFrames, mFile);
+fread(buffer, sizeof(sample), nFrames, mFile);
+
+// ✅ GOOD - Record to pre-allocated ring buffer,
+// write to file on separate thread
+```
+</Warning>
+
+<Warning>
+**System calls that can block:**
+```cpp
+// ❌ BAD
+Sleep(10);                     // Blocks!
+system("some command");         // Blocks!
+printf("debug info\n");         // Can block I/O!
+
+// ✅ GOOD - Use TRACE macro (disabled in release)
+TRACE;  // Only logs in debug builds
+```
+</Warning>
+
+<Warning>
+**Complex operations:**
+```cpp
+// ❌ BAD (unless you know it's fast)
+LoadPreset("preset.txt");      // File I/O!
+RecalculateFFT();              // Might allocate!
+std::sort(data.begin(), data.end());  // Unpredictable!
+
+// ✅ GOOD - Do in OnParamChange() or separate thread
+```
+</Warning>
+
+### ✅ Safe in ProcessBlock
+
+```cpp
+// ✅ Parameter access (atomic)
+double gain = GetParam(kGain)->Value();
+
+// ✅ Pre-allocated buffer access
+mDelayBuffer[index] = input;
+
+// ✅ Lock-free queue
+mSender.PushData({kTag}, {value});
+
+// ✅ Math operations
+double output = sin(mPhase) * gain;
+mPhase += frequency / GetSampleRate();
+
+// ✅ Simple control flow
+if (bypassed) {
+  outputs[c][s] = inputs[c][s];
+}
+
+// ✅ Fixed-size stack arrays
+sample temp[4];  // Small fixed size OK
+
+// ✅ Reading pre-computed lookup tables
+sample value = mWavetable[index];
+```
+
+## Common Processing Patterns
+
+<Tabs>
+  <Tab title="Pass-Through">
+    **Copy input to output:**
+    
+    ```cpp
+    void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+      const int nChans = NOutChansConnected();
+      
+      for (int c = 0; c < nChans; c++) {
+        memcpy(outputs[c], inputs[c], nFrames * sizeof(sample));
+      }
+      
+      // Or per-sample:
+      for (int s = 0; s < nFrames; s++) {
+        for (int c = 0; c < nChans; c++) {
+          outputs[c][s] = inputs[c][s];
+        }
+      }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Gain">
+    **Apply gain:**
+    
+    ```cpp
+    void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+      const double gainDB = GetParam(kGain)->Value();
+      const double gainLin = iplug::DBToAmp(gainDB);
+      const int nChans = NOutChansConnected();
+      
+      for (int s = 0; s < nFrames; s++) {
+        for (int c = 0; c < nChans; c++) {
+          outputs[c][s] = inputs[c][s] * gainLin;
+        }
+      }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Oscillator">
+    **Generate sine wave:**
+    
+    ```cpp
+    void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+      const double freq = GetParam(kFrequency)->Value();
+      const double amp = GetParam(kAmplitude)->Value();
+      const double sr = GetSampleRate();
+      const double phaseInc = (freq * 2.0 * PI) / sr;
+      const int nChans = NOutChansConnected();
+      
+      for (int s = 0; s < nFrames; s++) {
+        sample value = static_cast<sample>(sin(mPhase) * amp);
+        
+        for (int c = 0; c < nChans; c++) {
+          outputs[c][s] = value;  // Mono to all channels
+        }
+        
+        mPhase += phaseInc;
+        if (mPhase >= 2.0 * PI) mPhase -= 2.0 * PI;
+      }
+    }
+    
+    private:
+      double mPhase = 0.0;
+    ```
+  </Tab>
+  
+  <Tab title="Delay">
+    **Simple delay line:**
+    
+    ```cpp
+    void OnReset() override {
+      // Allocate 1 second delay buffer per channel
+      const int maxDelay = static_cast<int>(GetSampleRate());
+      mDelayBuffer.Resize(maxDelay * MaxNChannels(ERoute::kOutput));
+      mDelayBuffer.Clear();
+      mWritePos = 0;
+    }
+    
+    void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+      const double delayTime = GetParam(kDelayTime)->Value();  // ms
+      const double feedback = GetParam(kFeedback)->Value() / 100.0;
+      const double mix = GetParam(kMix)->Value() / 100.0;
+      const int nChans = NOutChansConnected();
+      const double sr = GetSampleRate();
+      const int maxDelay = static_cast<int>(sr);
+      
+      const int delaySamples = 
+        static_cast<int>((delayTime / 1000.0) * sr);
+      
+      for (int s = 0; s < nFrames; s++) {
+        for (int c = 0; c < nChans; c++) {
+          int channelOffset = c * maxDelay;
+          int readPos = (mWritePos - delaySamples + maxDelay) % maxDelay;
+          
+          sample input = inputs[c][s];
+          sample delayed = mDelayBuffer[channelOffset + readPos];
+          
+          // Write input + feedback to delay line
+          mDelayBuffer[channelOffset + mWritePos] = 
+            input + (delayed * feedback);
+          
+          // Mix dry and wet
+          outputs[c][s] = input * (1.0 - mix) + delayed * mix;
+        }
+        
+        mWritePos = (mWritePos + 1) % maxDelay;
+      }
+    }
+    
+    private:
+      WDL_TypedBuf<sample> mDelayBuffer;
+      int mWritePos = 0;
+    ```
+  </Tab>
+  
+  <Tab title="Filter">
+    **Simple lowpass filter (1-pole):**
+    
+    ```cpp
+    void OnReset() override {
+      mZ1.Resize(MaxNChannels(ERoute::kOutput));
+      mZ1.Clear();
+    }
+    
+    void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+      const double cutoff = GetParam(kCutoff)->Value();  // Hz
+      const double sr = GetSampleRate();
+      const int nChans = NOutChansConnected();
+      
+      // Calculate filter coefficient
+      const double rc = 1.0 / (cutoff * 2.0 * PI);
+      const double dt = 1.0 / sr;
+      const double alpha = dt / (rc + dt);
+      
+      for (int c = 0; c < nChans; c++) {
+        sample z1 = mZ1[c];
+        
+        for (int s = 0; s < nFrames; s++) {
+          sample input = inputs[c][s];
+          sample output = z1 + alpha * (input - z1);
+          outputs[c][s] = output;
+          z1 = output;
+        }
+        
+        mZ1[c] = z1;
+      }
+    }
+    
+    private:
+      WDL_TypedBuf<sample> mZ1;  // Filter state per channel
+    ```
+  </Tab>
+</Tabs>
+
+## MIDI Processing
+
+### ProcessMidiMsg()
+
+Called before `ProcessBlock()` for each incoming MIDI message:
+
+```cpp
+void ProcessMidiMsg(const IMidiMsg& msg) override {
+  int status = msg.StatusMsg();
+  int channel = msg.Channel();
+  
+  switch (status) {
+    case IMidiMsg::kNoteOn: {
+      int note = msg.NoteNumber();
+      int velocity = msg.Velocity();
+      mSynth.NoteOn(note, velocity);
+      break;
+    }
+    
+    case IMidiMsg::kNoteOff: {
+      int note = msg.NoteNumber();
+      mSynth.NoteOff(note);
+      break;
+    }
+    
+    case IMidiMsg::kControlChange: {
+      int cc = msg.ControlChangeIdx();
+      int value = msg.ControlChange(cc);
+      
+      if (cc == 1) {  // Mod wheel
+        mModAmount = value / 127.0;
+      }
+      break;
+    }
+    
+    case IMidiMsg::kPitchWheel: {
+      int pitch = msg.PitchWheel();  // -8192 to +8191
+      mPitchBend = pitch / 8192.0;   // -1.0 to +1.0
+      break;
+    }
+  }
+}
+```
+
+<Info>
+`IMidiMsg` includes a timestamp for sample-accurate MIDI processing. See [IPlugMidi.h](https://github.com/iPlug2/iPlug2/blob/master/IPlug/IPlugMidi.h)
+</Info>
+
+### Sample-Accurate MIDI
+
+```cpp
+void ProcessMidiMsg(const IMidiMsg& msg) override {
+  // Queue MIDI message with timestamp
+  mMidiQueue.Add(msg);
+}
+
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+  int samplesRemaining = nFrames;
+  int offset = 0;
+  
+  while (samplesRemaining > 0) {
+    // Get next MIDI message at or before current offset
+    IMidiMsg msg;
+    while (mMidiQueue.Peek(msg, offset)) {
+      HandleMidiMessage(msg);
+      mMidiQueue.Remove();
+    }
+    
+    // Process samples up to next MIDI event (or end)
+    int samplesToProcess = /* calculate based on next MIDI time */;
+    ProcessAudio(inputs, outputs, offset, samplesToProcess);
+    
+    offset += samplesToProcess;
+    samplesRemaining -= samplesToProcess;
+  }
+}
+```
+
+<Tip>
+Use `IMidiQueue` for sample-accurate MIDI. See examples in [IPlugInstrument](https://github.com/iPlug2/iPlug2/tree/master/Examples/IPlugInstrument).
+</Tip>
+
+## Latency and Tail Size
+
+### Latency
+
+```cpp
+// In config.h (compile-time)
+#define PLUG_LATENCY 0  // samples
+
+// Or set dynamically in OnReset() or OnParamChange()
+void OnReset() override {
+  // FFT processing adds latency
+  int fftSize = 2048;
+  SetLatency(fftSize / 2);  // Notify host
+}
+```
+
+### Tail Size
+
+```cpp
+// Set tail size for reverb/delay effects
+void OnParamChange(int paramIdx) override {
+  if (paramIdx == kDecayTime) {
+    double decaySeconds = GetParam(kDecayTime)->Value();
+    int tailSamples = static_cast<int>(decaySeconds * GetSampleRate());
+    SetTailSize(tailSamples);
+  }
+}
+
+// Or infinite tail for drones, etc.
+SetTailSize(kTailInfinite);
+
+// No tail (default)
+SetTailSize(kTailNone);
+```
+
+<Note>
+Tail size tells the host how long audio continues after input stops. Important for bouncing/rendering.
+</Note>
+
+## Bypassing
+
+```cpp
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+  // Check if host has bypassed plugin
+  if (GetBypassed()) {
+    // Pass through audio unprocessed
+    PassThroughBuffers(0.f, nFrames);  // Handled by IPlugProcessor
+    return;
+  }
+  
+  // Or manual bypass parameter
+  if (GetParam(kBypass)->Bool()) {
+    const int nChans = NOutChansConnected();
+    for (int c = 0; c < nChans; c++) {
+      memcpy(outputs[c], inputs[c], nFrames * sizeof(sample));
+    }
+    return;
+  }
+  
+  // Normal processing...
+}
+```
+
+<Info>
+If your plugin has latency, iPlug2 automatically compensates with a delay line when bypassed.
+</Info>
+
+## Transport and Timing
+
+```cpp
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+  // Get transport info
+  double samplePos = GetSamplePos();    // Absolute sample position
+  double ppqPos = GetPPQPos();          // Position in quarter notes
+  double tempo = GetTempo();            // BPM
+  bool playing = GetTransportIsRunning();
+  
+  int numerator, denominator;
+  GetTimeSig(numerator, denominator);   // e.g., 4, 4 for 4/4
+  
+  // Calculate samples per beat
+  double samplesPerBeat = GetSamplesPerBeat();
+  // = (60.0 / tempo) * sampleRate
+  
+  // Use for tempo-synced effects
+  if (mTempoSync) {
+    double delayBeats = GetParam(kDelayBeats)->Value();  // 1/4, 1/2, etc.
+    int delaySamples = static_cast<int>(delayBeats * samplesPerBeat);
+    // ...
+  }
+}
+```
+
+<Tip>
+For tempo-synced effects, use `GetSamplesPerBeat()` to convert from beats to samples.
+</Tip>
+
+## Offline Rendering
+
+```cpp
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+  // Check if rendering offline (bouncing)
+  if (GetRenderingOffline()) {
+    // Can use more expensive algorithms
+    ProcessWithHighQuality(inputs, outputs, nFrames);
+  } else {
+    // Real-time - use faster algorithm
+    ProcessRealtime(inputs, outputs, nFrames);
+  }
+}
+```
+
+## Performance Tips
+
+<CardGroup cols={2}>
+  <Card title="Minimize Per-Sample Work" icon="bolt">
+    Calculate expensive values per-block, not per-sample:
+    
+    ```cpp
+    // ✅ Good
+    double gain = GetParam(kGain)->DBToAmp();
+    for (int s = 0; s < nFrames; s++) {
+      outputs[0][s] = inputs[0][s] * gain;
+    }
+    
+    // ❌ Bad  
+    for (int s = 0; s < nFrames; s++) {
+      outputs[0][s] = inputs[0][s] * 
+        GetParam(kGain)->DBToAmp();  // Recalculates every sample!
+    }
+    ```
+  </Card>
+  
+  <Card title="Cache Locality" icon="microchip">
+    Process samples in sequence for better CPU cache usage:
+    
+    ```cpp
+    // ✅ Better cache locality
+    for (int c = 0; c < nChans; c++) {
+      for (int s = 0; s < nFrames; s++) {
+        outputs[c][s] = Process(inputs[c][s]);
+      }
+    }
+    ```
+  </Card>
+  
+  <Card title="Avoid Branching" icon="code-branch">
+    Minimize `if` statements in inner loops:
+    
+    ```cpp
+    // ❌ Bad - branches every sample
+    for (int s = 0; s < nFrames; s++) {
+      if (bypassed) {
+        outputs[0][s] = inputs[0][s];
+      } else {
+        outputs[0][s] = Process(inputs[0][s]);
+      }
+    }
+    
+    // ✅ Good - single branch
+    if (bypassed) {
+      memcpy(outputs[0], inputs[0], nFrames * sizeof(sample));
+    } else {
+      for (int s = 0; s < nFrames; s++) {
+        outputs[0][s] = Process(inputs[0][s]);
+      }
+    }
+    ```
+  </Card>
+  
+  <Card title="Use SIMD" icon="rocket">
+    For heavy DSP, consider SIMD intrinsics:
+    
+    ```cpp
+    #include <immintrin.h>  // AVX/SSE
+    
+    // Process 4 samples at once with SSE
+    __m128 input = _mm_load_ps(&inputs[0][s]);
+    __m128 gain = _mm_set1_ps(gainValue);
+    __m128 output = _mm_mul_ps(input, gain);
+    _mm_store_ps(&outputs[0][s], output);
+    ```
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Parameters" icon="sliders" href="/concepts/parameters">
+    Use parameters in ProcessBlock for control
+  </Card>
+  <Card title="Architecture" icon="building" href="/concepts/architecture">
+    Understand the threading model
+  </Card>
+  <Card title="Project Structure" icon="folder-tree" href="/concepts/project-structure">
+    See complete plugin examples
+  </Card>
+  <Card title="Plugin Formats" icon="plug" href="/concepts/plugin-formats">
+    Format-specific audio processing details
+  </Card>
+</CardGroup>

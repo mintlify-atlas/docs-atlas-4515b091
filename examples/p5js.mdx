@@ -1,0 +1,433 @@
+---
+title: P5.js
+description: Build creative, generative plugin interfaces using P5.js
+---
+
+The IPlugP5js example demonstrates how to integrate P5.js, a JavaScript library for creative coding, to build generative and visually dynamic plugin interfaces. This is perfect for visualizers, shader-based UIs, and experimental interfaces.
+
+## What This Example Demonstrates
+
+- P5.js library integration
+- GLSL shader support
+- WebGL rendering in plugins
+- Creative coding patterns
+- Parameter-driven visuals
+- Generative graphics
+
+## What is P5.js?
+
+P5.js is a JavaScript library that makes coding accessible for artists, designers, and beginners. It provides:
+
+<CardGroup cols={2}>
+  <Card title="Simple API" icon="pencil">
+    Easy-to-learn drawing and animation functions
+  </Card>
+  <Card title="WebGL Support" icon="cube">
+    3D graphics and shader programming
+  </Card>
+  <Card title="Creative Tools" icon="palette">
+    Built-in noise functions, easings, math utilities
+  </Card>
+  <Card title="Rich Ecosystem" icon="box">
+    Extensive library of examples and add-ons
+  </Card>
+</CardGroup>
+
+## C++ Plugin Setup
+
+```cpp
+IPlugP5js::IPlugP5js(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kGain)->InitGain("Gain", -70., -70, 0.);
+
+  SetCustomUrlScheme("iplug2");
+  SetEnableDevTools(true);
+  
+  mEditorInitFunc = [&]() {
+    LoadIndexHtml(__FILE__, GetBundleID());
+    EnableScroll(false);
+  };
+  
+  MakeDefaultPreset();
+}
+
+void IPlugP5js::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  // Audio processing here
+}
+```
+
+<Info>
+  The plugin setup is minimal because P5.js handles all the rendering. You can focus on the creative visuals.
+</Info>
+
+## HTML Structure
+
+```html
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style type="text/css">
+      body {
+        padding: 0;
+        margin: 0;
+        overflow: hidden;
+      }
+    </style>
+    <script src="p5.min.js" type="text/javascript"></script>
+    <script src="sketch.js"></script>
+    <script src="script.js"></script>
+    <title>P5.js Plugin UI</title>
+    <script>
+      function OnParamChange(param, value) {
+        // Handle parameter changes
+      }
+    
+      function OnControlChange(ctrlTag, value) {
+        console.log("Control changed");
+      }
+      
+      function OnMidiMsg(statusByte, dataByte1, dataByte2) {
+        // Handle MIDI input
+      }
+      
+      function onLoad() {
+        // Initialization
+      }
+    </script>
+  </head>
+  <body onload="onLoad()">
+  </body>
+</html>
+```
+
+## P5.js Sketch with Shaders
+
+The example includes a shader-based sketch that responds to mouse interaction:
+
+```javascript
+// This variable will hold our shader object
+let theShader;
+
+function preload() {
+  // Load the shader files
+  theShader = loadShader('uniforms.vert', 'uniforms.frag');
+}
+
+function setup() {
+  // Shaders require WEBGL mode to work
+  createCanvas(windowWidth, windowHeight, WEBGL);
+  noStroke();
+}
+
+function draw() {
+  // Set the active shader
+  shader(theShader);
+
+  // Send uniforms to the shader
+  theShader.setUniform('resolution', [width, height]);
+  theShader.setUniform('mouse', map(mouseX, 0, width, 0, 7));
+  theShader.setUniform('time', frameCount * 0.01);
+
+  // Draw geometry
+  rect(0, 0, width, height);
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+}
+```
+
+<Note>
+  The sketch uses GLSL shaders for GPU-accelerated rendering. Uniforms like `mouse` and `time` make the visuals interactive and animated.
+</Note>
+
+## Vertex Shader Example
+
+```glsl
+// uniforms.vert
+attribute vec3 aPosition;
+
+void main() {
+  vec4 positionVec4 = vec4(aPosition, 1.0);
+  positionVec4.xy = positionVec4.xy * 2.0 - 1.0;
+  gl_Position = positionVec4;
+}
+```
+
+## Fragment Shader Example
+
+```glsl
+// uniforms.frag
+#ifdef GL_ES
+precision mediump float;
+#endif
+
+uniform vec2 resolution;
+uniform float mouse;
+uniform float time;
+
+void main() {
+  vec2 st = gl_FragCoord.xy / resolution.xy;
+  
+  // Create animated pattern
+  float r = abs(sin(st.x * mouse + time));
+  float g = abs(sin(st.y * mouse + time * 0.5));
+  float b = abs(sin((st.x + st.y) * mouse + time * 0.3));
+  
+  gl_FragColor = vec4(r, g, b, 1.0);
+}
+```
+
+## Integrating Parameters
+
+Connect plugin parameters to P5.js visuals:
+
+```javascript
+let gainParam = 0.0;
+
+function OnParamChange(param, value) {
+  if (param === 0) {
+    gainParam = value;
+  }
+}
+
+function draw() {
+  shader(theShader);
+  
+  // Use parameter to control shader uniforms
+  theShader.setUniform('resolution', [width, height]);
+  theShader.setUniform('gain', gainParam);
+  theShader.setUniform('time', frameCount * 0.01);
+  
+  rect(0, 0, width, height);
+}
+```
+
+## Audio-Reactive Visuals
+
+Create visuals that respond to audio:
+
+```javascript
+let audioBuffer = [];
+let fftData = [];
+
+// Receive audio data from C++
+function OnControlChange(ctrlTag, value) {
+  if (ctrlTag === 0) {
+    // Update audio buffer
+    audioBuffer.push(value);
+    if (audioBuffer.length > 512) {
+      audioBuffer.shift();
+    }
+  }
+}
+
+function draw() {
+  background(0);
+  
+  // Draw waveform
+  stroke(255);
+  noFill();
+  beginShape();
+  for (let i = 0; i < audioBuffer.length; i++) {
+    let x = map(i, 0, audioBuffer.length, 0, width);
+    let y = map(audioBuffer[i], -1, 1, 0, height);
+    vertex(x, y);
+  }
+  endShape();
+}
+```
+
+## Common P5.js Patterns
+
+<Tabs>
+  <Tab title="2D Graphics">
+    ```javascript
+    function setup() {
+      createCanvas(windowWidth, windowHeight);
+    }
+    
+    function draw() {
+      background(0);
+      
+      // Draw circles based on mouse position
+      for (let i = 0; i < 10; i++) {
+        let x = mouseX + sin(frameCount * 0.05 + i) * 100;
+        let y = mouseY + cos(frameCount * 0.05 + i) * 100;
+        fill(i * 25, 100, 200);
+        circle(x, y, 50);
+      }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="3D Graphics">
+    ```javascript
+    function setup() {
+      createCanvas(windowWidth, windowHeight, WEBGL);
+    }
+    
+    function draw() {
+      background(0);
+      
+      rotateX(frameCount * 0.01);
+      rotateY(frameCount * 0.01);
+      
+      // Draw 3D box
+      box(150);
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Particle System">
+    ```javascript
+    let particles = [];
+    
+    function setup() {
+      createCanvas(windowWidth, windowHeight);
+      for (let i = 0; i < 100; i++) {
+        particles.push(new Particle());
+      }
+    }
+    
+    function draw() {
+      background(0, 25);
+      
+      for (let p of particles) {
+        p.update();
+        p.show();
+      }
+    }
+    
+    class Particle {
+      constructor() {
+        this.pos = createVector(random(width), random(height));
+        this.vel = createVector(random(-2, 2), random(-2, 2));
+      }
+      
+      update() {
+        this.pos.add(this.vel);
+        if (this.pos.x < 0 || this.pos.x > width) this.vel.x *= -1;
+        if (this.pos.y < 0 || this.pos.y > height) this.vel.y *= -1;
+      }
+      
+      show() {
+        fill(255);
+        noStroke();
+        circle(this.pos.x, this.pos.y, 5);
+      }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Generative Art">
+    ```javascript
+    function setup() {
+      createCanvas(windowWidth, windowHeight);
+      noLoop();
+    }
+    
+    function draw() {
+      background(255);
+      
+      // Draw generative pattern
+      for (let x = 0; x < width; x += 20) {
+        for (let y = 0; y < height; y += 20) {
+          let n = noise(x * 0.01, y * 0.01);
+          let size = map(n, 0, 1, 5, 20);
+          fill(n * 255);
+          rect(x, y, size, size);
+        }
+      }
+    }
+    
+    function mousePressed() {
+      redraw();
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Performance Considerations
+
+<Steps>
+  <Step title="Use WEBGL mode for shaders">
+    GPU acceleration provides smooth 60fps rendering
+  </Step>
+  
+  <Step title="Limit particle counts">
+    Keep particle systems under 1000 particles for consistent performance
+  </Step>
+  
+  <Step title="Optimize draw calls">
+    Batch similar drawing operations together
+  </Step>
+  
+  <Step title="Use push/pop matrices">
+    Properly manage transformation state
+  </Step>
+</Steps>
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Audio Visualizers" icon="waveform">
+    Real-time visualization of audio signals and spectrum data
+  </Card>
+  <Card title="Generative Art" icon="palette">
+    Algorithmic visuals driven by parameters and randomness
+  </Card>
+  <Card title="Shader Effects" icon="sparkles">
+    GPU-accelerated visual effects and post-processing
+  </Card>
+  <Card title="Interactive Graphics" icon="hand-pointer">
+    Mouse/touch-driven interactive visualizations
+  </Card>
+</CardGroup>
+
+## Resources
+
+<CardGroup cols={2}>
+  <Card title="P5.js Reference" icon="book" href="https://p5js.org/reference/">
+    Official P5.js API documentation
+  </Card>
+  <Card title="P5.js Examples" icon="images" href="https://p5js.org/examples/">
+    Gallery of example sketches
+  </Card>
+  <Card title="OpenProcessing" icon="palette" href="https://openprocessing.org/">
+    Community-created P5.js sketches
+  </Card>
+  <Card title="The Coding Train" icon="video" href="https://thecodingtrain.com/">
+    Video tutorials by Daniel Shiffman
+  </Card>
+</CardGroup>
+
+<Warning>
+  P5.js adds ~1MB to your plugin bundle. Consider this for plugins where size is critical.
+</Warning>
+
+## Advantages of P5.js UI
+
+<CardGroup cols={2}>
+  <Card title="Creative Focus" icon="paintbrush">
+    Designed for artists and creative coders
+  </Card>
+  <Card title="Simple API" icon="star">
+    Beginner-friendly with immediate visual feedback
+  </Card>
+  <Card title="WebGL Ready" icon="cube">
+    Built-in shader support for advanced graphics
+  </Card>
+  <Card title="Large Community" icon="users">
+    Extensive examples and tutorials available
+  </Card>
+</CardGroup>
+
+## Related Examples
+
+- [Web UI](/examples/web-ui) - Vanilla JavaScript approach
+- [Svelte UI](/examples/svelte-ui) - Modern reactive framework
+- [Responsive UI](/examples/responsive-ui) - IGraphics responsive layout

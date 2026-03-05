@@ -1,0 +1,806 @@
+---
+title: 'Project Structure'
+description: 'Understanding iPlug2 project organization: config.h, Plugin.h, Plugin.cpp, and the build system'
+icon: 'folder-tree'
+---
+
+## Project Overview
+
+Every iPlug2 plugin consists of three essential files that define your plugin:
+
+```
+MyPlugin/
+├── config.h          // Plugin metadata and compile-time settings
+├── MyPlugin.h        // Plugin class declaration
+├── MyPlugin.cpp      // Plugin implementation
+└── resources/        // Assets (images, fonts, etc.)
+```
+
+<Info>
+See real examples in [Examples/IPlugEffect/](https://github.com/iPlug2/iPlug2/tree/master/Examples/IPlugEffect)
+</Info>
+
+## config.h - Plugin Configuration
+
+`config.h` defines all compile-time plugin metadata and settings. This file is **required** for the build system.
+
+### Essential Settings
+
+```cpp
+// Basic identification
+#define PLUG_NAME "MyPlugin"
+#define PLUG_MFR "YourCompany"
+#define PLUG_VERSION_HEX 0x00010000    // 1.0.0 in hex
+#define PLUG_VERSION_STR "1.0.0"
+#define PLUG_UNIQUE_ID 'Mpgn'          // 4-char unique ID
+#define PLUG_MFR_ID 'YrCo'             // 4-char manufacturer ID
+#define PLUG_URL_STR "https://yoursite.com"
+#define PLUG_EMAIL_STR "support@yoursite.com"
+#define PLUG_COPYRIGHT_STR "Copyright 2025 Your Company"
+#define PLUG_CLASS_NAME MyPlugin       // C++ class name
+
+// Bundle identification (macOS/iOS)
+#define BUNDLE_NAME "MyPlugin"
+#define BUNDLE_MFR "YourCompany"
+#define BUNDLE_DOMAIN "com"           // com.YourCompany.MyPlugin
+```
+
+<Warning>
+**PLUG_UNIQUE_ID** must be unique across all plugins! Register your ID at https://www.steinberg.net/developers/ for VST.
+</Warning>
+
+### Plugin Type and I/O
+
+```cpp
+// Plugin type
+#define PLUG_TYPE 0
+// 0 = Effect
+// 1 = Instrument (synth)
+// 2 = MIDI Effect
+// 3 = Generator (no input)
+
+// Channel I/O configuration
+#define PLUG_CHANNEL_IO "1-1 2-2"
+// Format: "inputs-outputs"
+// Examples:
+//   "2-2"        = Stereo effect
+//   "1-1 2-2"    = Mono or stereo
+//   "0-2"        = Instrument (no input, stereo output)
+//   "2.2-2"      = Stereo main + stereo sidechain
+//   "0-2.2.2.2"  = 4 stereo outputs (drum synth)
+
+// Latency and processing
+#define PLUG_LATENCY 0                 // Latency in samples
+#define PLUG_DOES_MIDI_IN 0            // 1 if receives MIDI
+#define PLUG_DOES_MIDI_OUT 0           // 1 if sends MIDI
+#define PLUG_DOES_MPE 0                // 1 if supports MPE
+#define PLUG_DOES_STATE_CHUNKS 0       // 1 for custom state serialization
+```
+
+### UI Configuration
+
+```cpp
+#define PLUG_HAS_UI 1                  // 1 = has GUI, 0 = no GUI
+#define PLUG_WIDTH 600                 // Initial width in pixels
+#define PLUG_HEIGHT 600                // Initial height in pixels
+#define PLUG_FPS 60                    // UI refresh rate (Hz)
+#define PLUG_SHARED_RESOURCES 0        // Share resources between instances
+#define PLUG_HOST_RESIZE 0             // 1 = host can resize via chrome
+```
+
+### Format-Specific Settings
+
+<Tabs>
+  <Tab title="VST3">
+    ```cpp
+    #define VST3_SUBCATEGORY "Fx"
+    // Categories: Fx, Instrument, Analyzer, Delay, Distortion,
+    //             Dynamics, EQ, Filter, Mastering, Modulation,
+    //             Restoration, Reverb, Spatial, Surround, Tools
+    ```
+  </Tab>
+  
+  <Tab title="AUv2">
+    ```cpp
+    // Audio Unit entry points (must be unique)
+    #define AUV2_ENTRY MyPlugin_Entry
+    #define AUV2_ENTRY_STR "MyPlugin_Entry"
+    #define AUV2_FACTORY MyPlugin_Factory
+    #define AUV2_VIEW_CLASS MyPlugin_View
+    #define AUV2_VIEW_CLASS_STR "MyPlugin_View"
+    ```
+  </Tab>
+  
+  <Tab title="AAX">
+    ```cpp
+    // AAX type IDs (must be unique, register with Avid)
+    #define AAX_TYPE_IDS 'IEF1', 'IEF2'
+    #define AAX_TYPE_IDS_AUDIOSUITE 'IEA1', 'IEA2'
+    #define AAX_PLUG_MFR_STR "YourCompany"
+    #define AAX_PLUG_NAME_STR "MyPlugin\nMPGN"
+    #define AAX_PLUG_CATEGORY_STR "Effect"
+    #define AAX_DOES_AUDIOSUITE 1      // Support offline processing
+    ```
+  </Tab>
+  
+  <Tab title="CLAP">
+    ```cpp
+    #define CLAP_MANUAL_URL "https://yoursite.com/manual.pdf"
+    #define CLAP_SUPPORT_URL "https://yoursite.com/support"
+    #define CLAP_DESCRIPTION "A brief description of your plugin"
+    #define CLAP_FEATURES "audio-effect"
+    // Features: audio-effect, instrument, synthesizer, delay,
+    //           reverb, distortion, compressor, equalizer, etc.
+    ```
+  </Tab>
+  
+  <Tab title="Standalone">
+    ```cpp
+    #define APP_NUM_CHANNELS 2         // Audio channels
+    #define APP_N_VECTOR_WAIT 0        // Audio driver wait
+    #define APP_MULT 1                 // Buffer multiplier
+    #define APP_COPY_AUV3 0            // Copy AUv3 to app (macOS)
+    #define APP_SIGNAL_VECTOR_SIZE 64  // Audio buffer size
+    ```
+  </Tab>
+</Tabs>
+
+### Resource Paths
+
+```cpp
+// Shared resources directory name
+#define SHARED_RESOURCES_SUBPATH "MyPlugin"
+
+// Font file names (in resources/)
+#define ROBOTO_FN "Roboto-Regular.ttf"
+```
+
+### Complete config.h Example
+
+From [Examples/IPlugEffect/config.h](https://github.com/iPlug2/iPlug2/blob/master/Examples/IPlugEffect/config.h):
+
+```cpp
+#define PLUG_NAME "IPlugEffect"
+#define PLUG_MFR "AcmeInc"
+#define PLUG_VERSION_HEX 0x00010000
+#define PLUG_VERSION_STR "1.0.0"
+#define PLUG_UNIQUE_ID 'Ipef'
+#define PLUG_MFR_ID 'Acme'
+#define PLUG_URL_STR "https://iplug2.github.io"
+#define PLUG_EMAIL_STR "spam@me.com"
+#define PLUG_COPYRIGHT_STR "Copyright 2025 Acme Inc"
+#define PLUG_CLASS_NAME IPlugEffect
+
+#define BUNDLE_NAME "IPlugEffect"
+#define BUNDLE_MFR "AcmeInc"
+#define BUNDLE_DOMAIN "com"
+
+#define SHARED_RESOURCES_SUBPATH "IPlugEffect"
+
+#define PLUG_CHANNEL_IO "1-1 2-2"
+
+#define PLUG_LATENCY 0
+#define PLUG_TYPE 0
+#define PLUG_DOES_MIDI_IN 0
+#define PLUG_DOES_MIDI_OUT 0
+#define PLUG_DOES_MPE 0
+#define PLUG_DOES_STATE_CHUNKS 0
+#define PLUG_HAS_UI 1
+#define PLUG_WIDTH 600
+#define PLUG_HEIGHT 600
+#define PLUG_FPS 60
+#define PLUG_SHARED_RESOURCES 0
+#define PLUG_HOST_RESIZE 0
+
+#define AUV2_ENTRY IPlugEffect_Entry
+#define AUV2_ENTRY_STR "IPlugEffect_Entry"
+#define AUV2_FACTORY IPlugEffect_Factory
+#define AUV2_VIEW_CLASS IPlugEffect_View
+#define AUV2_VIEW_CLASS_STR "IPlugEffect_View"
+
+#define AAX_TYPE_IDS 'IEF1', 'IEF2'
+#define AAX_TYPE_IDS_AUDIOSUITE 'IEA1', 'IEA2'
+#define AAX_PLUG_MFR_STR "Acme"
+#define AAX_PLUG_NAME_STR "IPlugEffect\nIPEF"
+#define AAX_PLUG_CATEGORY_STR "Effect"
+#define AAX_DOES_AUDIOSUITE 1
+
+#define VST3_SUBCATEGORY "Fx"
+
+#define CLAP_MANUAL_URL "https://iplug2.github.io/manuals/example_manual.pdf"
+#define CLAP_SUPPORT_URL "https://github.com/iPlug2/iPlug2/wiki"
+#define CLAP_DESCRIPTION "A simple audio effect for modifying gain"
+#define CLAP_FEATURES "audio-effect"
+
+#define APP_NUM_CHANNELS 2
+#define APP_N_VECTOR_WAIT 0
+#define APP_MULT 1
+#define APP_COPY_AUV3 0
+#define APP_SIGNAL_VECTOR_SIZE 64
+
+#define ROBOTO_FN "Roboto-Regular.ttf"
+```
+
+## Plugin.h - Class Declaration
+
+The header file declares your plugin class and parameter enum.
+
+### Basic Structure
+
+```cpp
+#pragma once
+
+#include "IPlug_include_in_plug_hdr.h"
+
+const int kNumPresets = 1;
+
+// Parameter enum - MUST be sequential starting at 0
+enum EParams
+{
+  kGain = 0,
+  kFrequency,
+  kResonance,
+  // ... more parameters ...
+  kNumParams  // Total parameter count
+};
+
+using namespace iplug;
+using namespace igraphics;
+
+class MyPlugin final : public Plugin
+{
+public:
+  MyPlugin(const InstanceInfo& info);
+
+#if IPLUG_DSP
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  void OnReset() override;
+  void OnParamChange(int paramIdx) override;
+#endif
+
+private:
+  // Your DSP state variables
+  double mPhase = 0.0;
+  WDL_TypedBuf<sample> mDelayBuffer;
+};
+```
+
+<Note>
+`#if IPLUG_DSP` ensures ProcessBlock is only compiled when building DSP code (not for some UI-only targets).
+</Note>
+
+### Complete Header Example
+
+From [Examples/IPlugEffect/IPlugEffect.h](https://github.com/iPlug2/iPlug2/blob/master/Examples/IPlugEffect/IPlugEffect.h):
+
+```cpp
+#pragma once
+
+#include "IPlug_include_in_plug_hdr.h"
+
+const int kNumPresets = 1;
+
+enum EParams
+{
+  kGain = 0,
+  kNumParams
+};
+
+using namespace iplug;
+using namespace igraphics;
+
+class IPlugEffect final : public Plugin
+{
+public:
+  IPlugEffect(const InstanceInfo& info);
+
+#if IPLUG_DSP
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+#endif
+};
+```
+
+## Plugin.cpp - Implementation
+
+The implementation file contains your plugin logic: constructor, ProcessBlock, and other methods.
+
+### Constructor Pattern
+
+```cpp
+#include "MyPlugin.h"
+#include "IPlug_include_in_plug_src.h"
+#include "IControls.h"
+
+MyPlugin::MyPlugin(const InstanceInfo& info)
+: Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  // Initialize parameters
+  GetParam(kGain)->InitDouble("Gain", 0., -70., 12., 0.1, "dB");
+  GetParam(kFrequency)->InitFrequency("Frequency", 1000., 20., 20000.);
+  GetParam(kResonance)->InitPercentage("Resonance", 50.);
+
+#if IPLUG_EDITOR
+  // Setup graphics
+  mMakeGraphicsFunc = [&]() {
+    return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS, 
+                        GetScaleForScreen(PLUG_WIDTH, PLUG_HEIGHT));
+  };
+  
+  // Setup UI layout
+  mLayoutFunc = [&](IGraphics* pGraphics) {
+    pGraphics->AttachCornerResizer(EUIResizerMode::Scale, false);
+    pGraphics->AttachPanelBackground(COLOR_GRAY);
+    pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
+    
+    const IRECT bounds = pGraphics->GetBounds();
+    const IRECT innerBounds = bounds.GetPadded(-10.f);
+    
+    // Title text
+    pGraphics->AttachControl(
+      new ITextControl(innerBounds.GetMidVPadded(50), 
+                       "My Plugin!", 
+                       IText(50))
+    );
+    
+    // Parameter controls (automatically linked by parameter index)
+    pGraphics->AttachControl(
+      new IVKnobControl(innerBounds.GetCentredInside(100).GetVShifted(-100),
+                        kGain)
+    );
+    
+    pGraphics->AttachControl(
+      new IVKnobControl(innerBounds.GetCentredInside(100),
+                        kFrequency)
+    );
+    
+    pGraphics->AttachControl(
+      new IVKnobControl(innerBounds.GetCentredInside(100).GetVShifted(100),
+                        kResonance)
+    );
+  };
+#endif
+}
+```
+
+<Tip>
+The constructor uses lambda functions for lazy initialization. Graphics are only created when the UI is opened.
+</Tip>
+
+### ProcessBlock Implementation
+
+```cpp
+#if IPLUG_DSP
+void MyPlugin::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  // Get parameter values
+  const double gain = GetParam(kGain)->Value();
+  const double frequency = GetParam(kFrequency)->Value();
+  const int nChans = NOutChansConnected();
+  
+  // Convert gain from dB to linear
+  const double gainLinear = iplug::DBToAmp(gain);
+  
+  // Process audio
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      // Simple gain example
+      outputs[c][s] = inputs[c][s] * gainLinear;
+    }
+  }
+}
+#endif
+```
+
+### Complete Implementation Example
+
+From [Examples/IPlugEffect/IPlugEffect.cpp](https://github.com/iPlug2/iPlug2/blob/master/Examples/IPlugEffect/IPlugEffect.cpp):
+
+```cpp
+#include "IPlugEffect.h"
+#include "IPlug_include_in_plug_src.h"
+#include "IControls.h"
+
+IPlugEffect::IPlugEffect(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kGain)->InitDouble("Gain", 0., 0., 100.0, 0.01, "%");
+
+#if IPLUG_EDITOR
+  mMakeGraphicsFunc = [&]() {
+    return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS, 
+                        GetScaleForScreen(PLUG_WIDTH, PLUG_HEIGHT));
+  };
+  
+  mLayoutFunc = [&](IGraphics* pGraphics) {
+    pGraphics->AttachCornerResizer(EUIResizerMode::Scale, false);
+    pGraphics->AttachPanelBackground(COLOR_GRAY);
+    pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
+    
+    const IRECT bounds = pGraphics->GetBounds();
+    const IRECT innerBounds = bounds.GetPadded(-10.f);
+    const IRECT versionBounds = innerBounds.GetFromTRHC(300, 20);
+    
+    pGraphics->AttachControl(
+      new ITextControl(innerBounds.GetMidVPadded(50), 
+                       "Hello iPlug 2!", 
+                       IText(50))
+    );
+    
+    pGraphics->AttachControl(
+      new IVKnobControl(innerBounds.GetCentredInside(100).GetVShifted(-100),
+                        kGain)
+    );
+    
+    WDL_String buildInfoStr;
+    GetBuildInfoStr(buildInfoStr, __DATE__, __TIME__);
+    pGraphics->AttachControl(
+      new ITextControl(versionBounds, 
+                       buildInfoStr.Get(), 
+                       DEFAULT_TEXT.WithAlign(EAlign::Far))
+    );
+  };
+#endif
+}
+
+#if IPLUG_DSP
+void IPlugEffect::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kGain)->Value() / 100.;
+  const int nChans = NOutChansConnected();
+  
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+}
+#endif
+```
+
+## Build System Structure
+
+iPlug2 uses **duplicate projects** - one for each plugin format:
+
+```
+MyPlugin/
+├── config/
+│   └── MyPlugin-mac.xcconfig          // Xcode configuration
+├── projects/
+│   ├── MyPlugin-app.vcxproj           // Windows standalone
+│   ├── MyPlugin-app.xcodeproj         // macOS standalone
+│   ├── MyPlugin-vst3.vcxproj          // Windows VST3
+│   ├── MyPlugin-vst3.xcodeproj        // macOS VST3
+│   ├── MyPlugin-au.xcodeproj          // macOS AUv2
+│   ├── MyPlugin-auv3.xcodeproj        // macOS/iOS AUv3
+│   ├── MyPlugin-aax.vcxproj           // Windows AAX
+│   ├── MyPlugin-aax.xcodeproj         // macOS AAX
+│   └── MyPlugin-clap.vcxproj          // Windows CLAP
+├── resources/                         // Shared assets
+│   ├── img/
+│   ├── fonts/
+│   └── MyPlugin.rc                    // Windows resources
+├── config.h
+├── MyPlugin.h
+└── MyPlugin.cpp
+```
+
+<Info>
+The `duplicate.py` script in `Scripts/` generates these project files from templates.
+</Info>
+
+## Resource Management
+
+### Resource Directory
+
+```
+resources/
+├── img/
+│   ├── background.png
+│   ├── knob.png
+│   └── logo.svg
+├── fonts/
+│   ├── Roboto-Regular.ttf
+│   └── Roboto-Bold.ttf
+└── MyPlugin.rc                        // Windows resource file
+```
+
+### Loading Resources
+
+```cpp
+// In mLayoutFunc
+pGraphics->LoadFont("Roboto", ROBOTO_FN);
+pGraphics->LoadFont("RobotoBold", "Roboto-Bold.ttf");
+
+// Load bitmap
+IBitmap knob = pGraphics->LoadBitmap("knob.png");
+
+// Load SVG
+ISVG logo = pGraphics->LoadSVG("logo.svg");
+
+// Use in controls
+pGraphics->AttachControl(new IBitmapControl(bounds, knob));
+pGraphics->AttachControl(new ISVGControl(bounds, logo));
+```
+
+<Note>
+Resources are automatically embedded in the plugin bundle/DLL by the build system.
+</Note>
+
+## Project Organization Best Practices
+
+<Steps>
+  <Step title="Separate DSP and UI">
+    Keep DSP code separate from UI code using `#if IPLUG_DSP` and `#if IPLUG_EDITOR`:
+    
+    ```cpp
+    // MyPlugin_DSP.h - DSP classes
+    class MyFilter {
+      void Process(sample* buffer, int nFrames);
+    };
+    
+    // MyPlugin.cpp - Plugin implementation
+    #if IPLUG_DSP
+    void MyPlugin::ProcessBlock(...) {
+      mFilter.Process(outputs[0], nFrames);
+    }
+    #endif
+    ```
+  </Step>
+  
+  <Step title="Use Helper Classes">
+    Create reusable DSP classes:
+    
+    ```cpp
+    // Oscillator.h
+    class Oscillator {
+    public:
+      void SetFrequency(double freq);
+      sample Process();
+    private:
+      double mPhase = 0.0;
+      double mPhaseInc = 0.0;
+    };
+    
+    // MyPlugin.h
+    private:
+      Oscillator mOsc;
+    ```
+  </Step>
+  
+  <Step title="Organize Parameters">
+    Group related parameters in enum:
+    
+    ```cpp
+    enum EParams {
+      // Oscillator
+      kOscWaveform = 0,
+      kOscPitch,
+      kOscDetune,
+      
+      // Filter
+      kFilterCutoff,
+      kFilterResonance,
+      
+      // Envelope
+      kEnvAttack,
+      kEnvDecay,
+      kEnvSustain,
+      kEnvRelease,
+      
+      kNumParams
+    };
+    ```
+  </Step>
+  
+  <Step title="Version Control">
+    `.gitignore` for iPlug2 projects:
+    
+    ```gitignore
+    # Build outputs
+    build/
+    build-*
+    
+    # IDE files
+    .vs/
+    .vscode/
+    *.user
+    *.suo
+    xcuserdata/
+    
+    # macOS
+    .DS_Store
+    
+    # Resources that get generated
+    resources/img/tmp/
+    
+    # Don't ignore projects!
+    !projects/
+    ```
+  </Step>
+</Steps>
+
+## Multi-Plugin Projects
+
+For multiple plugins sharing code:
+
+```
+MyPlugins/
+├── Common/                            // Shared DSP code
+│   ├── MyDSP.h
+│   └── MyDSP.cpp
+├── Plugin1/
+│   ├── config.h
+│   ├── Plugin1.h
+│   ├── Plugin1.cpp
+│   └── projects/
+├── Plugin2/
+│   ├── config.h
+│   ├── Plugin2.h
+│   ├── Plugin2.cpp
+│   └── projects/
+└── iPlug2/                            // Submodule or copy
+```
+
+Add Common/ to project include paths.
+
+## Advanced config.h Options
+
+### Custom Defines
+
+```cpp
+// Enable SIMD optimizations
+#define USE_SIMD 1
+
+// Sample type
+#define SAMPLE_TYPE_DOUBLE  // or SAMPLE_TYPE_FLOAT
+
+// Enable thread safety
+#define PARAMS_MUTEX 1
+
+// Graphics backend
+#define IGRAPHICS_NANOVG 1  // or IGRAPHICS_SKIA
+
+// Debug logging
+#define TRACER_BUILD 1
+```
+
+### Conditional Compilation
+
+```cpp
+// Different settings for different formats
+#if defined VST3_API
+  #define PLUG_SUPPORTS_SIDECHAIN 1
+#elif defined AU_API
+  #define PLUG_SUPPORTS_SIDECHAIN 1
+#else
+  #define PLUG_SUPPORTS_SIDECHAIN 0
+#endif
+```
+
+## Build Configurations
+
+### Debug vs Release
+
+```cpp
+// In your code
+#ifdef _DEBUG
+  TRACE;  // Enabled in debug builds
+#else
+  // Release build
+#endif
+
+#ifdef TRACER_BUILD
+  DBGMSG("Debug message\n");
+#endif
+```
+
+### Platform-Specific Code
+
+```cpp
+#if defined OS_WIN
+  // Windows-specific code
+#elif defined OS_MAC
+  // macOS-specific code
+#elif defined OS_LINUX
+  // Linux-specific code
+#elif defined OS_IOS
+  // iOS-specific code
+#elif defined OS_WEB
+  // Web-specific code
+#endif
+```
+
+## Complete Minimal Example
+
+Here's a complete minimal plugin:
+
+<CodeGroup>
+```cpp config.h
+#define PLUG_NAME "MinimalPlugin"
+#define PLUG_MFR "YourName"
+#define PLUG_VERSION_HEX 0x00010000
+#define PLUG_VERSION_STR "1.0.0"
+#define PLUG_UNIQUE_ID 'Mnpl'
+#define PLUG_MFR_ID 'YrNm'
+#define PLUG_URL_STR "https://yoursite.com"
+#define PLUG_EMAIL_STR "you@email.com"
+#define PLUG_COPYRIGHT_STR "Copyright 2025 Your Name"
+#define PLUG_CLASS_NAME MinimalPlugin
+
+#define BUNDLE_NAME "MinimalPlugin"
+#define BUNDLE_MFR "YourName"
+#define BUNDLE_DOMAIN "com"
+
+#define PLUG_CHANNEL_IO "2-2"
+#define PLUG_TYPE 0
+#define PLUG_LATENCY 0
+#define PLUG_DOES_MIDI_IN 0
+#define PLUG_DOES_MIDI_OUT 0
+#define PLUG_DOES_MPE 0
+#define PLUG_DOES_STATE_CHUNKS 0
+#define PLUG_HAS_UI 0
+#define PLUG_WIDTH 0
+#define PLUG_HEIGHT 0
+
+#define VST3_SUBCATEGORY "Fx"
+```
+
+```cpp MinimalPlugin.h
+#pragma once
+#include "IPlug_include_in_plug_hdr.h"
+
+enum EParams {
+  kGain = 0,
+  kNumParams
+};
+
+class MinimalPlugin final : public iplug::Plugin
+{
+public:
+  MinimalPlugin(const iplug::InstanceInfo& info);
+  void ProcessBlock(iplug::sample** inputs, iplug::sample** outputs, int nFrames) override;
+};
+```
+
+```cpp MinimalPlugin.cpp
+#include "MinimalPlugin.h"
+#include "IPlug_include_in_plug_src.h"
+
+MinimalPlugin::MinimalPlugin(const iplug::InstanceInfo& info)
+: Plugin(info, MakeConfig(kNumParams, 1))
+{
+  GetParam(kGain)->InitDouble("Gain", 0., -70., 12., 0.1, "dB");
+}
+
+void MinimalPlugin::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = iplug::DBToAmp(GetParam(kGain)->Value());
+  const int nChans = NOutChansConnected();
+  
+  for (int c = 0; c < nChans; c++) {
+    for (int s = 0; s < nFrames; s++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+}
+```
+</CodeGroup>
+
+This 30-line plugin compiles to all formats!
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="building" href="/concepts/architecture">
+    Understand how these files fit into the architecture
+  </Card>
+  <Card title="Parameters" icon="sliders" href="/concepts/parameters">
+    Learn parameter initialization in depth
+  </Card>
+  <Card title="Audio Processing" icon="waveform" href="/concepts/audio-processing">
+    Master ProcessBlock implementation
+  </Card>
+  <Card title="Plugin Formats" icon="plug" href="/concepts/plugin-formats">
+    Build your plugin to all formats
+  </Card>
+</CardGroup>

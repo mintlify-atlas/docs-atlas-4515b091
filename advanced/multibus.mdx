@@ -1,0 +1,289 @@
+---
+title: Multi-Bus I/O
+description: Configure multiple input and output buses for complex routing
+---
+
+Multi-bus support allows plugins to handle multiple audio streams independently - essential for multi-output instruments, sidechain compression, and complex routing scenarios.
+
+## Overview
+
+By default, plugins have a single stereo input and output bus. Multi-bus configurations enable:
+
+- **Multi-output instruments** - Separate drum kit pieces to individual mixer tracks
+- **Sidechain inputs** - Key a compressor from an external source
+- **Stem outputs** - Export multiple mix stems from a single plugin
+- **Multi-channel processors** - Process surround sound or immersive audio
+
+## Configuration
+
+Define bus layout in `config.h` using the channel I/O string:
+
+```cpp title="config.h - Multi-Output Example"
+// Format: "inputs outputs"
+#define PLUG_CHANNEL_IO "0-2 2-2 2-2 2-2" // Instrument with 4 stereo outputs
+```
+
+### Format Breakdown
+
+<CodeGroup>
+  ```cpp "Single Stereo"
+  "2-2" // 2 in, 2 out (standard stereo effect)
+  ```
+  
+  ```cpp "Mono to Stereo"
+  "1-2" // 1 in, 2 out
+  ```
+  
+  ```cpp "Sidechain"
+  "2-2 1-0" // Main 2-2, plus mono sidechain input
+  ```
+  
+  ```cpp "Multi-Output Instrument"
+  "0-2 2-2 2-2 2-2 2-2" // 4 stereo buses (bus 0 = main mix)
+  ```
+</CodeGroup>
+
+## IPlugDrumSynth Example
+
+The IPlugDrumSynth example demonstrates a 4-drum instrument with individual outputs:
+
+```cpp title="Examples/IPlugDrumSynth/config.h"
+#if !defined PLUG_CHANNEL_IO
+  // Multi-out when param is enabled: 4 stereo buses
+  #define PLUG_CHANNEL_IO "0-2 2-2 2-2 2-2"
+#endif
+```
+
+### Naming Buses
+
+Override `GetBusName()` to provide descriptive names:
+
+```cpp title="IPlugDrumSynth.cpp:105"
+void IPlugDrumSynth::GetBusName(ERoute direction, int busIdx, int nBuses, 
+                                WDL_String& str) const
+{
+  if (direction == ERoute::kOutput)
+  {
+    if(busIdx == 0)
+      str.Set("Drum1");
+    else if(busIdx == 1)
+      str.Set("Drum2");
+    else if(busIdx == 2)
+      str.Set("Drum3");
+    else if(busIdx == 3)
+      str.Set("Drum4");
+    
+    return;
+  }
+  
+  str.Set("");
+}
+```
+
+### Routing Audio
+
+The DSP code routes each drum to its bus:
+
+```cpp title="Simplified from IPlugDrumSynth_DSP.h"
+void ProcessBlock(sample** outputs, int nFrames)
+{
+  const int nOuts = mMultiOut ? kNumDrums * 2 : 2;
+  
+  for(int i = 0; i < kNumDrums; i++)
+  {
+    Voice& voice = mVoices[i];
+    
+    for(int s = 0; s < nFrames; s++)
+    {
+      sample drumSample = voice.Process();
+      
+      if(mMultiOut)
+      {
+        // Route to individual outputs
+        // Bus i: outputs[i*2] (left), outputs[i*2+1] (right)
+        outputs[i * 2][s] += drumSample;
+        outputs[i * 2 + 1][s] += drumSample;
+      }
+      else
+      {
+        // Mix all drums to main output
+        outputs[0][s] += drumSample;
+        outputs[1][s] += drumSample;
+      }
+    }
+  }
+}
+```
+
+## Querying Connected Channels
+
+Use these methods to check active channels at runtime:
+
+```cpp title="Channel Query Methods"
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  const int nInChans = NInChansConnected();   // Actually connected inputs
+  const int nOutChans = NOutChansConnected(); // Actually connected outputs
+  
+  // Process only connected channels
+  for(int s = 0; s < nFrames; s++)
+  {
+    for(int c = 0; c < nOutChans; c++)
+    {
+      if(c < nInChans)
+        outputs[c][s] = inputs[c][s];
+      else
+        outputs[c][s] = 0.0;
+    }
+  }
+}
+```
+
+<Info>
+Hosts may not connect all available buses. Always check `NInChansConnected()` and `NOutChansConnected()` to avoid processing unused channels.
+</Info>
+
+## Sidechain Example
+
+Typical sidechain compressor configuration:
+
+```cpp title="Sidechain Compressor Setup"
+// config.h
+#define PLUG_CHANNEL_IO "2-2 1-0" // Stereo + mono sidechain
+
+// ProcessBlock
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  const int nChans = NInChansConnected();
+  
+  // Main input: inputs[0], inputs[1]
+  // Sidechain: inputs[2] (if connected)
+  
+  for(int s = 0; s < nFrames; s++)
+  {
+    // Get sidechain signal (or use main if not connected)
+    sample scInput = (nChans > 2) ? inputs[2][s] : inputs[0][s];
+    
+    // Calculate gain reduction from sidechain
+    sample gainReduction = ComputeGainReduction(scInput);
+    
+    // Apply to main signal
+    outputs[0][s] = inputs[0][s] * gainReduction;
+    outputs[1][s] = inputs[1][s] * gainReduction;
+  }
+}
+```
+
+## Bus Configuration Patterns
+
+<Tabs>
+  <Tab title="Stereo Effect">
+    ```cpp
+    #define PLUG_CHANNEL_IO "2-2"
+    ```
+    Standard stereo in/out
+  </Tab>
+  
+  <Tab title="Sidechain Compressor">
+    ```cpp
+    #define PLUG_CHANNEL_IO "2-2 1-0"
+    ```
+    Main stereo + mono sidechain input
+  </Tab>
+  
+  <Tab title="Multi-Out Instrument">
+    ```cpp
+    #define PLUG_CHANNEL_IO "0-8"
+    ```
+    8-channel output instrument
+  </Tab>
+  
+  <Tab title="Drum Machine (4 stereo)">
+    ```cpp
+    #define PLUG_CHANNEL_IO "0-2 2-2 2-2 2-2"
+    ```
+    4 independent stereo outputs
+  </Tab>
+  
+  <Tab title="Surround Processor">
+    ```cpp
+    #define PLUG_CHANNEL_IO "8-8"
+    ```
+    7.1 surround in/out
+  </Tab>
+</Tabs>
+
+## Channel Indexing
+
+For multi-bus configurations, channels are indexed sequentially:
+
+```cpp
+// Config: "0-2 2-2 2-2" (3 stereo buses)
+// outputs[0] = Bus 0 Left
+// outputs[1] = Bus 0 Right
+// outputs[2] = Bus 1 Left
+// outputs[3] = Bus 1 Right
+// outputs[4] = Bus 2 Left
+// outputs[5] = Bus 2 Right
+```
+
+## Dynamic Bus Activation
+
+Some hosts allow dynamic bus activation. Query this at runtime:
+
+```cpp title="IPlugDrumSynth.cpp:126"
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  const int nOutChans = NOutChansConnected();
+  
+  // Only process buses the host has activated
+  const int nBuses = (nOutChans + 1) / 2; // Each bus = 2 channels
+  
+  for(int bus = 0; bus < nBuses; bus++)
+  {
+    // Process this bus...
+  }
+}
+```
+
+## Host Compatibility
+
+<Note>
+Multi-bus support varies by host:
+
+- **Full support**: Reaper, Cubase, Studio One, Logic Pro
+- **Limited**: Some hosts only support single bus
+- **AAX**: Limited to specific I/O configurations
+
+Test your plugin in target hosts to verify bus routing.
+</Note>
+
+## Best Practices
+
+<Steps>
+  <Step title="Validate Channel Counts">
+    Always check `NInChansConnected()` and `NOutChansConnected()` - hosts may activate fewer buses than configured
+  </Step>
+  
+  <Step title="Provide Fallback">
+    Support both multi-out and summed output modes for maximum compatibility
+  </Step>
+  
+  <Step title="Name Your Buses">
+    Implement `GetBusName()` to help users identify buses in the host
+  </Step>
+  
+  <Step title="Clear Unused Outputs">
+    Zero out channels that aren't being used to avoid noise
+  </Step>
+</Steps>
+
+## See Also
+
+- [IPlugDrumSynth Example](@Examples/IPlugDrumSynth) - Multi-output drum instrument
+- [Processing Audio](/processing-audio) - ProcessBlock fundamentals
+- [Configuration](/configuration) - config.h settings
+
+<Warning>
+Changing `PLUG_CHANNEL_IO` may invalidate saved projects in hosts. Consider this a compile-time constant for released plugins.
+</Warning>

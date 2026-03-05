@@ -1,0 +1,845 @@
+---
+title: 'Parameters'
+description: 'Complete guide to iPlug2 parameters: types, automation, GetParam usage, parameter groups, and best practices'
+icon: 'sliders'
+---
+
+## Overview
+
+Parameters are the core of plugin automation and user control. In iPlug2, parameters are:
+
+- **Fixed at compile time** - Count defined in constructor
+- **Indexed by enum** - Type-safe parameter access
+- **Thread-safe** - Atomic values for audio/UI access
+- **Non-normalized** - Real values (e.g., 0-100) not 0-1
+- **Automatable** - Unless explicitly disabled
+
+<Info>
+Parameters use `std::atomic<double>` for lock-free thread-safe access. See [IPlugParameter.h:516](https://github.com/iPlug2/iPlug2/blob/master/IPlug/IPlugParameter.h#L516)
+</Info>
+
+## Parameter Basics
+
+### Defining Parameters
+
+Parameters are typically defined in your plugin constructor using an enum:
+
+```cpp
+// YourPlugin.h
+enum EParams {
+  kGain = 0,
+  kFrequency,
+  kResonance,
+  kBypass,
+  kNumParams  // Total count
+};
+
+// YourPlugin.cpp
+YourPlugin::YourPlugin(const InstanceInfo& info)
+: Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kGain)->InitDouble("Gain", 0., -70., 12., 0.1, "dB");
+  GetParam(kFrequency)->InitFrequency("Cutoff", 1000., 20., 20000.);
+  GetParam(kResonance)->InitPercentage("Resonance", 50.);
+  GetParam(kBypass)->InitBool("Bypass", false);
+}
+```
+
+<Tip>
+Use `kNumParams` as the last enum value to automatically count your parameters.
+</Tip>
+
+### Accessing Parameters
+
+Always use `GetParam()` to access parameters:
+
+```cpp
+// In ProcessBlock (audio thread)
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+  const double gain = GetParam(kGain)->Value();  // Get real value
+  const bool bypassed = GetParam(kBypass)->Bool();  // Get as boolean
+  
+  if (bypassed) return;
+  
+  // Use parameter value in DSP
+  const double gainLinear = iplug::DBToAmp(gain);
+  // ...
+}
+```
+
+<Warning>
+Never cache `GetParam()` pointers in member variables. Always call `GetParam(idx)` when you need the parameter.
+</Warning>
+
+## Parameter Types
+
+iPlug2 provides multiple parameter initialization methods for different use cases.
+
+<Tabs>
+  <Tab title="Double">
+    **InitDouble** - General-purpose floating point parameter
+    
+    ```cpp
+    void InitDouble(
+      const char* name,          // Parameter name
+      double defaultVal,         // Default value
+      double minVal,            // Minimum value  
+      double maxVal,            // Maximum value
+      double step,              // Step size (0.01 = 2 decimal places)
+      const char* label = "",   // Unit label ("dB", "%", "Hz")
+      int flags = 0,            // IParam::EFlags
+      const char* group = "",   // Parameter group name
+      const IParam::Shape& shape = ShapeLinear(),  // Response curve
+      IParam::EParamUnit unit = kUnitCustom,       // AU unit type
+      IParam::DisplayFunc displayFunc = nullptr    // Custom display
+    );
+    ```
+    
+    **Examples:**
+    ```cpp
+    // Linear parameter with 2 decimal places
+    GetParam(kGain)->InitDouble("Gain", 0., -70., 12., 0.01, "dB");
+    
+    // Exponential frequency parameter  
+    GetParam(kFreq)->InitDouble("Frequency", 1000., 20., 20000., 0.1, "Hz",
+      0, "", IParam::ShapeExp());
+    
+    // Power curve (skewed response)
+    GetParam(kMix)->InitDouble("Mix", 50., 0., 100., 0.1, "%",
+      0, "", IParam::ShapePowCurve(2.0));  // Square curve
+    ```
+  </Tab>
+  
+  <Tab title="Specialized Types">
+    **Convenience methods** for common parameter types:
+    
+    ```cpp
+    // Percentage (0-100%)
+    GetParam(kMix)->InitPercentage("Mix", 50.);
+    // Equivalent to: InitDouble("Mix", 50., 0., 100., ...)
+    
+    // Frequency (Hz, exponential curve)
+    GetParam(kCutoff)->InitFrequency("Cutoff", 1000., 20., 20000.);
+    
+    // Gain (dB)
+    GetParam(kGain)->InitGain("Gain", 0., -70., 24.);
+    
+    // Time in seconds
+    GetParam(kDelay)->InitSeconds("Delay Time", 0.5, 0., 5.);
+    
+    // Time in milliseconds
+    GetParam(kAttack)->InitMilliseconds("Attack", 10., 0., 1000.);
+    
+    // Angle in degrees
+    GetParam(kPhase)->InitAngleDegrees("Phase", 0., 0., 360.);
+    
+    // MIDI pitch (0-127)
+    GetParam(kNote)->InitPitch("Root Note", 60, 0, 127);
+    ```
+    
+    These automatically set appropriate:
+    - Unit labels
+    - Display precision
+    - Response curves (linear or exponential)
+    - AU parameter units
+  </Tab>
+  
+  <Tab title="Integer & Enum">
+    **InitInt** - Integer stepped parameter
+    
+    ```cpp
+    GetParam(kOversample)->InitInt("Oversample", 2, 1, 8, "", 
+      IParam::kFlagStepped);
+    // Displays: 1, 2, 3, 4, 5, 6, 7, 8
+    ```
+    
+    **InitEnum** - Enumerated list with text labels
+    
+    ```cpp
+    // Method 1: Variadic arguments
+    GetParam(kWaveform)->InitEnum("Waveform", 0, 4, "", 
+      IParam::kFlagStepped, "",
+      "Sine", "Triangle", "Saw", "Square");
+    
+    // Method 2: Initializer list (cleaner)
+    GetParam(kFilter)->InitEnum("Filter Type", 0,
+      {"Lowpass", "Highpass", "Bandpass", "Notch"},
+      IParam::kFlagStepped);
+    
+    // Access as integer
+    int waveform = GetParam(kWaveform)->Int();
+    switch(waveform) {
+      case 0: /* Sine */ break;
+      case 1: /* Triangle */ break;
+      // ...
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Boolean">
+    **InitBool** - On/off switch
+    
+    ```cpp
+    GetParam(kBypass)->InitBool("Bypass", false,
+      "",                    // label (not used)
+      0,                     // flags
+      "",                    // group
+      "Off",                // text when false
+      "On"                  // text when true
+    );
+    
+    // Custom labels
+    GetParam(kSync)->InitBool("Tempo Sync", false, "", 0, "",
+      "Free", "Synced");
+    
+    // Access as boolean
+    if (GetParam(kBypass)->Bool()) {
+      // Parameter is true (>= 0.5)
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Parameter Shapes
+
+Parameter shapes control how the parameter responds across its range.
+
+<CardGroup cols={3}>
+  <Card title="Linear" icon="slash">
+    **ShapeLinear()**
+    
+    Even distribution across range.
+    ```cpp
+    // 0% → 50% → 100%
+    ```
+  </Card>
+  <Card title="Exponential" icon="chart-line">
+    **ShapeExp()**
+    
+    Logarithmic curve, great for frequencies.
+    ```cpp
+    // 20Hz → 200Hz → 2kHz → 20kHz
+    ```
+  </Card>
+  <Card title="Power Curve" icon="curve">
+    **ShapePowCurve(n)**
+    
+    Custom curve with exponent.
+    ```cpp
+    // n > 1: more resolution at low end
+    // n < 1: more resolution at high end
+    ```
+  </Card>
+</CardGroup>
+
+```cpp
+// Linear (default)
+GetParam(kVolume)->InitDouble("Volume", 0., 0., 100., 0.1, "%");
+
+// Exponential (best for frequency)
+GetParam(kFreq)->InitDouble("Frequency", 1000., 20., 20000., 0.1, "Hz",
+  0, "", IParam::ShapeExp());
+
+// Power curve (more control at low values)
+GetParam(kDryWet)->InitDouble("Mix", 50., 0., 100., 0.1, "%",
+  0, "", IParam::ShapePowCurve(3.0));  // Cubic curve
+
+// Power curve (more control at high values)  
+GetParam(kSensitivity)->InitDouble("Sensitivity", 50., 0., 100., 0.1, "%",
+  0, "", IParam::ShapePowCurve(0.5));  // Square root curve
+```
+
+<Info>
+From [IPlugParameter.h:74-136](https://github.com/iPlug2/iPlug2/blob/master/IPlug/IPlugParameter.h#L74-L136), shapes affect both display and automation curves.
+</Info>
+
+## Parameter Flags
+
+Flags modify parameter behavior:
+
+```cpp
+enum EFlags {
+  kFlagsNone            = 0,
+  kFlagCannotAutomate   = 0x1,   // Not automatable
+  kFlagStepped          = 0x2,   // Discrete steps (int/enum)
+  kFlagNegateDisplay    = 0x4,   // Display as negative
+  kFlagSignDisplay      = 0x8,   // Display +/- sign
+  kFlagMeta             = 0x10,  // Meta parameter (affects others)
+};
+```
+
+**Examples:**
+
+```cpp
+// Non-automatable parameter (e.g., oversampling)
+GetParam(kOversample)->InitInt("Oversample", 1, 1, 4, "",
+  IParam::kFlagCannotAutomate | IParam::kFlagStepped);
+
+// Stepped enum
+GetParam(kMode)->InitEnum("Mode", 0, 
+  {"Mode A", "Mode B", "Mode C"},
+  IParam::kFlagStepped);  // Always use with enum
+
+// Pan with +/- display
+GetParam(kPan)->InitDouble("Pan", 0., -100., 100., 1., "%",
+  IParam::kFlagSignDisplay);
+
+// Meta parameter that changes other parameters
+GetParam(kPreset)->InitEnum("Preset", 0,
+  {"Init", "Bright", "Dark"},
+  IParam::kFlagMeta);  // Tells host this affects other params
+```
+
+## Parameter Groups
+
+Groups organize parameters in the host's automation dialog:
+
+```cpp
+// Define groups with parameter initialization
+GetParam(kAttack)->InitMilliseconds("Attack", 10., 0., 1000., 0,
+  "Envelope");   // Group name
+  
+GetParam(kDecay)->InitMilliseconds("Decay", 100., 0., 2000., 0,
+  "Envelope");
+  
+GetParam(kSustain)->InitPercentage("Sustain", 70., 0,
+  "Envelope");
+  
+GetParam(kRelease)->InitMilliseconds("Release", 500., 0., 5000., 0,
+  "Envelope");
+
+GetParam(kFilterFreq)->InitFrequency("Cutoff", 1000., 20., 20000., 0, 0,
+  "Filter");  // Different group
+  
+GetParam(kFilterRes)->InitPercentage("Resonance", 50., 0,
+  "Filter");
+```
+
+**Result in DAW:**
+```
+Envelope/
+  ├─ Attack
+  ├─ Decay
+  ├─ Sustain
+  └─ Release
+  
+Filter/
+  ├─ Cutoff
+  └─ Resonance
+```
+
+<Tip>
+Parameter groups are especially useful in VST3 and CLAP, which display them hierarchically.
+</Tip>
+
+### Working with Groups
+
+```cpp
+// Get number of groups
+int nGroups = NParamGroups();
+
+// Get group name
+const char* groupName = GetParamGroupName(0);
+
+// Iterate parameters in a group
+ForParamInGroup("Envelope", [](int paramIdx, IParam& param) {
+  param.SetToDefault();  // Reset all envelope params
+});
+
+// Randomize a group
+RandomiseParamValues("Filter");
+
+// Copy values between groups
+CopyParamValues("Oscillator 1", "Oscillator 2");
+```
+
+## Getting and Setting Values
+
+<Tabs>
+  <Tab title="Getting Values">
+    ```cpp
+    // Get real (non-normalized) value
+    double value = GetParam(kGain)->Value();
+    
+    // Get as specific types
+    bool isOn = GetParam(kBypass)->Bool();      // >= 0.5 = true
+    int mode = GetParam(kMode)->Int();           // Cast to int
+    
+    // Get normalized value (0.0 to 1.0)
+    double norm = GetParam(kGain)->GetNormalized();
+    
+    // Get as dB to amplitude
+    double amp = GetParam(kGain)->DBToAmp();
+    // Equivalent to: iplug::DBToAmp(GetParam(kGain)->Value())
+    
+    // Get min/max bounds
+    double min = GetParam(kGain)->GetMin();
+    double max = GetParam(kGain)->GetMax();
+    double range = GetParam(kGain)->GetRange();
+    
+    // Get default value
+    double def = GetParam(kGain)->GetDefault();
+    double defNorm = GetParam(kGain)->GetDefault(true);  // normalized
+    ```
+  </Tab>
+  
+  <Tab title="Setting Values">
+    ```cpp
+    // Set real value (automatically constrained)
+    GetParam(kGain)->Set(6.0);
+    
+    // Set normalized value (0.0 to 1.0)
+    GetParam(kGain)->SetNormalized(0.5);
+    
+    // Set from string
+    GetParam(kGain)->SetString("6.0");
+    
+    // Reset to default
+    GetParam(kGain)->SetToDefault();
+    
+    // Change default and reset
+    GetParam(kGain)->SetDefault(-12.0);
+    ```
+    
+    <Warning>
+    Don't call `Set()` from `ProcessBlock()` on the audio thread. Parameters should be set from UI or host automation only.
+    </Warning>
+  </Tab>
+  
+  <Tab title="Display Values">
+    ```cpp
+    // Get display string
+    WDL_String display;
+    GetParam(kGain)->GetDisplay(display);
+    // Result: "6.0" or "-inf" (if display text set)
+    
+    // Get display with label
+    GetParam(kGain)->GetDisplayWithLabel(display);
+    // Result: "6.0 dB"
+    
+    // Get parameter name
+    const char* name = GetParam(kGain)->GetName();
+    
+    // Get parameter label (unit)
+    const char* label = GetParam(kGain)->GetLabel();
+    
+    // Get parameter group
+    const char* group = GetParam(kGain)->GetGroup();
+    ```
+  </Tab>
+  
+  <Tab title="Display Texts">
+    **Custom text for specific values:**
+    
+    ```cpp
+    // Initialize parameter
+    GetParam(kGain)->InitGain("Gain", 0., -70., 12.);
+    
+    // Set display text for specific value
+    GetParam(kGain)->SetDisplayText(-70., "-inf");
+    GetParam(kGain)->SetDisplayText(0., "Unity");
+    
+    // Get display text
+    const char* text = GetParam(kGain)->GetDisplayText(-70.);
+    // Returns: "-inf"
+    
+    // Map text back to value
+    double value;
+    bool found = GetParam(kGain)->MapDisplayText("-inf", &value);
+    // value = -70.0, found = true
+    ```
+    
+    Useful for special values like -inf dB, bypass modes, etc.
+  </Tab>
+</Tabs>
+
+## Custom Display Functions
+
+For complex display formatting, use a custom display function:
+
+```cpp
+GetParam(kTime)->InitDouble("Time", 500., 1., 10000., 1., "ms", 0, "",
+  IParam::ShapeExp(), IParam::kUnitMilliseconds,
+  // Custom display function
+  [](double value, WDL_String& display) {
+    if (value < 1000.) {
+      display.SetFormatted(16, "%.1f ms", value);
+    } else {
+      display.SetFormatted(16, "%.2f s", value / 1000.);
+    }
+  }
+);
+
+// Result:
+// 500 ms → "500.0 ms"
+// 2500 ms → "2.50 s"
+```
+
+**Another example - note names:**
+
+```cpp
+GetParam(kPitch)->InitDouble("Pitch", 60., 0., 127., 1., "", 
+  IParam::kFlagStepped, "",
+  IParam::ShapeLinear(), IParam::kUnitMIDINote,
+  [](double value, WDL_String& display) {
+    const char* noteNames[] = {
+      "C", "C#", "D", "D#", "E", "F", 
+      "F#", "G", "G#", "A", "A#", "B"
+    };
+    int note = (int)value;
+    int octave = (note / 12) - 2;  // Middle C = C3
+    display.SetFormatted(16, "%s%d", noteNames[note % 12], octave);
+  }
+);
+
+// 60 → "C3" (middle C)
+// 69 → "A3" (A440)
+```
+
+## Parameter Automation
+
+### Host Automation
+
+When the host automates a parameter, your plugin is notified:
+
+```cpp
+// Override to respond to parameter changes
+void OnParamChange(int paramIdx) override {
+  switch (paramIdx) {
+    case kOversample:
+      // Expensive operation, do it here not in ProcessBlock
+      UpdateOversamplingBuffers();
+      break;
+      
+    case kFilterType:
+      // Recalculate filter coefficients
+      mFilter.SetType(GetParam(kFilterType)->Int());
+      break;
+  }
+}
+```
+
+<Info>
+`OnParamChange()` is called on the **UI thread**, not the audio thread. Safe to allocate memory or do file I/O here.
+</Info>
+
+### Informing the Host
+
+When your plugin changes parameters internally:
+
+```cpp
+// From UI or internal logic
+void SetGainFromUI(double dB) {
+  // Method 1: Direct set (for single change)
+  GetParam(kGain)->Set(dB);
+  
+  // Method 2: Inform host (gesture for automation)
+  BeginInformHostOfParamChange(kGain);
+  GetParam(kGain)->Set(dB);
+  InformHostOfParamChange(kGain, GetParam(kGain)->GetNormalized());
+  EndInformHostOfParamChange(kGain);
+  
+  // Method 3: Let IGraphics controls handle it automatically
+  // (IVKnobControl, etc. call Begin/Inform/End automatically)
+}
+```
+
+<Tip>
+IGraphics controls (IVKnobControl, IVSliderControl) automatically handle Begin/Inform/End gestures. You only need to call them for programmatic parameter changes.
+</Tip>
+
+## Bulk Parameter Operations
+
+iPlug2 provides methods to operate on multiple parameters at once:
+
+<Tabs>
+  <Tab title="Range Operations">
+    ```cpp
+    // Initialize range of parameters
+    InitParamRange(kOsc1Gain, kOsc4Gain, 1, "Osc %i Gain",
+      0., -70., 12., 0.1, "dB", 0, "Oscillators");
+    // Creates: "Osc 1 Gain", "Osc 2 Gain", "Osc 3 Gain", "Osc 4 Gain"
+    
+    // Clone parameters with name substitution
+    CloneParamRange(kOsc1Gain, kOsc1Pan, kOsc2Gain, 
+      "Osc 1", "Osc 2", "Oscillator 2");
+    // Copies Osc1 params to Osc2 with name replacement
+    
+    // Modify range with lambda
+    ForParamInRange(kOsc1Gain, kOsc4Gain, 
+      [](int paramIdx, IParam& param) {
+        param.SetToDefault();
+      }
+    );
+    
+    // Randomize range
+    RandomiseParamValues(kOsc1Gain, kOsc4Gain);
+    
+    // Reset range to defaults
+    DefaultParamValues(kOsc1Gain, kOsc4Gain);
+    
+    // Copy range
+    CopyParamValues(kOsc1Gain, kOsc2Gain, 4);  // Copy 4 params
+    ```
+  </Tab>
+  
+  <Tab title="Group Operations">
+    ```cpp
+    // Modify all parameters in a group
+    ForParamInGroup("Filter", [](int paramIdx, IParam& param) {
+      param.SetToDefault();
+    });
+    
+    // Randomize group
+    RandomiseParamValues("Envelope");
+    
+    // Reset group to defaults
+    DefaultParamValues("Oscillators");
+    
+    // Copy between groups
+    CopyParamValues("Oscillator 1", "Oscillator 2");
+    ```
+  </Tab>
+  
+  <Tab title="All Parameters">
+    ```cpp
+    // Reset all parameters
+    DefaultParamValues();
+    
+    // Randomize all parameters
+    RandomiseParamValues();
+    
+    // Print all parameters (debug)
+    PrintParamValues();
+    // Outputs to console: "kGain: 6.0 dB", etc.
+    ```
+  </Tab>
+</Tabs>
+
+## AudioUnit Parameter Units
+
+AudioUnit plugins can specify parameter units for better host integration:
+
+```cpp
+enum EParamUnit {
+  kUnitPercentage,    // 0-100%
+  kUnitSeconds,       // Time in seconds
+  kUnitMilliseconds,  // Time in ms
+  kUnitSamples,       // Time in samples
+  kUnitDB,           // Decibels
+  kUnitLinearGain,   // Linear gain (0-1)
+  kUnitPan,          // Pan position (-1 to 1)
+  kUnitPhase,        // Phase (0-360°)
+  kUnitDegrees,      // Angle in degrees
+  kUnitMeters,       // Distance
+  kUnitRate,         // Hz or rate
+  kUnitRatio,        // Ratio (e.g., compression)
+  kUnitFrequency,    // Frequency in Hz
+  kUnitOctaves,      // Pitch in octaves
+  kUnitCents,        // Pitch in cents
+  kUnitAbsCents,     // Absolute pitch
+  kUnitSemitones,    // Pitch in semitones
+  kUnitMIDINote,     // MIDI note number
+  kUnitMIDICtrlNum,  // MIDI CC number
+  kUnitBPM,          // Tempo
+  kUnitBeats,        // Time in beats
+  kUnitCustom        // Use custom label
+};
+```
+
+Specialized Init methods set these automatically:
+
+```cpp
+InitFrequency()     → kUnitFrequency
+InitGain()          → kUnitDB
+InitPercentage()    → kUnitPercentage  
+InitSeconds()       → kUnitSeconds
+InitMilliseconds()  → kUnitMilliseconds
+InitPitch()         → kUnitMIDINote
+InitAngleDegrees()  → kUnitDegrees
+```
+
+## Advanced: Parameter Modulation
+
+For real-time modulation (LFO, envelope) that shouldn't be automated:
+
+```cpp
+class ModulatedParam {
+public:
+  ModulatedParam(IParam* pParam) : mParam(pParam) {}
+  
+  // Get modulated value (call in ProcessBlock)
+  double GetModulated(double modAmount) const {
+    double base = mParam->Value();
+    double range = mParam->GetRange();
+    double modulated = base + (modAmount * range);
+    return mParam->Constrain(modulated);
+  }
+  
+private:
+  IParam* mParam;
+};
+
+// Usage
+ModulatedParam mModFreq(GetParam(kFreq));
+
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+  double lfoValue = mLFO.Process();  // -1 to 1
+  double freq = mModFreq.GetModulated(lfoValue * 0.5);  // ±50% mod
+  mFilter.SetFrequency(freq);
+  // ...
+}
+```
+
+<Note>
+This modulates the internal DSP without changing the parameter's stored value or triggering host automation.
+</Note>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Real Values" icon="hashtag">
+    Store parameters as real values (e.g., -70 to +12 dB), not normalized 0-1. Easier to work with in DSP code.
+  </Card>
+  <Card title="Fixed Parameter Count" icon="lock">
+    Never add/remove parameters after release. Host automation breaks if parameter count changes.
+  </Card>
+  <Card title="Enums for Indexing" icon="list-ol">
+    Always use enums to index parameters. Type-safe and self-documenting.
+  </Card>
+  <Card title="Groups for Organization" icon="layer-group">
+    Use parameter groups to organize related parameters in host automation dialogs.
+  </Card>
+  <Card title="Appropriate Shapes" icon="chart-line">
+    Use exponential curves for frequencies, linear for most others. Test what feels natural.
+  </Card>
+  <Card title="Sensible Defaults" icon="bullseye">
+    Choose defaults that produce useful sound immediately. Users may never touch some parameters.
+  </Card>
+  <Card title="Display Precision" icon="eye">
+    Match step size to display precision. Step 0.01 = 2 decimals, 0.1 = 1 decimal.
+  </Card>
+  <Card title="Thread Safety" icon="shield-check">
+    Parameters are atomic and thread-safe. Access directly from any thread.
+  </Card>
+</CardGroup>
+
+## Complete Example
+
+```cpp
+// YourPlugin.h
+enum EParams {
+  // Oscillator
+  kOscWaveform = 0,
+  kOscPitch,
+  kOscDetune,
+  kOscLevel,
+  
+  // Filter
+  kFilterType,
+  kFilterCutoff,
+  kFilterResonance,
+  kFilterDrive,
+  
+  // Envelope
+  kEnvAttack,
+  kEnvDecay,
+  kEnvSustain,
+  kEnvRelease,
+  
+  // Master
+  kMasterGain,
+  kMasterBypass,
+  
+  kNumParams
+};
+
+// YourPlugin.cpp
+YourPlugin::YourPlugin(const InstanceInfo& info)
+: Plugin(info, MakeConfig(kNumParams, 1))
+{
+  // Oscillator
+  GetParam(kOscWaveform)->InitEnum("Waveform", 0,
+    {"Sine", "Triangle", "Saw", "Square", "Noise"},
+    IParam::kFlagStepped, "Oscillator");
+  
+  GetParam(kOscPitch)->InitPitch("Pitch", 60, 0, 127, 0, "Oscillator");
+  
+  GetParam(kOscDetune)->InitDouble("Detune", 0., -100., 100., 0.1, "cents",
+    0, "Oscillator");
+  
+  GetParam(kOscLevel)->InitDouble("Level", -6., -70., 12., 0.1, "dB",
+    0, "Oscillator", IParam::ShapeLinear(), IParam::kUnitDB);
+  
+  // Filter
+  GetParam(kFilterType)->InitEnum("Type", 0,
+    {"Lowpass", "Highpass", "Bandpass", "Notch"},
+    IParam::kFlagStepped, "Filter");
+  
+  GetParam(kFilterCutoff)->InitFrequency("Cutoff", 1000., 20., 20000.,
+    0, 0, "Filter");
+  
+  GetParam(kFilterResonance)->InitPercentage("Resonance", 0.,
+    0, "Filter");
+  
+  GetParam(kFilterDrive)->InitGain("Drive", 0., 0., 24.,
+    0, 0, "Filter");
+  
+  // Envelope
+  GetParam(kEnvAttack)->InitMilliseconds("Attack", 10., 0., 1000.,
+    0, "Envelope");
+  
+  GetParam(kEnvDecay)->InitMilliseconds("Decay", 100., 0., 2000.,
+    0, "Envelope");
+  
+  GetParam(kEnvSustain)->InitPercentage("Sustain", 70.,
+    0, "Envelope");
+  
+  GetParam(kEnvRelease)->InitMilliseconds("Release", 500., 0., 5000.,
+    0, "Envelope");
+  
+  // Master
+  GetParam(kMasterGain)->InitGain("Output", 0., -70., 12.,
+    0, 0, "Master");
+  
+  GetParam(kMasterBypass)->InitBool("Bypass", false, "", 0, "Master");
+  
+  // Set display text for special values
+  GetParam(kOscLevel)->SetDisplayText(-70., "-inf");
+  GetParam(kMasterGain)->SetDisplayText(-70., "-inf");
+  GetParam(kMasterGain)->SetDisplayText(0., "Unity");
+}
+
+void YourPlugin::ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+  // Access parameters (thread-safe)
+  if (GetParam(kMasterBypass)->Bool()) {
+    // Pass through
+    return;
+  }
+  
+  const int waveform = GetParam(kOscWaveform)->Int();
+  const double pitch = GetParam(kOscPitch)->Value();
+  const double cutoff = GetParam(kFilterCutoff)->Value();
+  const double resonance = GetParam(kFilterResonance)->Value() / 100.0;
+  const double outputGain = GetParam(kMasterGain)->DBToAmp();
+  
+  // ... DSP code ...
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Audio Processing" icon="waveform" href="/concepts/audio-processing">
+    Use parameters in ProcessBlock for real-time audio
+  </Card>
+  <Card title="Architecture" icon="building" href="/concepts/architecture">
+    Understand how parameters fit into the architecture
+  </Card>
+  <Card title="Plugin Formats" icon="plug" href="/concepts/plugin-formats">
+    Learn format-specific parameter features
+  </Card>
+  <Card title="Project Structure" icon="folder-tree" href="/concepts/project-structure">
+    See how parameters fit into your project files
+  </Card>
+</CardGroup>

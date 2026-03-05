@@ -1,0 +1,168 @@
+---
+title: Responsive UI
+description: Build plugins with responsive IGraphics layouts that adapt to window resizing
+---
+
+The IPlugResponsiveUI example demonstrates how to create plugin interfaces that dynamically adapt to different window sizes. This is essential for supporting resizable plugin windows and different screen sizes.
+
+## What This Example Demonstrates
+
+- Dynamic layout calculation based on window bounds
+- Runtime control repositioning on resize
+- Host-requested view configuration support (AUv3)
+- Using `mLayoutFunc` for responsive control placement
+
+## Key Implementation Details
+
+### Layout Function
+
+The layout function recalculates control positions whenever the window is resized:
+
+```cpp
+mLayoutFunc = [&](IGraphics* pGraphics) {
+  const IRECT b = pGraphics->GetBounds();
+
+  auto GetBounds = [pGraphics](int ctrlIdx, const IRECT& b) {
+    IRECT main = b.GetPadded(-5.f);
+    IRECT keys = main.FracRectVertical(0.25, false);
+    IRECT scope = main.FracRectVertical(0.75, true).GetPadded(-10.f);
+    IRECT gain = scope.ReduceFromRight(100.f);
+    switch (ctrlIdx) {
+      case 1: return keys;
+      case 2: return gain;
+      case 3: return scope;
+      case 0: return b;
+      default: return pGraphics->GetControl(ctrlIdx)->GetRECT();
+    }
+  };
+
+  // Layout controls on resize
+  if(pGraphics->NControls()) {
+    for (int ctrlIdx = 0; ctrlIdx < pGraphics->NControls(); ctrlIdx++) {
+      pGraphics->GetControl(ctrlIdx)->SetTargetAndDrawRECTs(GetBounds(ctrlIdx, b));
+    }
+    return;
+  }
+
+  pGraphics->SetLayoutOnResize(true);
+  pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
+  pGraphics->AttachPopupMenuControl();
+
+  // Create controls
+  pGraphics->AttachPanelBackground(COLOR_GRAY);
+  pGraphics->AttachControl(new IVKeyboardControl(GetBounds(1, b)));
+  pGraphics->AttachControl(new IVSliderControl(GetBounds(2, b), kGain));
+  pGraphics->AttachControl(new IVScopeControl<>(GetBounds(3, b), "", 
+    DEFAULT_STYLE.WithColor(kBG, COLOR_BLACK).WithColor(kFG, COLOR_WHITE)), 
+    kCtrlTagScope);
+};
+```
+
+### Rectangle Utilities
+
+<CardGroup cols={2}>
+  <Card title="FracRectVertical" icon="arrows-up-down">
+    Divides a rectangle vertically into fractional parts
+  </Card>
+  <Card title="GetPadded" icon="compress">
+    Adds padding/margin to a rectangle
+  </Card>
+  <Card title="ReduceFromRight" icon="arrow-left">
+    Carves out space from the right edge
+  </Card>
+  <Card title="GetBounds" icon="expand">
+    Returns the current window bounds
+  </Card>
+</CardGroup>
+
+### Host View Configuration
+
+Support for host-requested resize (especially important for AUv3):
+
+```cpp
+bool IPlugResponsiveUI::OnHostRequestingSupportedViewConfiguration(int width, int height)
+{
+  return ConstrainEditorResize(width, height);
+}
+
+void IPlugResponsiveUI::OnHostSelectedViewConfiguration(int width, int height)
+{
+  if (GetUI())
+    GetUI()->Resize(width, height, 1.f, true);
+}
+```
+
+<Note>
+  `OnHostRequestingSupportedViewConfiguration` is primarily used by AUv3 hosts to query if your plugin supports specific window dimensions.
+</Note>
+
+## Audio Processing with Visualization
+
+The example includes a scope visualization that displays the audio output:
+
+```cpp
+void IPlugResponsiveUI::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kGain)->DBToAmp();
+  
+  for (int s = 0; s < nFrames; s++) {
+    outputs[0][s] = mOsc.Process() * gain;
+    outputs[1][s] = outputs[0][s];
+  }
+  
+  mScopeSender.ProcessBlock(outputs, nFrames, kCtrlTagScope, 1);
+}
+
+void IPlugResponsiveUI::OnIdle()
+{
+  mScopeSender.TransmitData(*this);
+}
+```
+
+<Info>
+  The `IBufferSender` sends audio data from the audio thread to the UI thread safely, where it's displayed by the `IVScopeControl`.
+</Info>
+
+## Building Responsive Layouts
+
+<Steps>
+  <Step title="Enable layout on resize">
+    Call `pGraphics->SetLayoutOnResize(true)` to enable dynamic relayout.
+  </Step>
+  
+  <Step title="Define layout logic">
+    Create a function that calculates control bounds based on current window size.
+  </Step>
+  
+  <Step title="Handle existing controls">
+    Check if controls already exist and update their positions using `SetTargetAndDrawRECTs()`.
+  </Step>
+  
+  <Step title="Implement view configuration">
+    Override `OnHostRequestingSupportedViewConfiguration` and `OnHostSelectedViewConfiguration` for AUv3 support.
+  </Step>
+</Steps>
+
+## Common Layout Patterns
+
+```cpp
+// Vertical split: keyboard at bottom, rest above
+IRECT main = b.GetPadded(-5.f);
+IRECT keys = main.FracRectVertical(0.25, false);  // Bottom 25%
+IRECT scope = main.FracRectVertical(0.75, true);  // Top 75%
+
+// Horizontal control on the right
+IRECT gain = scope.ReduceFromRight(100.f);
+
+// Adding padding
+IRECT paddedScope = scope.GetPadded(-10.f);
+```
+
+<Warning>
+  Always check if controls exist before repositioning them. The layout function is called both during initial setup and on resize.
+</Warning>
+
+## Related Examples
+
+- [Web UI](/examples/web-ui) - Alternative approach using web technologies
+- [SwiftUI](/examples/swiftui) - Native macOS/iOS UI with automatic layout

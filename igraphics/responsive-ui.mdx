@@ -1,0 +1,656 @@
+---
+title: 'Responsive UI Design'
+description: 'Handle window resizing, scaling, and layout adaptation'
+---
+
+## Overview
+
+iPlug2 IGraphics supports dynamic resizing and scaling for responsive user interfaces. This allows your plugin to:
+
+<CardGroup cols={2}>
+  <Card title="Adapt to Screen Size" icon="display">
+    Work on small laptop screens and large 4K displays
+  </Card>
+  <Card title="Support High-DPI" icon="sparkles">
+    Automatically scale for Retina/4K displays
+  </Card>
+  <Card title="User Resizing" icon="arrows-maximize">
+    Let users resize the plugin window
+  </Card>
+  <Card title="Host Constraints" icon="window">
+    Respect host-provided view sizes
+  </Card>
+</CardGroup>
+
+## Basic Resize Handling
+
+Enable automatic layout updates on resize:
+
+```cpp
+mLayoutFunc = [&](IGraphics* pGraphics) {
+  const IRECT b = pGraphics->GetBounds();
+  
+  // Check if controls already exist (resize case)
+  if (pGraphics->NControls()) {
+    // Update existing control positions/sizes
+    for (int i = 0; i < pGraphics->NControls(); i++) {
+      IControl* pControl = pGraphics->GetControl(i);
+      IRECT newBounds = CalculateNewBounds(i, b);
+      pControl->SetTargetAndDrawRECTs(newBounds);
+    }
+    return;
+  }
+  
+  // Enable automatic layout on resize
+  pGraphics->SetLayoutOnResize(true);
+  
+  // Initial layout - attach controls...
+};
+```
+
+<Info>
+When `SetLayoutOnResize(true)` is enabled, `mLayoutFunc` is called whenever the graphics context is resized.
+</Info>
+
+## Corner Resizer
+
+Add a corner drag handle for user resizing:
+
+```cpp
+pGraphics->AttachCornerResizer(EUIResizerMode::Scale, false);
+// or
+pGraphics->AttachCornerResizer(EUIResizerMode::Size, false);
+```
+
+**Resize Modes:**
+
+<Tabs>
+  <Tab title="Scale Mode">
+```cpp
+EUIResizerMode::Scale
+```
+Scales all controls proportionally. The drawing scale changes but control positions remain relative.
+
+**Best for:** Fixed-layout UIs where everything should scale together
+  </Tab>
+  
+  <Tab title="Size Mode">
+```cpp
+EUIResizerMode::Size
+```
+Changes the actual bounds without scaling. Controls must reposition themselves.
+
+**Best for:** Responsive layouts that adapt to different aspect ratios
+  </Tab>
+</Tabs>
+
+## Layout Strategies
+
+### Fractional Layout
+
+Divide the UI into fractional regions:
+
+```cpp IPlugResponsiveUI.cpp:22-37
+auto GetBounds = [pGraphics](int ctrlIdx, const IRECT& b) {
+  IRECT main = b.GetPadded(-5.f);
+  IRECT keys = main.FracRectVertical(0.25, false);  // Bottom 25%
+  IRECT scope = main.FracRectVertical(0.75, true);  // Top 75%
+  IRECT gain = scope.ReduceFromRight(100.f);         // Right side
+  
+  switch (ctrlIdx) {
+    case 1: return keys;
+    case 2: return gain;
+    case 3: return scope;
+    case 0: return b;
+    default: return pGraphics->GetControl(ctrlIdx)->GetRECT();
+  }
+};
+
+// On resize
+if (pGraphics->NControls()) {
+  for (int i = 0; i < pGraphics->NControls(); i++) {
+    pGraphics->GetControl(i)->SetTargetAndDrawRECTs(GetBounds(i, b));
+  }
+  return;
+}
+```
+
+<Info>
+**IRECT fractional methods:**
+- `FracRectVertical(frac, fromTop)` - Split vertically
+- `FracRectHorizontal(frac, fromLeft)` - Split horizontally
+- `ReduceFromTop/Bottom/Left/Right(amount)` - Reduce by pixels
+</Info>
+
+### Grid Layout
+
+Arrange controls in a responsive grid:
+
+```cpp
+const IRECT b = pGraphics->GetBounds().GetPadded(-10);
+const int nRows = 4;
+const int nCols = 4;
+
+for (int row = 0; row < nRows; row++) {
+  for (int col = 0; col < nCols; col++) {
+    IRECT cell = b.GetGridCell(row, col, nRows, nCols).GetPadded(-5);
+    
+    // Attach control in grid cell
+    pGraphics->AttachControl(
+      new IVKnobControl(cell.GetCentredInside(60), paramIdx, "Knob")
+    );
+  }
+}
+```
+
+**Grid cell variations:**
+```cpp
+// Single cell
+IRECT cell = bounds.GetGridCell(row, col, nRows, nCols);
+
+// Span multiple cells
+IRECT span = bounds.GetGridCell(row, col, nRows, nCols, 
+                                 CellSpan::kMulti, 2, 2); // 2x2 span
+
+// Get sub-grid within cell
+IRECT innerCell = cell.GetGridCell(innerRow, innerCol, 2, 2);
+```
+
+### Adaptive Layout
+
+Change layout based on aspect ratio or size:
+
+```cpp
+mLayoutFunc = [&](IGraphics* pGraphics) {
+  const IRECT b = pGraphics->GetBounds();
+  const float aspectRatio = b.W() / b.H();
+  
+  // Choose layout based on aspect ratio
+  if (aspectRatio > 1.5f) {
+    // Wide layout - controls side by side
+    LayoutWide(pGraphics, b);
+  } else if (aspectRatio < 0.75f) {
+    // Tall layout - controls stacked
+    LayoutTall(pGraphics, b);
+  } else {
+    // Square layout
+    LayoutSquare(pGraphics, b);
+  }
+};
+```
+
+## High-DPI Support
+
+### Automatic Scaling
+
+iPlug2 automatically handles high-DPI displays:
+
+```cpp
+mMakeGraphicsFunc = [&]() {
+  return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS, 
+                      GetScaleForScreen(PLUG_WIDTH, PLUG_HEIGHT));
+  //                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  //                  Automatically detects screen DPI
+};
+```
+
+**Manual scale control:**
+```cpp
+// Set specific scale
+pGraphics->Resize(width, height, 2.0f);  // 2x scale for Retina
+
+// Get current scale
+float scale = pGraphics->GetDrawScale();
+
+// Get screen scale
+float screenScale = pGraphics->GetScreenScale();
+```
+
+### Bitmap Scaling
+
+Provide multiple resolutions for bitmaps:
+
+```cpp
+// Load base bitmap
+const IBitmap knob = pGraphics->LoadBitmap("knob.png", 60);
+
+// iPlug2 automatically loads knob@2x.png for 2x scale
+// and knob@3x.png for 3x scale if they exist
+
+// Get scaled version
+IBitmap scaledKnob = pGraphics->GetScaledBitmap(knob);
+```
+
+<Note>
+Naming convention for high-DPI assets:
+- `image.png` - 1x (base)
+- `image@2x.png` - 2x (Retina)
+- `image@3x.png` - 3x (UHD)
+</Note>
+
+### SVG for Perfect Scaling
+
+SVG images scale perfectly at any resolution:
+
+```cpp
+const ISVG logo = pGraphics->LoadSVG("logo.svg");
+
+// Renders sharp at any size/scale
+pGraphics->DrawSVG(logo, bounds);
+```
+
+## Host View Configuration
+
+### Responding to Host Requests
+
+Hosts can request specific view sizes:
+
+```cpp Plugin.h
+class MyPlugin : public Plugin {
+#if IPLUG_EDITOR
+  bool OnHostRequestingSupportedViewConfiguration(int width, int height) override {
+    // Return true if this size is acceptable
+    return ConstrainEditorResize(width, height);
+  }
+  
+  void OnHostSelectedViewConfiguration(int width, int height) override {
+    // Host selected a size - apply it
+    if (GetUI())
+      GetUI()->Resize(width, height, 1.f, true);
+  }
+#endif
+};
+```
+
+### Constraining Size
+
+Set minimum/maximum dimensions:
+
+```cpp Plugin.cpp
+bool MyPlugin::ConstrainEditorResize(int& width, int& height) {
+  constexpr int minW = 600;
+  constexpr int minH = 400;
+  constexpr int maxW = 1920;
+  constexpr int maxH = 1080;
+  
+  width = Clip(width, minW, maxW);
+  height = Clip(height, minH, maxH);
+  
+  // Optionally maintain aspect ratio
+  const float aspectRatio = 16.f / 9.f;
+  if (width / height > aspectRatio)
+    width = static_cast<int>(height * aspectRatio);
+  else
+    height = static_cast<int>(width / aspectRatio);
+  
+  return true;
+}
+```
+
+## Custom Control Resize Handling
+
+Make custom controls responsive:
+
+```cpp
+class MyResponsiveControl : public IControl {
+public:
+  void OnResize() override {
+    // Called when control bounds change
+    
+    // Recalculate layout-dependent values
+    mRadius = mRECT.W() * 0.4f;
+    mCenter.x = mRECT.MW();
+    mCenter.y = mRECT.MH();
+    
+    // Update font size based on bounds
+    float fontSize = std::max(10.f, mRECT.H() * 0.1f);
+    mText.mSize = fontSize;
+    
+    // Invalidate any cached layers
+    mLayer = nullptr;
+    
+    SetDirty(false);
+  }
+  
+  void OnRescale() override {
+    // Called when draw scale changes (DPI change)
+    
+    // Reload bitmaps at new scale
+    mBitmap = GetUI()->GetScaledBitmap(mBitmap);
+    
+    SetDirty(false);
+  }
+  
+private:
+  float mRadius;
+  IText mText;
+  ILayerPtr mLayer;
+  IBitmap mBitmap;
+};
+```
+
+<Info>
+**Resize methods:**
+- `OnResize()` - Bounds changed
+- `OnRescale()` - Draw scale/DPI changed
+- `SetRECT(bounds)` - Manually set bounds and trigger OnResize()
+- `SetTargetAndDrawRECTs(bounds)` - Set both target and draw bounds
+</Info>
+
+## Complete Responsive Example
+
+Here's a full responsive plugin implementation:
+
+<CodeGroup>
+```cpp Plugin Constructor
+MyPlugin::MyPlugin(const InstanceInfo& info)
+: Plugin(info, MakeConfig(kNumParams, 1))
+{
+  GetParam(kGain)->InitDouble("Gain", 0., -70., 12., 0.01, "dB");
+  GetParam(kFreq)->InitDouble("Frequency", 1000., 20., 20000., 0.01, "Hz");
+
+#if IPLUG_EDITOR
+  mMakeGraphicsFunc = [&]() {
+#ifdef OS_WEB
+    // Web: Use full screen
+    int w, h;
+    GetScreenDimensions(w, h);
+    return MakeGraphics(*this, w, h, PLUG_FPS, 1.f);
+#else
+    // Native: Use default size with auto-scaling
+    return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS, 
+                        GetScaleForScreen(PLUG_WIDTH, PLUG_HEIGHT));
+#endif
+  };
+  
+  mLayoutFunc = [&](IGraphics* pGraphics) {
+    LayoutUI(pGraphics);
+  };
+#endif
+}
+```
+
+```cpp Layout Function
+void MyPlugin::LayoutUI(IGraphics* pGraphics) {
+  const IRECT b = pGraphics->GetBounds();
+  const float aspectRatio = b.W() / b.H();
+  
+  // Handle resize
+  if (pGraphics->NControls()) {
+    RelayoutControls(pGraphics, b, aspectRatio);
+    return;
+  }
+  
+  // Initial setup
+  pGraphics->SetLayoutOnResize(true);
+  pGraphics->EnableMouseOver(true);
+  pGraphics->AttachCornerResizer(EUIResizerMode::Size, false);
+  pGraphics->AttachPanelBackground(COLOR_BLACK);
+  pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
+  
+  // Create controls
+  if (aspectRatio > 1.2f) {
+    CreateWideLayout(pGraphics, b);
+  } else {
+    CreateTallLayout(pGraphics, b);
+  }
+}
+```
+
+```cpp Wide Layout
+void MyPlugin::CreateWideLayout(IGraphics* pGraphics, const IRECT& b) {
+  // Side-by-side layout
+  IRECT left = b.FracRectHorizontal(0.3f, true).GetPadded(-20);
+  IRECT right = b.FracRectHorizontal(0.7f, false).GetPadded(-20);
+  
+  // Controls on left
+  pGraphics->AttachControl(
+    new IVKnobControl(left.GetGridCell(0, 0, 2, 1), kGain, "Gain"),
+    kCtrlGain
+  );
+  pGraphics->AttachControl(
+    new IVKnobControl(left.GetGridCell(1, 0, 2, 1), kFreq, "Frequency"),
+    kCtrlFreq
+  );
+  
+  // Scope on right
+  pGraphics->AttachControl(
+    new IVScopeControl<>(right, "Scope"),
+    kCtrlScope
+  );
+}
+```
+
+```cpp Tall Layout
+void MyPlugin::CreateTallLayout(IGraphics* pGraphics, const IRECT& b) {
+  // Stacked layout
+  IRECT controls = b.FracRectVertical(0.4f, true).GetPadded(-20);
+  IRECT scope = b.FracRectVertical(0.6f, false).GetPadded(-20);
+  
+  // Controls on top (horizontal)
+  pGraphics->AttachControl(
+    new IVKnobControl(controls.FracRectHorizontal(0.5f, true), kGain, "Gain"),
+    kCtrlGain
+  );
+  pGraphics->AttachControl(
+    new IVKnobControl(controls.FracRectHorizontal(0.5f, false), kFreq, "Frequency"),
+    kCtrlFreq
+  );
+  
+  // Scope on bottom
+  pGraphics->AttachControl(
+    new IVScopeControl<>(scope, "Scope"),
+    kCtrlScope
+  );
+}
+```
+
+```cpp Relayout on Resize
+void MyPlugin::RelayoutControls(IGraphics* pGraphics, const IRECT& b, 
+                                 float aspectRatio) {
+  // Determine if layout mode changed
+  bool wasWide = mLastAspectRatio > 1.2f;
+  bool isWide = aspectRatio > 1.2f;
+  
+  if (wasWide != isWide) {
+    // Layout mode changed - recreate controls
+    pGraphics->RemoveAllControls();
+    LayoutUI(pGraphics);
+  } else {
+    // Same mode - just reposition
+    if (isWide) {
+      RepositionWide(pGraphics, b);
+    } else {
+      RepositionTall(pGraphics, b);
+    }
+  }
+  
+  mLastAspectRatio = aspectRatio;
+}
+```
+
+```cpp Size Constraints
+bool MyPlugin::ConstrainEditorResize(int& width, int& height) {
+  width = Clip(width, 400, 1600);
+  height = Clip(height, 300, 1200);
+  return true;
+}
+
+bool MyPlugin::OnHostRequestingSupportedViewConfiguration(int width, int height) {
+  return ConstrainEditorResize(width, height);
+}
+
+void MyPlugin::OnHostSelectedViewConfiguration(int width, int height) {
+  if (GetUI())
+    GetUI()->Resize(width, height, 1.f, true);
+}
+```
+</CodeGroup>
+
+## IRECT Helper Methods
+
+Useful methods for responsive layout:
+
+```cpp
+// Fractional division
+IRECT top = bounds.FracRectVertical(0.3f, true);     // Top 30%
+IRECT bottom = bounds.FracRectVertical(0.7f, false); // Bottom 70%
+IRECT left = bounds.FracRectHorizontal(0.5f, true);  // Left 50%
+
+// Padding
+IRECT padded = bounds.GetPadded(-10);                // All sides
+IRECT padded2 = bounds.GetPadded(-10, -20, -10, -5); // L, T, R, B
+IRECT hPadded = bounds.GetHPadded(-15);              // Horizontal only
+IRECT vPadded = bounds.GetVPadded(-20);              // Vertical only
+
+// Centering
+IRECT centered = bounds.GetCentredInside(100, 100);  // Fixed size
+IRECT centeredW = bounds.GetCentredInside(100);      // Fixed width
+
+// Reduction
+IRECT reduced = bounds.ReduceFromTop(50);            // Remove 50px from top
+IRECT reduced2 = bounds.ReduceFromBottom(30);        // Remove 30px from bottom
+IRECT reduced3 = bounds.ReduceFromLeft(40);          // Remove 40px from left
+IRECT reduced4 = bounds.ReduceFromRight(60);         // Remove 60px from right
+
+// Extraction
+IRECT topPart = bounds.GetFromTop(100);              // Top 100px
+IRECT bottomPart = bounds.GetFromBottom(50);         // Bottom 50px
+IRECT leftPart = bounds.GetFromLeft(80);             // Left 80px
+IRECT rightPart = bounds.GetFromRight(120);          // Right 120px
+
+// Grid
+IRECT cell = bounds.GetGridCell(row, col, nRows, nCols);
+IRECT cellPadded = bounds.GetGridCell(row, col, nRows, nCols).GetPadded(-5);
+
+// Union (combine rectangles)
+IRECT combined = rect1.Union(rect2);
+
+// Scaling
+IRECT scaled = bounds.GetScaledAboutCentre(0.8f);    // 80% of size
+```
+
+## Best Practices
+
+<Tabs>
+  <Tab title="Layout">
+  - Test at multiple aspect ratios
+  - Support both wide and tall layouts
+  - Maintain minimum readable sizes
+  </Tab>
+  
+  <Tab title="Scaling">
+  - Always use `GetScaleForScreen()` for initial scale
+  - Provide @2x/@3x bitmap assets
+  - Use SVG for logos and icons
+  - Test on Retina/4K displays
+  - Handle `OnRescale()` in custom controls
+  </Tab>
+  
+  <Tab title="Performance">
+  - Avoid recreating controls on every resize
+  - Use `SetTargetAndDrawRECTs()` to reposition
+  - Invalidate layers on resize
+  - Cache calculated values
+  </Tab>
+  
+  <Tab title="Host Integration">
+  - Handle view config changes in AUv3
+  - Support AAX resizing constraints
+  - Test in multiple DAWs
+  - Persist window size per-host
+  </Tab>
+  
+  <Tab title="Best Practices">
+  - Provide corner resizer for user control
+  - Set reasonable min/max sizes
+  - Maintain aspect ratio if appropriate
+  - Support host view configurations
+  - Test in multiple DAW hosts
+  </Tab>
+  
+  <Tab title="Scaling">
+  - Always use `GetScaleForScreen()` for initial scale
+  - Provide @2x/@3x bitmap assets
+  - Use SVG for logos and icons
+  - Test on Retina/4K displays
+  - Handle `OnRescale()` in custom controls
+  </Tab>
+  
+  <Tab title="Performance">
+  - Avoid recreating controls on every resize
+  - Use `SetTargetAndDrawRECTs()` to reposition
+  - Invalidate layers on resize
+  - Cache calculated values
+  - Only relayout when necessary
+  </Tab>
+  
+  <Tab title="User Experience">
+  - Provide corner resizer for user control
+  - Set reasonable min/max sizes
+  - Maintain aspect ratio if appropriate
+  - Support host view configurations
+  - Test in multiple DAW hosts
+  </Tab>
+</Tabs>
+
+## Platform Considerations
+
+<Accordion>
+  <AccordionItem title="Web (WASM)">
+    ```cpp
+    #ifdef OS_WEB
+    int w, h;
+    GetScreenDimensions(w, h);
+    return MakeGraphics(*this, w, h, PLUG_FPS, 1.f);
+    #endif
+    ```
+    Web plugins should adapt to browser window size
+  </AccordionItem>
+  
+  <AccordionItem title="iOS">
+    ```cpp
+    #ifdef OS_IOS
+    // iOS enforces host view sizes
+    // Implement OnHostRequestingSupportedViewConfiguration()
+    #endif
+    ```
+    iOS plugins must support host-provided sizes
+  </AccordionItem>
+  
+  <AccordionItem title="Logic Pro / AUv3">
+    Logic Pro enforces specific view sizes for AUv3:
+    ```cpp
+    bool OnHostRequestingSupportedViewConfiguration(int width, int height) override {
+      // Logic requests 440x270, 880x540, 1320x810
+      return width >= 440 && height >= 270;
+    }
+    ```
+  </AccordionItem>
+  
+  <AccordionItem title="High-DPI Windows">
+    Windows handles DPI scaling at the OS level:
+    ```cpp
+    // GetScaleForScreen() handles Windows DPI awareness
+    return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS,
+                        GetScaleForScreen(PLUG_WIDTH, PLUG_HEIGHT));
+    ```
+  </AccordionItem>
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Controls Library" icon="sliders" href="./controls">
+    Learn about responsive controls
+  </Card>
+  <Card title="Custom Controls" icon="code" href="./custom-controls">
+    Make controls responsive
+  </Card>
+  <Card title="Getting Started" icon="rocket" href="./getting-started">
+    Set up your first UI
+  </Card>
+  <Card title="Drawing Backends" icon="palette" href="./drawing-backends">
+    Backend-specific considerations
+  </Card>
+</CardGroup>

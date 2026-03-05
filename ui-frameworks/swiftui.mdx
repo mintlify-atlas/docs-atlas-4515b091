@@ -1,0 +1,430 @@
+---
+title: SwiftUI Interface
+description: Building native macOS and iOS plugin UIs with SwiftUI
+---
+
+iPlug2 supports building plugin UIs with Apple's SwiftUI framework, providing native macOS and iOS interfaces with declarative syntax.
+
+<Note>
+SwiftUI support requires macOS 10.15+ or iOS 13+. It works with all plugin formats on Apple platforms (AU, AUv3, VST3, CLAP).
+</Note>
+
+## Getting Started
+
+<Steps>
+  <Step title="Copy the example project">
+    Start by duplicating the SwiftUI example:
+    ```bash
+    ./duplicate.py IPlugSwiftUI MyPlugin
+    ```
+  </Step>
+  
+  <Step title="Project structure">
+    Your project will have:
+    ```
+    MyPlugin/
+    ├── MyPlugin.h              # Plugin header (C++)
+    ├── MyPlugin.mm             # Plugin implementation (Objective-C++)
+    ├── config.h                # Plugin configuration
+    └── UI/                     # SwiftUI views
+        ├── ContentView.swift
+        ├── MyPluginState.swift
+        ├── MyPluginViewController.swift
+        ├── Param.swift
+        └── ParamSliderView.swift
+    ```
+  </Step>
+  
+  <Step title="Configure your plugin">
+    Edit `config.h` to set your plugin details.
+  </Step>
+</Steps>
+
+## Plugin Implementation
+
+### Plugin Header (C++)
+
+Your plugin class should inherit from `Plugin` and use `CocoaEditorDelegate`:
+
+```cpp
+#pragma once
+
+#include "IPlug_include_in_plug_hdr.h"
+#include "ISender.h"
+
+using namespace iplug;
+
+constexpr int SCOPE_BUFFER_SIZE = 512;
+
+class MyPlugin final : public Plugin
+{
+public:
+  MyPlugin(const InstanceInfo& info);
+
+  void* OpenWindow(void* pParent) override;
+  void OnParentWindowResize(int width, int height) override;
+  bool OnHostRequestingSupportedViewConfiguration(int width, int height) override;
+
+  void OnIdle() override;
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  bool OnMessage(int msgTag, int ctrlTag, int dataSize, const void* pData) override;
+
+  using OscilloscopeSender = IBufferSender<1, 1, SCOPE_BUFFER_SIZE>;
+  OscilloscopeSender mScopeSender {-100.0};
+};
+```
+
+### Plugin Implementation (Objective-C++)
+
+The `.mm` file bridges C++ and Swift:
+
+```objc
+#include "MyPlugin.h"
+#include "IPlug_include_in_plug_src.h"
+
+#ifdef FRAMEWORK_BUILD
+#import <AUv3Framework/MyPlugin-Swift.h>
+#import <AUv3Framework/MyPlugin-Shared.h>
+#else
+#import <MyPlugin-Swift.h>
+#endif
+
+const NSInteger kScopeBufferSize = SCOPE_BUFFER_SIZE;
+
+MyPlugin::MyPlugin(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kParamGain)->InitDouble("Gain", 100., 0., 100.0, 0.01, "%");
+  MakeDefaultPreset();
+}
+
+void* MyPlugin::OpenWindow(void* pParent)
+{
+  PLATFORM_VIEW* platformParent = (PLATFORM_VIEW*) pParent;
+  auto* vc = [[MyPluginViewController alloc] 
+    initWithEditorDelegateAndBundleID: this : GetBundleID()];
+  mViewController = vc;
+  vc.view.frame = MAKERECT(0.f, 0.f, (float) PLUG_WIDTH, (float) PLUG_HEIGHT);
+  [platformParent addSubview:vc.view];
+  
+  OnUIOpen();
+  
+  return vc.view;
+}
+
+void MyPlugin::OnIdle()
+{
+  // Send data from audio thread to UI
+  mScopeSender.TransmitData(*this);
+}
+
+void MyPlugin::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kParamGain)->Value() / 100.;
+  const int nChans = NOutChansConnected();
+    
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[0][s] * gain;
+    }
+  }
+  
+  // Send audio data to visualizer
+  mScopeSender.ProcessBlock(outputs, nFrames, kCtrlTagScope);
+}
+
+bool MyPlugin::OnMessage(int msgTag, int ctrlTag, int dataSize, const void* pData)
+{
+  if (msgTag == kMsgTagHello)
+  {
+    DBGMSG("Message received from UI\n");
+    return true;
+  }
+  
+  return CocoaEditorDelegate::OnMessage(msgTag, ctrlTag, dataSize, pData);
+}
+```
+
+## SwiftUI Implementation
+
+### State Object
+
+Create an observable state object to manage parameters:
+
+```swift
+import SwiftUI
+
+class MyPluginState: NSObject, ObservableObject {
+  var params: [Param] = []
+  @Published var bundleID = String("")
+  @Published @objc dynamic var waveform: [Float] = Array(repeating: 0.0, count: kScopeBufferSize)
+
+  let beginEdit: @MainActor (Int) -> Void
+  let doEdit: @MainActor (Int, Double) -> Void
+  let endEdit: @MainActor (Int) -> Void
+  let sendMsg: @MainActor () -> Void
+
+  public init(beginEdit: @MainActor @escaping (Int) -> Void = {_ in },
+              doEdit: @MainActor @escaping (Int, Double) -> Void  = {_,_ in },
+              endEdit: @MainActor @escaping (Int) -> Void  = {_ in },
+              sendMsg: @MainActor @escaping () -> Void  = {}) {
+    self.beginEdit = beginEdit
+    self.doEdit = doEdit
+    self.endEdit = endEdit
+    self.sendMsg = sendMsg
+    super.init()
+  }
+}
+```
+
+### View Controller
+
+Bridge between C++ and SwiftUI:
+
+```swift
+import SwiftUI
+
+@objc class MyPluginViewController: IPlugCocoaViewController {
+  lazy var state = MyPluginState(
+    beginEdit: self.beginInformHostOfParamChangeFromUI,
+    doEdit: self.sendParameterValueFromUI,
+    endEdit: self.endInformHostOfParamChangeFromUI,
+    sendMsg: {
+      self.sendArbitraryMsgFromUI(msgTag: kMsgTagHello, ctrlTag: kCtrlTagButton, msg:nil);
+    })
+  
+  override init!(editorDelegateAndBundleID editorDelegate: UnsafeMutableRawPointer!, 
+                 _ bundleID: UnsafePointer<CChar>!) {
+    super.init(editorDelegateAndBundleID: editorDelegate, bundleID)
+  }
+  
+  override func viewDidLoad() {
+    super.viewDidLoad()
+      
+    // Load parameters from C++
+    for idx in 0..<parameterCount() {
+      state.params.append(Param(
+        id: idx,
+        name: getParameterName(idx),
+        defaultValue: getParameterDefault(idx),
+        minValue: getParameterMin(idx),
+        maxValue: getParameterMax(idx),
+        step: getParameterStep(idx),
+        label: getParameterLabel(idx),
+        group: getParameterGroup(idx)))
+    }
+    
+    let contentView = ContentView().environmentObject(state)
+    let hostingController = PlatformHostingController(rootView: contentView)
+    state.bundleID = getBundleID()
+
+    view.addSubview(hostingController.view)
+    hostingController.view.pinToSuperviewEdges()
+  }
+  
+  // Receive data from C++
+  override func sendControlMsgFromDelegate(ctrlTag: Int, msgTag: Int, msg: Data!) {
+    if (ctrlTag == kCtrlTagScope) {
+      // Parse audio data and update state
+      var floatArray: [Float] = []
+      msg.withUnsafeBytes { (pointer: UnsafeRawBufferPointer) in
+        let intSize = MemoryLayout<Int32>.size
+        let byteOffset = intSize * 3
+        let floatPointer = pointer.baseAddress!.advanced(by: byteOffset)
+        let floats = UnsafeRawBufferPointer(start: floatPointer, count: pointer.count - byteOffset)
+          .bindMemory(to: Float.self)
+        floatArray = Array(floats.prefix(kScopeBufferSize))
+      }
+      
+      state.waveform = floatArray
+    }
+  }
+  
+  // Receive parameter changes from C++
+  override func onParamChangeUI(_ paramIdx: Int, _ value: Double) {
+    state.params[Int(paramIdx)].value = value;
+  }
+}
+```
+
+### Content View
+
+Create your SwiftUI interface:
+
+```swift
+import SwiftUI
+
+struct ContentView: View {
+  @EnvironmentObject var state: MyPluginState
+  
+  var body: some View {
+    ZStack {
+      LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+      
+      VStack(spacing: 20) {
+        Text("My Audio Plugin")
+          .font(.title)
+          .foregroundColor(.white)
+        
+        ParamSliderView(param: state.params[kParamGain])
+          .frame(width: 50, height: 200)
+        
+        OscilloscopeView()
+          .frame(height: 150)
+        
+        Button("Send Message") {
+          state.sendMsg()
+        }
+        .buttonStyle(.borderedProminent)
+      }
+      .padding()
+    }
+    .edgesIgnoringSafeArea(.all)
+  }
+}
+```
+
+### Parameter Control
+
+Create reusable parameter controls:
+
+```swift
+import SwiftUI
+
+struct ParamSliderView: View {
+  @ObservedObject var param: Param
+  @State private var isDragging = false
+  
+  var body: some View {
+    VStack {
+      Text(param.name)
+        .font(.caption)
+        .foregroundColor(.white)
+      
+      GeometryReader { geometry in
+        ZStack(alignment: .bottom) {
+          // Background
+          Rectangle()
+            .fill(Color.gray.opacity(0.3))
+          
+          // Value bar
+          Rectangle()
+            .fill(Color.blue)
+            .frame(height: geometry.size.height * CGFloat((param.value - param.minValue) / (param.maxValue - param.minValue)))
+        }
+        .gesture(
+          DragGesture(minimumDistance: 0)
+            .onChanged { value in
+              if !isDragging {
+                // Begin gesture
+                isDragging = true
+              }
+              
+              // Calculate new value from drag position
+              let ratio = 1.0 - (value.location.y / geometry.size.height)
+              let newValue = param.minValue + ratio * (param.maxValue - param.minValue)
+              param.value = max(param.minValue, min(param.maxValue, newValue))
+            }
+            .onEnded { _ in
+              isDragging = false
+            }
+        )
+      }
+      
+      Text(param.displayString())
+        .font(.caption2)
+        .foregroundColor(.white)
+    }
+  }
+}
+```
+
+## Communication Patterns
+
+### Sending Parameter Changes
+
+The `Param` class handles parameter communication automatically:
+
+```swift
+// In Param.swift
+class Param: ObservableObject {
+  @Published var value: Double {
+    didSet {
+      // Automatically sends to C++
+      state?.doEdit(id, toNormalized(value))
+    }
+  }
+  
+  func toNormalized(_ rawValue: Double) -> Double {
+    return shape.valueToNormalized(rawValue, in: self)
+  }
+}
+```
+
+### Receiving Audio Data
+
+Use `ISender` classes to send data from DSP to UI:
+
+```cpp
+// In ProcessBlock()
+mScopeSender.ProcessBlock(outputs, nFrames, kCtrlTagScope);
+
+// In OnIdle() - called on main thread
+mScopeSender.TransmitData(*this);
+```
+
+```swift
+// In ViewController
+override func sendControlMsgFromDelegate(ctrlTag: Int, msgTag: Int, msg: Data!) {
+  if ctrlTag == kCtrlTagScope {
+    // Update published property
+    state.waveform = parseFloatArray(from: msg)
+  }
+}
+```
+
+## Best Practices
+
+<Tip>
+**Use @Published for reactive updates**
+
+Mark properties with `@Published` in your state object to automatically trigger view updates when values change.
+</Tip>
+
+<Warning>
+**Don't call C++ from SwiftUI views directly**
+
+Always route communication through the state object and view controller. This ensures thread safety and proper host notification.
+</Warning>
+
+<Note>
+**Handle both macOS and iOS**
+
+Use `#if os(macOS)` and `#if os(iOS)` to provide platform-specific code. Many SwiftUI components work on both platforms automatically.
+</Note>
+
+## AUv3 Support
+
+For AUv3 plugins, handle view configuration requests:
+
+```cpp
+bool MyPlugin::OnHostRequestingSupportedViewConfiguration(int width, int height)
+{
+#ifdef OS_MAC
+  // Logic/GB offer 0,0 - allow that for proper scaling
+  return ((width + height) == 0);
+#else
+  return true;
+#endif
+}
+```
+
+## Example Project
+
+See the complete example in `Examples/IPlugSwiftUI/` which demonstrates:
+
+- Parameter controls with sliders
+- Real-time oscilloscope visualization
+- Bidirectional C++/Swift communication
+- macOS and iOS support
+- Custom SwiftUI controls

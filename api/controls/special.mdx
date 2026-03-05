@@ -1,0 +1,562 @@
+---
+title: "Special Controls"
+description: "Keyboards, color pickers, LEDs, plots, groups, and other specialized controls"
+---
+
+## Virtual Keyboard Control
+
+`IVKeyboardControl` provides a playable MIDI keyboard.
+
+### Constructor
+
+```cpp
+IVKeyboardControl(
+  const IRECT& bounds,
+  int minNote = 48,
+  int maxNote = 72,
+  bool roundedKeys = false,
+  const IColor& WK_COLOR = DEFAULT_WK_COLOR,
+  const IColor& BK_COLOR = DEFAULT_BK_COLOR,
+  const IColor& PK_COLOR = DEFAULT_PK_COLOR,
+  const IColor& FR_COLOR = DEFAULT_FR_COLOR,
+  const IColor& HK_COLOR = DEFAULT_HK_COLOR
+);
+```
+
+<ParamField path="bounds" type="IRECT" required>
+  Position and size (width can be 0 for auto-sizing based on height)
+</ParamField>
+
+<ParamField path="minNote" type="int" default="48">
+  Lowest MIDI note number (C3 = 48)
+</ParamField>
+
+<ParamField path="maxNote" type="int" default="72">
+  Highest MIDI note number (C5 = 72)
+</ParamField>
+
+<ParamField path="roundedKeys" type="bool" default="false">
+  Use rounded key corners
+</ParamField>
+
+<ParamField path="WK_COLOR" type="IColor">
+  White key color
+</ParamField>
+
+<ParamField path="BK_COLOR" type="IColor">
+  Black key color
+</ParamField>
+
+<ParamField path="PK_COLOR" type="IColor">
+  Pressed key color
+</ParamField>
+
+<ParamField path="FR_COLOR" type="IColor">
+  Frame/border color
+</ParamField>
+
+<ParamField path="HK_COLOR" type="IColor">
+  Highlighted key color
+</ParamField>
+
+### Example
+
+```cpp
+// Basic keyboard, C2 to C5
+pGraphics->AttachControl(
+  new IVKeyboardControl(
+    IRECT(10, 10, 410, 110),
+    36,  // C2
+    72   // C5
+  )
+);
+
+// Styled keyboard with rounded keys
+pGraphics->AttachControl(
+  new IVKeyboardControl(
+    IRECT(10, 10, 610, 110),
+    48,  // C3
+    84,  // C6
+    true,              // Rounded keys
+    COLOR_WHITE,       // White keys
+    COLOR_BLACK,       // Black keys
+    COLOR_LIGHT_BLUE,  // Pressed keys
+    COLOR_GRAY,        // Frame
+    COLOR_YELLOW       // Highlighted key
+  )
+);
+```
+
+### Methods
+
+```cpp
+void SetNoteRange(int min, int max, bool keepWidth = true);
+void SetNoteFromMidi(int noteNum, bool played);
+void SetKeyIsPressed(int key, bool pressed);
+void SetKeyHighlight(int key);  // Highlight specific key
+void ClearNotesFromMidi();
+void SetBlackToWhiteRatios(float widthRatio, float heightRatio = 0.6);
+void SetShowNotesAndVelocity(bool show);
+void SetColors(const IColor BKColor, const IColor& WKColor,
+               const IColor& PKColor, const IColor& FRColor);
+int GetMidiNoteNumberForKey(int key) const;
+```
+
+### MIDI Integration
+
+```cpp
+// Keyboard automatically handles MIDI
+// It sends MIDI messages via GetDelegate()->SendMidiMsgFromUI()
+// and receives MIDI via OnMidi()
+
+auto* keyboard = new IVKeyboardControl(bounds, 36, 84);
+keyboard->SetWantsMidi(true);  // Already set by default
+pGraphics->AttachControl(keyboard);
+
+// Display note names and velocity on hover
+keyboard->SetShowNotesAndVelocity(true);
+```
+
+---
+
+## Wheel Control
+
+`IWheelControl` provides a pitchbend or modulation wheel.
+
+### Constructor
+
+```cpp
+IWheelControl(
+  const IRECT& bounds,
+  IMidiMsg::EControlChangeMsg cc = IMidiMsg::EControlChangeMsg::kNoCC,
+  int initBendRange = 12
+);
+```
+
+<ParamField path="bounds" type="IRECT" required>
+  Position and size
+</ParamField>
+
+<ParamField path="cc" type="IMidiMsg::EControlChangeMsg" default="kNoCC">
+  MIDI CC to send (`kNoCC` = pitch bend mode)
+</ParamField>
+
+<ParamField path="initBendRange" type="int" default="12">
+  Initial pitch bend range in semitones (pitchbend mode only)
+</ParamField>
+
+### Example
+
+```cpp
+// Pitch bend wheel
+pGraphics->AttachControl(
+  new IWheelControl(
+    IRECT(10, 10, 40, 150),
+    IMidiMsg::EControlChangeMsg::kNoCC,  // Pitchbend
+    12  // ±1 octave
+  )
+);
+
+// Modulation wheel (CC 1)
+pGraphics->AttachControl(
+  new IWheelControl(
+    IRECT(60, 10, 90, 150),
+    IMidiMsg::EControlChangeMsg::kModWheel
+  )
+);
+```
+
+<Info>
+Pitch bend wheel automatically springs back to center. Right-click to change bend range.
+</Info>
+
+---
+
+## LED Indicator Control
+
+`ILEDControl` displays a glowing LED indicator.
+
+### Constructor
+
+```cpp
+// With hue value
+ILEDControl(const IRECT& bounds, float hue = 0.f);
+
+// With color
+ILEDControl(const IRECT& bounds, const IColor& color);
+```
+
+<ParamField path="bounds" type="IRECT" required>
+  Position and size (use square bounds for circular LED)
+</ParamField>
+
+<ParamField path="hue" type="float" default="0.f">
+  Hue value 0-360 (red = 0, green = 120, blue = 240)
+</ParamField>
+
+<ParamField path="color" type="IColor">
+  LED color (hue extracted from color)
+</ParamField>
+
+### Example
+
+```cpp
+// Red LED
+auto* clipLED = new ILEDControl(IRECT(10, 10, 30, 30), 0.f);
+pGraphics->AttachControl(clipLED, kCtrlTagClipLED);
+
+// Green LED
+auto* readyLED = new ILEDControl(IRECT(10, 50, 30, 70), 120.f);
+pGraphics->AttachControl(readyLED, kCtrlTagReadyLED);
+
+// Blue LED from color
+auto* statusLED = new ILEDControl(IRECT(10, 90, 30, 110), COLOR_BLUE);
+pGraphics->AttachControl(statusLED);
+```
+
+### Controlling LED
+
+```cpp
+// Turn on/off
+clipLED->SetValue(1.0);  // On
+clipLED->SetValue(0.0);  // Off
+
+// Trigger with decay animation
+clipLED->TriggerWithDecay(500);  // 500ms decay
+
+// From audio thread (using ISender)
+if (clipDetected) {
+  mClipSender.PushData({kCtrlTagClipLED}, {1.0f});
+}
+```
+
+---
+
+## Plot Control
+
+`IVPlotControl` displays mathematical functions and curves.
+
+### Constructor
+
+```cpp
+using IPlotFunc = std::function<double(double)>;
+
+struct Plot {
+  IColor color;
+  IPlotFunc func;
+};
+
+IVPlotControl(
+  const IRECT& bounds,
+  const std::initializer_list<Plot>& funcs,
+  int numPoints,
+  const char* label = "",
+  const IVStyle& style = DEFAULT_STYLE,
+  float min = -1.,
+  float max = 1.,
+  bool useLayer = false
+);
+```
+
+<ParamField path="bounds" type="IRECT" required>
+  Position and size
+</ParamField>
+
+<ParamField path="funcs" type="std::initializer_list<Plot>">
+  List of functions to plot
+</ParamField>
+
+<ParamField path="numPoints" type="int" required>
+  Number of points to sample (resolution)
+</ParamField>
+
+<ParamField path="label" type="const char*" default="empty string">
+  Label text
+</ParamField>
+
+<ParamField path="min" type="float" default="-1.f">
+  Minimum Y-axis value
+</ParamField>
+
+<ParamField path="max" type="float" default="1.f">
+  Maximum Y-axis value
+</ParamField>
+
+<ParamField path="useLayer" type="bool" default="false">
+  Use layer caching for performance
+</ParamField>
+
+### Example
+
+```cpp
+// Plot sine and cosine functions
+pGraphics->AttachControl(
+  new IVPlotControl(
+    IRECT(10, 10, 410, 210),
+    {
+      {COLOR_RED,  [](double x) { return std::sin(x * 2.0 * PI); }},
+      {COLOR_BLUE, [](double x) { return std::cos(x * 2.0 * PI); }}
+    },
+    200,      // 200 sample points
+    "Waveforms",
+    DEFAULT_STYLE,
+    -1.f,     // Min Y
+    1.f       // Max Y
+  )
+);
+
+// Plot filter response curve
+auto filterResponse = [this](double x) {
+  double freq = x * 20000.0;  // 0-20kHz
+  return CalculateFilterGain(freq);
+};
+
+pGraphics->AttachControl(
+  new IVPlotControl(
+    bounds,
+    {{COLOR_GREEN, filterResponse}},
+    500,      // High resolution
+    "Frequency Response",
+    DEFAULT_STYLE,
+    -60.f,    // Min dB
+    12.f      // Max dB
+  )
+);
+```
+
+### Methods
+
+```cpp
+void AddPlotFunc(const IColor& color, const IPlotFunc& func);
+```
+
+---
+
+## Group Control
+
+`IVGroupControl` draws a labeled frame around other controls.
+
+### Constructor
+
+```cpp
+// Explicit bounds
+IVGroupControl(
+  const IRECT& bounds,
+  const char* label = "",
+  float labelOffset = 10.f,
+  const IVStyle& style = DEFAULT_STYLE,
+  IContainerBase::AttachFunc attachFunc = nullptr,
+  IContainerBase::ResizeFunc resizeFunc = nullptr
+);
+
+// Auto-sized based on named group
+IVGroupControl(
+  const char* label,
+  const char* groupName,
+  float padL = 0.f,
+  float padT = 0.f,
+  float padR = 0.f,
+  float padB = 0.f,
+  const IVStyle& style = DEFAULT_STYLE
+);
+```
+
+<ParamField path="labelOffset" type="float" default="10.f">
+  Distance of label from top-left corner
+</ParamField>
+
+<ParamField path="groupName" type="const char*">
+  Name of control group to automatically frame
+</ParamField>
+
+<ParamField path="padL/T/R/B" type="float" default="0.f">
+  Padding around grouped controls
+</ParamField>
+
+### Example
+
+```cpp
+// Method 1: Explicit bounds
+pGraphics->AttachControl(
+  new IVGroupControl(
+    IRECT(10, 10, 210, 210),
+    "Filter Section"
+  )
+);
+
+// Method 2: Auto-frame named group
+pGraphics->AttachControl(new IVKnobControl(...), kNoTag, "filterGroup");
+pGraphics->AttachControl(new IVKnobControl(...), kNoTag, "filterGroup");
+pGraphics->AttachControl(new IVSliderControl(...), kNoTag, "filterGroup");
+
+// Add group control AFTER group members
+pGraphics->AttachControl(
+  new IVGroupControl(
+    "Filter",      // Label
+    "filterGroup", // Group name
+    10.f, 10.f, 10.f, 10.f  // Padding
+  )
+);
+```
+
+---
+
+## Panel Control
+
+`IVPanelControl` provides a styled background panel.
+
+### Constructor
+
+```cpp
+IVPanelControl(
+  const IRECT& bounds,
+  const char* label = "",
+  const IVStyle& style = DEFAULT_STYLE
+    .WithColor(kFG, COLOR_TRANSLUCENT)
+    .WithEmboss(true)
+);
+```
+
+### Example
+
+```cpp
+// Background panel with emboss effect
+pGraphics->AttachControl(
+  new IVPanelControl(
+    IRECT(10, 10, 410, 310),
+    "",
+    DEFAULT_STYLE
+      .WithColor(kBG, COLOR_DARK_GRAY)
+      .WithEmboss(true)
+  )
+);
+```
+
+---
+
+## Color Swatch Control
+
+`IVColorSwatchControl` displays a palette of colors for selection.
+
+### Constructor
+
+```cpp
+enum class ECellLayout { kGrid, kHorizontal, kVertical };
+
+using ColorChosenFunc = std::function<void(int, IColor)>;
+
+IVColorSwatchControl(
+  const IRECT& bounds,
+  const char* label = "",
+  ColorChosenFunc func = nullptr,
+  const IVStyle& spec = DEFAULT_STYLE,
+  ECellLayout layout = ECellLayout::kGrid,
+  const std::initializer_list<EVColor>& colorIDs = {
+    kBG, kFG, kPR, kFR, kHL, kSH, kX1, kX2, kX3
+  },
+  const std::initializer_list<const char*>& labelsForIDs = {
+    "Background", "Foreground", "Pressed", "Frame",
+    "Highlight", "Shadow", "Extra1", "Extra2", "Extra3"
+  }
+);
+```
+
+### Example
+
+```cpp
+pGraphics->AttachControl(
+  new IVColorSwatchControl(
+    IRECT(10, 10, 110, 110),
+    "Theme Colors",
+    [](int cellIdx, IColor color) {
+      DBGMSG("Color %d selected: R=%d G=%d B=%d\n",
+             cellIdx, color.R, color.G, color.B);
+    },
+    DEFAULT_STYLE,
+    IVColorSwatchControl::ECellLayout::kGrid,
+    {kBG, kFG, kPR, kFR}  // 4 colors
+  )
+);
+```
+
+---
+
+## Color Picker Control
+
+`IColorPickerControl` provides a full color picker dialog.
+
+<Info>
+See `IGraphics/Controls/IColorPickerControl.h` for full API.
+</Info>
+
+---
+
+## Corner Resizer Control
+
+`ICornerResizerControl` allows window resizing from bottom-right corner.
+
+### Constructor
+
+```cpp
+ICornerResizerControl(
+  const IRECT& graphicsBounds,
+  float size,
+  const IColor& color = COLOR_TRANSLUCENT,
+  const IColor& mouseOverColour = COLOR_BLACK,
+  const IColor& dragColor = COLOR_BLACK
+);
+```
+
+### Example
+
+```cpp
+// Usually added automatically:
+pGraphics->AttachCornerResizer(15.f);
+
+// Or manually:
+pGraphics->AttachControl(
+  new ICornerResizerControl(
+    pGraphics->GetBounds(),
+    15.f,  // Size
+    COLOR_TRANSLUCENT,
+    COLOR_GRAY,
+    COLOR_DARK_GRAY
+  )
+);
+```
+
+<Info>
+Double-click the corner resizer to reset to default size.
+</Info>
+
+---
+
+## Multi-Slider Control
+
+`IVMultiSliderControl` displays multiple vertical sliders for arrays of values.
+
+<Info>
+See `IGraphics/Controls/IVMultiSliderControl.h` for full API.
+</Info>
+
+---
+
+## FPS Display Control
+
+`IFPSDisplayControl` shows frame rate and performance metrics.
+
+<Info>
+Useful for debugging UI performance. See `IGraphics/Controls/IFPSDisplayControl.h`.
+</Info>
+
+---
+
+## Source Reference
+
+**Files:**
+- `IGraphics/Controls/IVKeyboardControl.h` - Keyboard (lines 1-902)
+- `IGraphics/Controls/ILEDControl.h` - LED (lines 1-77)
+- `IGraphics/Controls/IControls.h` - Plot, Group, Panel, Color Swatch (lines 400-566)
+- `IGraphics/Controls/ICornerResizerControl.h` - Corner resizer (lines 1-88)
+- `IGraphics/Controls/IVMultiSliderControl.h` - Multi-slider
+- `IGraphics/Controls/IFPSDisplayControl.h` - FPS display

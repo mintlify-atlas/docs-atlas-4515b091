@@ -1,0 +1,362 @@
+---
+title: Cocoa UI
+description: Build native macOS and iOS plugin interfaces using Cocoa/UIKit with Interface Builder
+---
+
+The IPlugCocoaUI example demonstrates how to build native plugin interfaces using Cocoa (macOS) and UIKit (iOS) with Interface Builder storyboards. This approach is ideal when you need native controls, existing UIKit components, or want to design your UI visually.
+
+## What This Example Demonstrates
+
+- Interface Builder storyboard integration
+- Cocoa/UIKit native controls
+- Bidirectional parameter communication
+- Real-time audio metering
+- Custom message passing
+- Preset management from UI
+
+## Architecture
+
+<CardGroup cols={2}>
+  <Card title="C++ Plugin" icon="gear">
+    Audio processing and parameter definitions (IPlugCocoaUI.mm)
+  </Card>
+  <Card title="View Controller" icon="window">
+    UI logic and event handling (Swift or Objective-C)
+  </Card>
+  <Card title="Storyboard" icon="palette">
+    Visual UI layout created in Interface Builder
+  </Card>
+  <Card title="CocoaEditorDelegate" icon="bridge">
+    Base class providing C++/Cocoa communication
+  </Card>
+</CardGroup>
+
+## C++ Plugin Implementation
+
+### Loading the Storyboard
+
+```cpp
+IPlugCocoaUI::IPlugCocoaUI(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kParamGain)->InitGain("Volume", -70.0);
+
+  MakePreset("Gain = -70dB", -70.);
+  MakePreset("Gain = -10dB", -10.);
+  MakePreset("Gain = 0dB", 0.);
+  
+#ifdef OS_MAC
+  NSStoryboard* pStoryBoard = [NSStoryboard 
+    storyboardWithName:@"IPlugCocoaUI-macOS-MainInterface"
+    bundle: [NSBundle bundleWithIdentifier:
+      [NSString stringWithUTF8String: GetBundleID()]]];
+  
+  auto* vc = (IPlugCocoaUIViewController*) 
+    [pStoryBoard instantiateControllerWithIdentifier:@"main"];
+  
+  [vc retain];
+  [vc setEditorDelegate: this];
+  mViewController = vc;
+  vc.view.frame = MAKERECT(0.f, 0.f, 
+    (float) PLUG_WIDTH, (float) PLUG_HEIGHT);
+#endif
+}
+```
+
+<Note>
+  The storyboard is loaded from the plugin bundle, allowing you to design the UI visually in Xcode's Interface Builder.
+</Note>
+
+### Opening the Window
+
+```cpp
+void* IPlugCocoaUI::OpenWindow(void* pParent)
+{
+  PLATFORM_VIEW* platformParent = (PLATFORM_VIEW*) pParent;
+
+#ifdef FRAMEWORK_BUILD
+  auto* vc = [[(PLATFORM_VC*) [platformParent nextResponder] 
+    childViewControllers] objectAtIndex:0];
+  [vc setEditorDelegate: this];
+  mViewController = vc;
+#else
+  IPlugCocoaUIViewController* vc = 
+    (IPlugCocoaUIViewController*) mViewController;
+  [platformParent addSubview:vc.view];
+#endif
+  
+  OnUIOpen();
+  return vc.view;
+}
+```
+
+### Handling Window Resize
+
+```cpp
+void IPlugCocoaUI::OnParentWindowResize(int width, int height)
+{
+  auto* vc = (IPlugCocoaUIViewController*) mViewController;
+  vc.view.frame = MAKERECT(0.f, 0.f, (float) width, (float) height);
+}
+```
+
+## Audio Processing with Metering
+
+```cpp
+void IPlugCocoaUI::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kParamGain)->DBToAmp();
+  const int nChans = NOutChansConnected();
+    
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+  
+  // Send peak data to UI for metering
+  mSender.ProcessBlock(inputs, nFrames, kCtrlTagVUMeter);
+}
+
+void IPlugCocoaUI::OnIdle()
+{
+  mSender.TransmitData(*this);
+}
+```
+
+<Info>
+  `IPeakSender` analyzes the audio signal and sends peak values to the UI thread for VU meter display.
+</Info>
+
+## Message Handling
+
+### Receiving Messages from UI
+
+```cpp
+bool IPlugCocoaUI::OnMessage(int msgTag, int ctrlTag, int dataSize, const void* pData)
+{
+  if(msgTag == kMsgTagHello)
+  {
+    DBGMSG("MsgTagHello received on C++ side\n");
+    return true;
+  }
+  else if(msgTag == kMsgTagRestorePreset)
+  {
+    RestorePreset(ctrlTag);
+  }
+  
+  return CocoaEditorDelegate::OnMessage(msgTag, ctrlTag, dataSize, pData);
+}
+```
+
+### Observing Parameter Changes
+
+```cpp
+void IPlugCocoaUI::OnParamChange(int paramIdx)
+{
+  DBGMSG("Param change %i: %f\n", paramIdx, GetParam(paramIdx)->Value());
+}
+```
+
+## View Controller (Swift)
+
+While the example includes a Swift view controller, here's the typical pattern:
+
+```swift
+class IPlugCocoaUIViewController: IPlugCocoaViewController {
+  @IBOutlet weak var gainSlider: NSSlider!
+  @IBOutlet weak var vuMeter: VUMeterView!
+  
+  override func viewDidLoad() {
+    super.viewDidLoad()
+    
+    // Setup UI elements
+    gainSlider.minValue = getParameterMin(kParamGain)
+    gainSlider.maxValue = getParameterMax(kParamGain)
+    gainSlider.doubleValue = getParameterDefault(kParamGain)
+  }
+  
+  // Called when user moves slider
+  @IBAction func gainSliderChanged(_ sender: NSSlider) {
+    let paramIdx = kParamGain
+    
+    if sender.isPressed {
+      beginInformHostOfParamChangeFromUI(paramIdx)
+    }
+    
+    sendParameterValueFromUI(paramIdx, sender.doubleValue)
+    
+    if !sender.isPressed {
+      endInformHostOfParamChangeFromUI(paramIdx)
+    }
+  }
+  
+  // Called when parameter changes from host/automation
+  override func onParamChangeUI(_ paramIdx: Int, _ value: Double) {
+    if paramIdx == kParamGain {
+      gainSlider.doubleValue = value
+    }
+  }
+  
+  // Called when control data arrives from C++
+  override func sendControlMsgFromDelegate(
+    ctrlTag: Int, 
+    msgTag: Int, 
+    msg: Data!
+  ) {
+    if ctrlTag == kCtrlTagVUMeter {
+      // Extract peak values and update meter
+      let peaks = extractPeakData(from: msg)
+      vuMeter.setLevel(peaks[0])
+    }
+  }
+  
+  // Send preset change message to C++
+  @IBAction func presetButtonClicked(_ sender: NSButton) {
+    let presetIdx = sender.tag
+    sendArbitraryMsgFromUI(
+      msgTag: kMsgTagRestorePreset,
+      ctrlTag: presetIdx,
+      msg: nil
+    )
+  }
+}
+```
+
+## Communication Methods
+
+<Tabs>
+  <Tab title="UI → C++">
+    ### Parameter Changes
+    ```swift
+    // Start gesture
+    beginInformHostOfParamChangeFromUI(paramIdx)
+    
+    // Update value
+    sendParameterValueFromUI(paramIdx, normalizedValue)
+    
+    // End gesture
+    endInformHostOfParamChangeFromUI(paramIdx)
+    ```
+    
+    ### Custom Messages
+    ```swift
+    sendArbitraryMsgFromUI(
+      msgTag: kMsgTagHello,
+      ctrlTag: 0,
+      msg: dataObject  // Optional NSData
+    )
+    ```
+  </Tab>
+  
+  <Tab title="C++ → UI">
+    ### Parameter Updates
+    ```swift
+    override func onParamChangeUI(_ paramIdx: Int, _ value: Double) {
+      // Update UI controls with new parameter value
+    }
+    ```
+    
+    ### Control Messages
+    ```swift
+    override func sendControlMsgFromDelegate(
+      ctrlTag: Int,
+      msgTag: Int, 
+      msg: Data!
+    ) {
+      // Handle custom data from C++
+    }
+    ```
+    
+    ### MIDI Messages
+    ```swift
+    override func onMidiMsgUI(
+      _ status: UInt8,
+      _ data1: UInt8,
+      _ data2: UInt8,
+      _ offset: Int
+    ) {
+      // Handle incoming MIDI
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Creating the Storyboard
+
+<Steps>
+  <Step title="Create storyboard in Xcode">
+    Add a new Storyboard file to your project (e.g., `IPlugCocoaUI-macOS-MainInterface.storyboard`).
+  </Step>
+  
+  <Step title="Design the UI">
+    Drag controls (sliders, buttons, labels) onto the view controller in Interface Builder.
+  </Step>
+  
+  <Step title="Set the storyboard ID">
+    Select the view controller and set its Storyboard ID (e.g., "main") in the Identity Inspector.
+  </Step>
+  
+  <Step title="Create IBOutlets and IBActions">
+    Connect UI elements to your view controller code using outlets and actions.
+  </Step>
+  
+  <Step title="Set the custom class">
+    Set the view controller's custom class to your subclass of `IPlugCocoaViewController`.
+  </Step>
+</Steps>
+
+## AUv3 View Configuration
+
+```cpp
+bool IPlugCocoaUI::OnHostRequestingSupportedViewConfiguration(
+  int width, 
+  int height
+) {
+#ifdef OS_MAC
+  // Logic/GB offer one option with 0w, 0h
+  return ((width + height) == 0);
+#else
+  return true;
+#endif
+}
+```
+
+## Advantages of Cocoa UI
+
+<CardGroup cols={2}>
+  <Card title="Visual Design" icon="wand-magic-sparkles">
+    Design your UI visually in Interface Builder with drag-and-drop
+  </Card>
+  <Card title="Native Controls" icon="toggle-on">
+    Use standard macOS/iOS controls with native look and behavior
+  </Card>
+  <Card title="Auto Layout" icon="grid">
+    Built-in support for responsive layouts and constraints
+  </Card>
+  <Card title="Accessibility" icon="universal-access">
+    Automatic accessibility support with VoiceOver
+  </Card>
+</CardGroup>
+
+<Warning>
+  Like SwiftUI, Cocoa UI is only available on Apple platforms. For cross-platform plugins, consider IGraphics or web-based UIs.
+</Warning>
+
+## CocoaEditorDelegate Methods
+
+Inherited from `IPlugCocoaViewController`:
+
+- `parameterCount()` - Get total number of parameters
+- `getParameterName(idx)` - Get parameter name
+- `getParameterMin/Max/Default(idx)` - Get parameter range info
+- `getParameterValue(idx)` - Get current parameter value
+- `getParameterStep(idx)` - Get parameter step size
+- `getParameterLabel(idx)` - Get parameter units/label
+- `getBundleID()` - Get plugin bundle identifier
+
+## Related Examples
+
+- [SwiftUI](/examples/swiftui) - Modern declarative UI approach
+- [Web UI](/examples/web-ui) - Cross-platform web-based UI
+- [Responsive UI](/examples/responsive-ui) - IGraphics responsive layout

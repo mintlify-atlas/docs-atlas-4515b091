@@ -1,0 +1,408 @@
+---
+title: 'Architecture Overview'
+description: 'Understanding iPlug2 architecture: IPlug core vs IGraphics, plugin lifecycle, and threading model'
+icon: 'building'
+---
+
+## Core Components
+
+iPlug2 is split into two main architectural layers that work together to create audio plugins:
+
+<CardGroup cols={2}>
+  <Card title="IPlug" icon="microchip" href="#iplug-core">
+    Audio processing, parameters, and plugin API abstraction
+  </Card>
+  <Card title="IGraphics" icon="palette" href="#igraphics">
+    Cross-platform UI toolkit with multiple rendering backends
+  </Card>
+</CardGroup>
+
+## IPlug Core
+
+The IPlug layer provides the audio plugin abstraction, handling the differences between plugin formats (VST3, AU, AAX, CLAP, WAM) so your code works everywhere.
+
+### Class Hierarchy
+
+```
+IPlugProcessor          (audio processing, I/O, timing)
+    ↑
+IPluginBase            (parameters, presets, state)
+    ↑
+IPlugAPIBase           (editor delegate, host communication)
+    ↑
+YourPlugin             (your implementation)
+```
+
+<Tip>
+The architecture separates concerns: `IPlugProcessor` handles real-time audio, `IPluginBase` manages state, and `IPlugAPIBase` handles host integration.
+</Tip>
+
+### Key Responsibilities
+
+<Tabs>
+  <Tab title="IPlugProcessor">
+    **Real-time audio processing** ([IPlugProcessor.h](https://github.com/iPlug2/iPlug2/blob/master/IPlug/IPlugProcessor.h))
+
+    - Audio I/O management and channel routing
+    - MIDI processing (note on/off, CC, SysEx)
+    - Sample rate and block size handling
+    - Latency and tail size reporting
+    - Transport and timing information
+
+    ```cpp
+    void ProcessBlock(sample** inputs, sample** outputs, int nFrames);
+    void ProcessMidiMsg(const IMidiMsg& msg);
+    void ProcessSysEx(const ISysEx& msg);
+    void OnReset(); // Called when sample rate changes
+    void OnActivate(bool active); // Called when track is enabled/disabled
+    ```
+  </Tab>
+  <Tab title="IPluginBase">
+    **Plugin state and parameters** ([IPluginBase.h](https://github.com/iPlug2/iPlug2/blob/master/IPlug/IPlugPluginBase.h))
+
+    - Parameter management (fixed count at compile time)
+    - Preset system (factory and user presets)
+    - State serialization (for DAW project saving)
+    - Parameter groups and metadata
+
+    ```cpp
+    // Parameters are indexed by enum
+    GetParam(kGain)->InitDouble("Gain", 0., 0., 100.0, 0.01, "%");
+    
+    // Non-normalized access in ProcessBlock
+    const double gain = GetParam(kGain)->Value() / 100.;
+    ```
+  </Tab>
+  <Tab title="IPlugAPIBase">
+    **Host communication** ([IPlugAPIBase.h](https://github.com/iPlug2/iPlug2/blob/master/IPlug/IPlugAPIBase.h))
+
+    - Editor (UI) lifecycle management
+    - Host notifications (parameter changes, preset changes)
+    - Platform-specific adaptations
+    - API-specific behavior
+
+    Each plugin format (VST3, AU, AAX, etc.) extends this with format-specific implementation.
+  </Tab>
+</Tabs>
+
+## IGraphics
+
+IGraphics is an **optional** UI toolkit for building plugin interfaces. You can also use SwiftUI, WebView, or other UI frameworks.
+
+### Rendering Backends
+
+<CardGroup cols={2}>
+  <Card title="NanoVG" icon="bolt">
+    **Lightweight and fast**
+    
+    - OpenGL-based vector rendering
+    - No external dependencies needed
+    - Default choice for most plugins
+    - Good performance on older hardware
+  </Card>
+  <Card title="Skia" icon="paintbrush">
+    **High quality rendering**
+    
+    - Same engine as Chrome/Android
+    - Better text and effects quality
+    - Requires Skia dependency download
+    - Used by Google, Flutter
+  </Card>
+</CardGroup>
+
+### IGraphics Architecture
+
+```
+IGraphics                    (base graphics context)
+    ↑
+IGraphicsNanoVG/Skia        (drawing implementation)
+    ↑
+IGraphicsMac/Win/Linux      (platform-specific event handling)
+```
+
+<Info>
+IGraphics is only instantiated when the plugin UI is opened by the host. Audio processing continues independently even without a visible UI.
+</Info>
+
+### UI Construction Pattern
+
+IGraphics UIs are typically built in a lambda function:
+
+```cpp
+mMakeGraphicsFunc = [&]() {
+  return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS, 
+                      GetScaleForScreen(PLUG_WIDTH, PLUG_HEIGHT));
+};
+
+mLayoutFunc = [&](IGraphics* pGraphics) {
+  pGraphics->AttachPanelBackground(COLOR_GRAY);
+  pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
+  
+  // Controls automatically link to parameters by index
+  pGraphics->AttachControl(new IVKnobControl(bounds, kGain));
+};
+```
+
+## Plugin Lifecycle
+
+Understanding the plugin lifecycle is crucial for proper initialization and cleanup.
+
+<Steps>
+  <Step title="Construction">
+    Your plugin constructor is called when the host loads the plugin.
+    
+    ```cpp
+    IPlugEffect::IPlugEffect(const InstanceInfo& info)
+    : Plugin(info, MakeConfig(kNumParams, kNumPresets))
+    {
+      // Initialize parameters
+      GetParam(kGain)->InitDouble("Gain", 0., 0., 100., 0.01, "%");
+      
+      // Setup graphics (if IPLUG_EDITOR is defined)
+      mMakeGraphicsFunc = [&]() { /* ... */ };
+    }
+    ```
+    
+    <Warning>
+    Don't allocate large buffers in the constructor. Wait for `OnReset()` when you know the sample rate.
+    </Warning>
+  </Step>
+  
+  <Step title="OnReset()">
+    Called when:
+    - Plugin is first activated
+    - Sample rate changes
+    - I/O configuration changes
+    
+    ```cpp
+    void OnReset() override {
+      // Allocate DSP buffers based on GetSampleRate()
+      mDelay.SetDelayTime(GetSampleRate() * 0.5); // 500ms
+    }
+    ```
+  </Step>
+  
+  <Step title="OnActivate()">
+    Called when the plugin is enabled/disabled on a track.
+    
+    ```cpp
+    void OnActivate(bool active) override {
+      if (active) {
+        // Clear buffers, reset state
+        mPhase = 0.0;
+      }
+    }
+    ```
+    
+    <Note>
+    Not all hosts support this reliably. Use `OnReset()` for critical initialization.
+    </Note>
+  </Step>
+  
+  <Step title="ProcessBlock()">
+    Called repeatedly on the audio thread for real-time processing.
+    
+    ```cpp
+    void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+      const double gain = GetParam(kGain)->Value() / 100.;
+      const int nChans = NOutChansConnected();
+      
+      for (int s = 0; s < nFrames; s++) {
+        for (int c = 0; c < nChans; c++) {
+          outputs[c][s] = inputs[c][s] * gain;
+        }
+      }
+    }
+    ```
+  </Step>
+  
+  <Step title="Destruction">
+    Your plugin destructor cleans up resources when the host unloads the plugin.
+    
+    ```cpp
+    ~IPlugEffect() {
+      // Cleanup happens automatically for smart pointers
+      // Manual cleanup if needed
+    }
+    ```
+  </Step>
+</Steps>
+
+## Threading Model
+
+iPlug2 uses a clear threading model to prevent audio dropouts and race conditions.
+
+### Thread Types
+
+<Tabs>
+  <Tab title="Audio Thread">
+    **High priority real-time thread**
+    
+    Methods called on audio thread:
+    - `ProcessBlock()`
+    - `ProcessMidiMsg()`
+    - `ProcessSysEx()`
+    
+    **Real-time safety rules:**
+    
+    <Warning>
+    NEVER do these on the audio thread:
+    - Memory allocation/deallocation
+    - File I/O or network operations
+    - Locking mutexes (use lock-free queues)
+    - System calls that can block
+    - `TRACE` or logging in release builds
+    </Warning>
+    
+    ```cpp
+    void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+      // ✅ Good: direct parameter access (atomic)
+      double gain = GetParam(kGain)->Value();
+      
+      // ❌ Bad: allocation
+      // std::vector<double> buffer(nFrames); // NO!
+      
+      // ❌ Bad: file I/O
+      // fwrite(outputs[0], sizeof(sample), nFrames, file); // NO!
+      
+      // ❌ Bad: mutex lock
+      // mMutex.lock(); // NO!
+    }
+    ```
+  </Tab>
+  
+  <Tab title="UI Thread">
+    **Lower priority GUI thread**
+    
+    IGraphics controls and UI code run on the UI thread. Communication with the audio thread happens via:
+    
+    - `ISender` - Send data from audio thread to UI (visualization)
+    - Parameter changes - Send from UI to audio thread (automatic)
+    
+    ```cpp
+    // In ProcessBlock (audio thread)
+    mMeterSender.PushData({kCtrlTagMeter}, {mCurrentLevel});
+    
+    // In UI control (UI thread)
+    class MeterControl : public IControl {
+      void OnMsgFromDelegate(int msgTag, int dataSize, const void* pData) {
+        // Update meter display safely on UI thread
+        mLevel = *(double*)pData;
+      }
+    };
+    ```
+  </Tab>
+  
+  <Tab title="Parameter Access">
+    **Thread-safe parameter access**
+    
+    IParam values use `std::atomic<double>` for thread-safe access:
+    
+    ```cpp
+    // Safe from any thread (atomic load)
+    double value = GetParam(kGain)->Value();
+    
+    // Safe from any thread (atomic store)
+    GetParam(kGain)->Set(newValue);
+    ```
+    
+    From [IPlugParameter.h:516](https://github.com/iPlug2/iPlug2/blob/master/IPlug/IPlugParameter.h#L516):
+    ```cpp
+    std::atomic<double> mValue{0.0};
+    ```
+    
+    <Note>
+    Some plugins define `PARAMS_MUTEX` for additional thread safety, but atomic access is usually sufficient.
+    </Note>
+  </Tab>
+</Tabs>
+
+### Communication Patterns
+
+```cpp
+// UI → Audio Thread (via parameters)
+GetParam(kGain)->Set(newValue);  // Atomic, thread-safe
+
+// Audio Thread → UI (via ISender)
+mSender.PushData({kTagScope}, {buffer, nFrames});  // Lock-free queue
+
+// Host → Plugin (parameter automation)
+// Handled automatically by API layer
+
+// Plugin → Host (MIDI output)
+SendMidiMsg(msg);  // Called from ProcessBlock or UI
+```
+
+## API-Specific Implementations
+
+Each plugin format has its own API class that inherits from the base classes:
+
+<CodeGroup>
+```cpp VST3
+class IPlugVST3 : public IPlugAPIBase,
+                  public IPlugVST3ProcessorBase,
+                  public IPlugVST3ControllerBase,
+                  public Steinberg::Vst::SingleComponentEffect
+```
+
+```cpp AUv2
+class IPlugAU : public IPlugAPIBase,
+                public IPlugProcessor
+```
+
+```cpp AAX
+class IPlugAAX : public IPlugAPIBase,
+                 public IPlugProcessor,
+                 public AAX_CIPlugParameters
+```
+
+```cpp CLAP
+class IPlugCLAP : public IPlugAPIBase,
+                  public IPlugProcessor,
+                  public ClapPluginHelper
+```
+
+```cpp WAM
+class IPlugWAM : public IPlugAPIBase,
+                 public IPlugProcessor,
+                 public WAM::Processor
+```
+</CodeGroup>
+
+<Tip>
+You never directly interact with these API classes in your plugin code. The abstraction handles format-specific details automatically.
+</Tip>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Separation of Concerns" icon="layer-group">
+    Keep audio processing in `ProcessBlock()`, UI in layout functions, and state management in parameters.
+  </Card>
+  <Card title="Real-time Safety" icon="clock">
+    Never allocate, lock, or do I/O in `ProcessBlock()`. Pre-allocate buffers in `OnReset()`.
+  </Card>
+  <Card title="Parameter Design" icon="sliders">
+    Use non-normalized values (e.g., 0-100 for gain) - they're easier to work with in DSP code.
+  </Card>
+  <Card title="Smart Initialization" icon="rocket">
+    Initialize UI lazily (in lambda), allocate DSP buffers in `OnReset()` when sample rate is known.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Plugin Formats" icon="plug" href="/concepts/plugin-formats">
+    Learn about VST3, AU, AAX, CLAP, and WAM specifics
+  </Card>
+  <Card title="Parameters" icon="sliders" href="/concepts/parameters">
+    Master parameter types, automation, and groups
+  </Card>
+  <Card title="Audio Processing" icon="waveform" href="/concepts/audio-processing">
+    Deep dive into ProcessBlock and real-time audio
+  </Card>
+  <Card title="Project Structure" icon="folder-tree" href="/concepts/project-structure">
+    Understand config.h, Plugin.h, and Plugin.cpp
+  </Card>
+</CardGroup>

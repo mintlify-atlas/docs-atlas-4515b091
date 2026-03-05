@@ -1,0 +1,546 @@
+---
+title: 'Building for iOS'
+description: 'Build AUv3 audio plugins for iOS and iPadOS using Xcode'
+---
+
+iPlug2 supports building Audio Unit v3 (AUv3) plugins for iOS and iPadOS, embedded in a standalone app.
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install Xcode 13+">
+    Download from the [Mac App Store](https://apps.apple.com/app/xcode/id497799835)
+    
+    **For visionOS**: Xcode 15+ with visionOS SDK
+  </Step>
+  
+  <Step title="Install iOS SDK">
+    iOS SDK is included with Xcode. Verify installation:
+    
+    ```bash
+    xcodebuild -showsdks | grep ios
+    ```
+  </Step>
+  
+  <Step title="Set up Apple Developer account">
+    Required for device testing and distribution:
+    
+    1. Enroll at [developer.apple.com](https://developer.apple.com/programs/)
+    2. Add your Apple ID in **Xcode > Settings > Accounts**
+  </Step>
+</Steps>
+
+## Project Structure
+
+```
+MyPlugin/
+├── config/
+│   └── MyPlugin-ios.xcconfig       # iOS build configuration
+└── projects/
+    ├── MyPlugin-iOS.xcodeproj/     # Xcode project
+    │   └── xcshareddata/
+    │       └── xcschemes/
+    │           ├── iOS-APP.xcscheme        # Standalone app
+    │           └── iOS-AUv3.xcscheme       # AUv3 plugin
+    └── MyPlugin-iOS.entitlements   # App capabilities
+```
+
+## AUv3 Architecture
+
+On iOS, AUv3 plugins are **embedded inside a standalone app**:
+
+```
+MyPlugin.app/
+└── PlugIns/
+    └── MyPlugin.appex          # AUv3 app extension
+```
+
+<Info>
+**You must run the standalone app at least once** to register the AUv3 with iOS. After that, the plugin appears in GarageBand, Cubasis, and other AUv3 hosts.
+</Info>
+
+## Building with Xcode
+
+### Device vs Simulator
+
+<CardGroup cols={2}>
+  <Card title="iOS Device" icon="mobile">
+    **Destination**: Any iOS Device
+    
+    Requires code signing and provisioning profile
+  </Card>
+  <Card title="iOS Simulator" icon="mobile-screen">
+    **Destination**: iPhone/iPad Simulator
+    
+    No code signing required, faster builds
+  </Card>
+</CardGroup>
+
+### Building in Xcode
+
+<Steps>
+  <Step title="Open project">
+    ```bash
+    open projects/MyPlugin-iOS.xcodeproj
+    ```
+  </Step>
+  
+  <Step title="Select scheme and destination">
+    - **Scheme**: iOS-APP (builds both app and AUv3)
+    - **Destination**: Choose device or simulator
+  </Step>
+  
+  <Step title="Configure signing">
+    **Project Settings > Signing & Capabilities**
+    
+    - **Team**: Select your Apple Developer team
+    - **Bundle Identifier**: Set unique ID (e.g., `com.yourcompany.myplugin`)
+    - **Automatically manage signing**: Enable for automatic provisioning
+  </Step>
+  
+  <Step title="Build and run">
+    Press `⌘R` or **Product > Run**
+    
+    Xcode will:
+    1. Build the app and AUv3 extension
+    2. Install on device/simulator
+    3. Launch the app
+  </Step>
+</Steps>
+
+### Building from Command Line
+
+<CodeGroup>
+```bash iOS Simulator
+# Build for simulator
+xcodebuild -project projects/MyPlugin-iOS.xcodeproj \
+  -scheme iOS-APP \
+  -configuration Release \
+  -sdk iphonesimulator \
+  -destination 'platform=iOS Simulator,name=iPhone 15'
+```
+
+```bash iOS Device
+# Build for device
+xcodebuild -project projects/MyPlugin-iOS.xcodeproj \
+  -scheme iOS-APP \
+  -configuration Release \
+  -sdk iphoneos \
+  -destination 'generic/platform=iOS' \
+  CODE_SIGN_IDENTITY="iPhone Developer" \
+  DEVELOPMENT_TEAM="YOUR_TEAM_ID"
+```
+
+```bash visionOS
+# Build for visionOS
+xcodebuild -project projects/MyPlugin-iOS.xcodeproj \
+  -scheme iOS-APP \
+  -configuration Release \
+  -sdk xros \
+  -destination 'generic/platform=visionOS'
+```
+</CodeGroup>
+
+## Platform Variants
+
+### iOS
+
+Standard iPhone and iPad support.
+
+- **Minimum deployment**: iOS 14 (configurable)
+- **SDK**: `iphoneos` (device), `iphonesimulator` (simulator)
+- **Architecture**: `arm64` (device), `arm64 x86_64` (simulator)
+
+### visionOS
+
+Apple Vision Pro support.
+
+- **Minimum deployment**: visionOS 1.0
+- **SDK**: `xros` (device), `xrsimulator` (simulator)
+- **Requires**: Xcode 15+
+
+<Note>
+visionOS builds use the same project as iOS. Xcode automatically adapts the UI for spatial computing.
+</Note>
+
+## Build Settings
+
+### Deployment Target (from common-ios.xcconfig)
+
+```bash
+// Minimum iOS version
+IPHONEOS_DEPLOYMENT_TARGET = 15  // iOS 15+
+
+// C++ standard
+CLANG_CXX_LANGUAGE_STANDARD = c++17
+CLANG_CXX_LIBRARY = libc++
+```
+
+### Architecture Settings
+
+```bash
+// iOS Device (arm64 only)
+ARCHS[sdk=iphoneos*] = arm64
+
+// iOS Simulator (Universal for Intel and Apple Silicon Macs)
+ARCHS[sdk=iphonesimulator*] = arm64 x86_64
+
+// visionOS
+ARCHS[sdk=xros*] = arm64
+ARCHS[sdk=xrsimulator*] = arm64
+```
+
+### Preprocessor Defines
+
+```cpp
+NOMINMAX                 // Disable min/max macros
+AUv3_API                 // Audio Unit v3
+IPLUG_EDITOR=1           // Has UI
+IPLUG_DSP=1              // Has DSP
+```
+
+## Code Signing
+
+### Automatic Signing (Recommended)
+
+<Steps>
+  <Step title="Enable automatic signing">
+    **Project Settings > Signing & Capabilities**
+    
+    - Enable **Automatically manage signing**
+    - Select your **Team**
+  </Step>
+  
+  <Step title="Set bundle identifier">
+    Use reverse domain notation:
+    
+    ```
+    com.yourcompany.myplugin
+    ```
+  </Step>
+  
+  <Step title="Xcode handles provisioning">
+    Xcode automatically:
+    - Creates provisioning profiles
+    - Manages certificates
+    - Signs app and extension
+  </Step>
+</Steps>
+
+### Manual Signing
+
+For advanced control:
+
+<Steps>
+  <Step title="Create App ID">
+    1. Go to [developer.apple.com](https://developer.apple.com/account/resources/identifiers/list)
+    2. **Identifiers > App IDs > +**
+    3. Register `com.yourcompany.myplugin`
+  </Step>
+  
+  <Step title="Create provisioning profile">
+    1. **Profiles > +**
+    2. Choose **iOS App Development** or **App Store**
+    3. Select your App ID and certificates
+    4. Download and install profile
+  </Step>
+  
+  <Step title="Configure Xcode">
+    **Project Settings > Signing & Capabilities**
+    
+    - Disable **Automatically manage signing**
+    - Select your **Provisioning Profile**
+  </Step>
+</Steps>
+
+## App Capabilities (Entitlements)
+
+Edit `MyPlugin-iOS.entitlements`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Required for AUv3 -->
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.com.yourcompany.myplugin</string>
+    </array>
+    
+    <!-- Inter-App Audio (optional) -->
+    <key>inter-app-audio</key>
+    <true/>
+    
+    <!-- Background Audio -->
+    <key>audio</key>
+    <true/>
+</dict>
+</plist>
+```
+
+<Info>
+**App Groups** allow the app and AUv3 extension to share data (presets, user settings, etc.).
+</Info>
+
+## Testing AUv3 Plugins
+
+### Testing in GarageBand
+
+<Steps>
+  <Step title="Run standalone app">
+    Build and run your app on device/simulator
+    
+    This registers the AUv3 with iOS
+  </Step>
+  
+  <Step title="Open GarageBand">
+    Create a new song
+  </Step>
+  
+  <Step title="Add plugin">
+    1. Create an instrument/audio track
+    2. Tap the track controls
+    3. **Plug-ins & EQ > Audio Unit Extensions**
+    4. Find your plugin in the list
+  </Step>
+  
+  <Step title="Test functionality">
+    - Verify UI appears correctly
+    - Test parameter changes
+    - Check audio processing
+    - Test preset saving/loading
+  </Step>
+</Steps>
+
+### Testing in AUv3 Host App
+
+Use a dedicated test host like:
+- **AUM** (Audio Mixer) - [App Store](https://apps.apple.com/app/aum-audio-mixer/id1055636341)
+- **ApeMatrix** - [App Store](https://apps.apple.com/app/apematrix/id1107941220)
+- **AudioBus** - [App Store](https://apps.apple.com/app/audiobus-3/id1025676002)
+
+## Debugging
+
+### Debugging the Standalone App
+
+<Steps>
+  <Step title="Set breakpoints">
+    Add breakpoints in your plugin code
+  </Step>
+  
+  <Step title="Run with debugger">
+    Press `⌘R` in Xcode
+    
+    Debugger attaches to the app process
+  </Step>
+  
+  <Step title="Trigger breakpoints">
+    Interact with your plugin UI or process audio
+  </Step>
+</Steps>
+
+### Debugging the AUv3 Extension
+
+AUv3 runs in a **separate process** from the host app.
+
+<Steps>
+  <Step title="Launch host app">
+    Start GarageBand or another AUv3 host
+    
+    **Do not** launch from Xcode
+  </Step>
+  
+  <Step title="Attach debugger to extension">
+    In Xcode:
+    1. **Debug > Attach to Process by PID or Name**
+    2. Enter: `MyPlugin` (your extension name)
+    3. Click **Attach**
+  </Step>
+  
+  <Step title="Load plugin in host">
+    Load your plugin in the host app
+    
+    Xcode debugger will now catch breakpoints
+  </Step>
+</Steps>
+
+<Tip>
+Set breakpoints **before** attaching to ensure they're registered.
+</Tip>
+
+### Console Logging
+
+Use `NSLog` for debugging output visible in Xcode console:
+
+```cpp
+#import <Foundation/Foundation.h>
+
+void MyPlugin::ProcessBlock(iplug::sample** inputs, iplug::sample** outputs, int nFrames)
+{
+  NSLog(@"ProcessBlock called with %d frames", nFrames);
+  // ...
+}
+```
+
+## Build Output
+
+Built apps are placed in Xcode's derived data folder:
+
+```
+~/Library/Developer/Xcode/DerivedData/MyPlugin-iOS-xxxxx/Build/Products/Release-iphoneos/
+└── MyPlugin.app/
+    ├── MyPlugin                    # App executable
+    └── PlugIns/
+        └── MyPlugin.appex/         # AUv3 app extension
+            └── MyPlugin            # Extension executable
+```
+
+## Distribution
+
+### TestFlight (Beta Testing)
+
+<Steps>
+  <Step title="Archive the app">
+    **Product > Archive**
+    
+    Xcode creates a distribution archive
+  </Step>
+  
+  <Step title="Upload to App Store Connect">
+    1. **Window > Organizer**
+    2. Select your archive
+    3. **Distribute App > App Store Connect**
+    4. Follow the wizard to upload
+  </Step>
+  
+  <Step title="Configure in App Store Connect">
+    1. Go to [appstoreconnect.apple.com](https://appstoreconnect.apple.com)
+    2. **My Apps > Your App > TestFlight**
+    3. Add internal/external testers
+    4. Distribute build
+  </Step>
+</Steps>
+
+### App Store Release
+
+<Steps>
+  <Step title="Prepare app metadata">
+    In App Store Connect:
+    - App name and description
+    - Screenshots (required for each device size)
+    - App icon (1024x1024)
+    - Privacy policy URL
+  </Step>
+  
+  <Step title="Submit for review">
+    1. Select your uploaded build
+    2. Complete all required fields
+    3. **Submit for Review**
+  </Step>
+  
+  <Step title="Wait for approval">
+    Apple reviews apps within 24-48 hours
+    
+    You'll be notified of approval or rejection
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="AUv3 not appearing in GarageBand">
+    **Cause**: Extension not registered or signing issue
+    
+    **Solution**:
+    - Run standalone app at least once
+    - Ensure both app and extension are code-signed
+    - Check app is installed on same device you're testing
+    - Restart GarageBand
+    - Check Console.app for errors
+  </Accordion>
+  
+  <Accordion title="Code signing error: No profiles found">
+    **Cause**: Provisioning profile missing or expired
+    
+    **Solution**:
+    - Enable **Automatically manage signing**
+    - Or create/download provisioning profile manually
+    - Ensure Bundle ID matches App ID
+    - Check team membership is active
+  </Accordion>
+  
+  <Accordion title="App crashes on launch">
+    **Cause**: Missing frameworks or entitlements
+    
+    **Solution**:
+    - Check Console.app for crash logs
+    - Verify all frameworks are embedded
+    - Ensure entitlements are correct (App Groups, etc.)
+    - Test in simulator first for easier debugging
+  </Accordion>
+  
+  <Accordion title="Audio glitches or dropouts">
+    **Cause**: ProcessBlock too heavy for real-time audio
+    
+    **Solution**:
+    - Profile with Instruments (Time Profiler)
+    - Reduce DSP complexity
+    - Avoid allocations in ProcessBlock
+    - Check buffer size in host settings
+    - Test on actual device (not simulator)
+  </Accordion>
+  
+  <Accordion title="UI not appearing in AUv3 host">
+    **Cause**: IGraphics initialization or size issue
+    
+    **Solution**:
+    - Verify UI initializes correctly in standalone app
+    - Check constraints are set properly
+    - Ensure `IGraphics` is created in plugin constructor
+    - Test with different AUv3 hosts (AUM, GarageBand, etc.)
+  </Accordion>
+</AccordionGroup>
+
+## CMake Build (Alternative)
+
+iOS projects can also be built with CMake:
+
+```bash
+# iOS Device
+cmake -G Xcode \
+  -DCMAKE_SYSTEM_NAME=iOS \
+  -DIPLUG2_IOS_PLATFORM=OS \
+  ..
+
+# iOS Simulator
+cmake -G Xcode \
+  -DCMAKE_SYSTEM_NAME=iOS \
+  -DIPLUG2_IOS_PLATFORM=SIMULATOR \
+  ..
+
+# visionOS Device
+cmake -G Xcode \
+  -DCMAKE_SYSTEM_NAME=iOS \
+  -DIPLUG2_IOS_PLATFORM=VISIONOS \
+  ..
+```
+
+See [CMake Guide](/building/cmake#ios-options) for details.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="macOS Build" icon="apple" href="/building/macos">
+    Build desktop plugins for macOS
+  </Card>
+  <Card title="Code Signing" icon="file-signature" href="/deploying/code-signing">
+    Advanced signing and provisioning
+  </Card>
+  <Card title="App Store" icon="store" href="/deploying/app-store">
+    Publishing to the App Store
+  </Card>
+  <Card title="IGraphics" icon="paintbrush" href="/ui/igraphics">
+    Building custom UIs
+  </Card>
+</CardGroup>

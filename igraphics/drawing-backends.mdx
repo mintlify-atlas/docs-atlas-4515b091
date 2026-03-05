@@ -1,0 +1,467 @@
+---
+title: 'Drawing Backends'
+description: 'Understanding NanoVG and Skia rendering engines'
+---
+
+## Backend Overview
+
+iPlug2 IGraphics supports two drawing backends, selected at compile time:
+
+<CardGroup cols={2}>
+  <Card title="NanoVG" icon="bolt">
+    **Lightweight OpenGL/Metal vector graphics**
+    
+    - Tiny footprint (~200KB)
+    - Fast rendering
+    - Minimal dependencies
+    - **Recommended for most plugins**
+  </Card>
+  <Card title="Skia" icon="paintbrush">
+    **Google's 2D graphics library**
+    
+    - Rich feature set
+    - Advanced text layout
+    - Better rendering quality
+    - Larger binary size (~2-3MB)
+  </Card>
+</CardGroup>
+
+## Compile-Time Selection
+
+Backends are selected using preprocessor definitions in your project configuration:
+
+<Tabs>
+  <Tab title="NanoVG">
+```cpp config.h
+// Define the IGraphics backend
+#define IGRAPHICS_NANOVG 1
+
+// Define the graphics API (choose one)
+#define IGRAPHICS_GL2 1      // OpenGL 2.1 (legacy)
+// #define IGRAPHICS_GL3 1   // OpenGL 3.2+ (modern)
+// #define IGRAPHICS_GLES2 1 // OpenGL ES 2.0 (mobile/web)
+// #define IGRAPHICS_GLES3 1 // OpenGL ES 3.0 (mobile)
+// #define IGRAPHICS_METAL 1 // Metal (macOS/iOS)
+
+// OpenGL context creation
+#define IGRAPHICS_GL 1       // Required for GL2/GL3/GLES variants
+```
+  </Tab>
+  <Tab title="Skia">
+```cpp config.h
+// Define the IGraphics backend
+#define IGRAPHICS_SKIA 1
+
+// Optional: Define graphics API (auto-detected if not specified)
+// #define IGRAPHICS_GL 1    // OpenGL backend
+// #define SK_METAL 1        // Metal backend (macOS/iOS)
+
+// Skia builds use Metal on macOS/iOS by default
+// unless IGRAPHICS_SKIA_NO_METAL is defined
+```
+  </Tab>
+</Tabs>
+
+<Warning>
+You must define exactly ONE graphics backend: either `IGRAPHICS_NANOVG` or `IGRAPHICS_SKIA`. Defining both or neither will cause a compilation error.
+</Warning>
+
+## NanoVG Backend
+
+### Overview
+
+NanoVG is a lightweight antialiased vector graphics rendering library built on top of OpenGL/Metal. It's inspired by HTML5 canvas API.
+
+<Info>
+**When to use NanoVG:**
+- Most audio plugins
+- Size-constrained scenarios
+- Fast rendering is priority
+- Basic text rendering is sufficient
+- No external dependencies desired
+</Info>
+
+### Features
+
+<CardGroup cols={2}>
+  <Card title="Vector Graphics" icon="shapes">
+    Paths, curves, fills, strokes
+  </Card>
+  <Card title="Text Rendering" icon="font">
+    TrueType/OpenType fonts, single-line text
+  </Card>
+  <Card title="Images" icon="image">
+    PNG, JPEG, BMP loading and rendering
+  </Card>
+  <Card title="Fast Shadows" icon="circle-half-stroke">
+    GPU-accelerated drop shadows
+  </Card>
+</CardGroup>
+
+### Graphics API Options
+
+```cpp
+// OpenGL 2.1 - Maximum compatibility, legacy systems
+#define IGRAPHICS_GL2 1
+
+// OpenGL 3.2+ - Modern desktop, better performance
+#define IGRAPHICS_GL3 1
+
+// OpenGL ES 2.0 - Mobile devices, WebGL 1.0
+#define IGRAPHICS_GLES2 1
+
+// OpenGL ES 3.0 - Modern mobile, WebGL 2.0
+#define IGRAPHICS_GLES3 1
+
+// Metal - macOS 10.11+, iOS 8.0+, best performance on Apple
+#define IGRAPHICS_METAL 1
+```
+
+### Platform Recommendations
+
+| Platform | Recommended API | Notes |
+|----------|----------------|-------|
+| macOS | `IGRAPHICS_METAL` | Best performance, native Apple |
+| iOS | `IGRAPHICS_METAL` | Required for iOS |
+| Windows | `IGRAPHICS_GL2` or `GL3` | GL3 for newer systems |
+| Web (WASM) | `IGRAPHICS_GLES2` | WebGL 1.0 support |
+| Linux | `IGRAPHICS_GL3` | Modern OpenGL |
+
+### Code Example
+
+```cpp
+class IGraphicsNanoVG : public IGraphics {
+  // NanoVG-specific methods
+  
+  void DrawFastDropShadow(const IRECT& innerBounds, 
+                          const IRECT& outerBounds, 
+                          float xyDrop = 5.f, 
+                          float roundness = 0.f, 
+                          float blur = 10.f, 
+                          IBlend* pBlend = nullptr);
+  
+  void DrawMultiLineText(const IText& text, const char* str, 
+                         const IRECT& bounds, const IBlend* pBlend);
+};
+
+// Access NanoVG context directly
+NVGcontext* nvg = static_cast<NVGcontext*>(pGraphics->GetDrawContext());
+
+// Use NanoVG API
+nvgBeginPath(nvg);
+nvgRoundedRect(nvg, x, y, w, h, radius);
+nvgFillColor(nvg, nvgRGBA(r, g, b, a));
+nvgFill(nvg);
+```
+
+### NanoVG Multi-Line Text
+
+NanoVG supports basic multi-line text wrapping:
+
+```cpp
+IText text(16.f, COLOR_WHITE);
+const char* str = "This is a long text that will wrap to multiple lines";
+IRECT bounds(10, 10, 200, 100);
+
+pGraphics->DrawMultiLineText(text, str, bounds);
+```
+
+<Note>
+Multi-line text in NanoVG is basic. For complex paragraph layout, use Skia.
+</Note>
+
+## Skia Backend
+
+### Overview
+
+Skia is Google's comprehensive 2D graphics library used in Chrome, Android, and Flutter. It provides professional-grade rendering.
+
+<Info>
+**When to use Skia:**
+- High-end plugin graphics
+- Advanced text layout needed
+- Best visual quality required
+- Larger binary size acceptable
+- Complex typography/internationalization
+</Info>
+
+### Features
+
+<CardGroup cols={2}>
+  <Card title="Advanced Text" icon="align-left">
+    Paragraph layout, multi-line wrapping, bidirectional text
+  </Card>
+  <Card title="Image Filters" icon="wand-magic-sparkles">
+    Blur, drop shadows, color matrices
+  </Card>
+  <Card title="High Quality" icon="star">
+    Excellent antialiasing and color management
+  </Card>
+  <Card title="Rich Features" icon="layer-group">
+    Gradients, patterns, effects, advanced blending
+  </Card>
+</CardGroup>
+
+### Dependencies
+
+Skia requires building the Skia library:
+
+<Steps>
+  <Step title="Download Skia">
+    Clone the Skia repository or download prebuilt binaries
+  </Step>
+  <Step title="Build Skia">
+    Follow iPlug2's build instructions in `Dependencies/Build/README.md`
+  </Step>
+  <Step title="Configure paths">
+    Point your project to the Skia include and library directories
+  </Step>
+</Steps>
+
+```bash
+# iPlug2 includes scripts to build Skia
+cd $IPLUG2_ROOT/Dependencies/Build
+./build-skia-mac.sh  # macOS
+# or build-skia-win.bat  # Windows
+```
+
+<Warning>
+Skia adds ~2-3MB to your plugin binary size. Consider this for distribution.
+</Warning>
+
+### Code Example
+
+```cpp
+class IGraphicsSkia : public IGraphics {
+  // Skia-specific features
+  
+  void DrawFastDropShadow(const IRECT& innerBounds, 
+                          const IRECT& outerBounds, 
+                          float xyDrop, float roundness, 
+                          float blur, IBlend* pBlend);
+  
+  void DrawMultiLineText(const IText& text, const char* str, 
+                         const IRECT& bounds, const IBlend* pBlend);
+  
+  void ApplyLayerDropShadow(ILayerPtr& layer, const IShadow& shadow);
+};
+
+// Access Skia canvas directly
+SkCanvas* canvas = static_cast<SkCanvas*>(pGraphics->GetDrawContext());
+
+// Use Skia API
+SkPaint paint;
+paint.setColor(SK_ColorRED);
+paint.setAntiAlias(true);
+SkRRect rrect = SkRRect::MakeRectXY(SkRect::MakeXYWH(x, y, w, h), r, r);
+canvas->drawRRect(rrect, paint);
+```
+
+### Advanced Text Layout
+
+Skia provides sophisticated text layout with the Paragraph API:
+
+```cpp
+// Multi-line text with proper wrapping and alignment
+IText text(16.f, COLOR_WHITE);
+text.mAlign = EAlign::Near;
+text.mVAlign = EVAlign::Top;
+
+const char* longText = 
+  "Skia handles complex text layout including line breaking, "
+  "justification, and bidirectional text. Perfect for plugin "
+  "documentation or rich text displays.";
+
+IRECT bounds(10, 10, 300, 200);
+pGraphics->DrawMultiLineText(text, longText, bounds);
+```
+
+## Feature Comparison
+
+### Drawing Primitives
+
+| Feature | NanoVG | Skia | Notes |
+|---------|--------|------|-------|
+| Paths | ✅ | ✅ | Both excellent |
+| Strokes | ✅ | ✅ | Skia has more dash options |
+| Fills | ✅ | ✅ | Both support gradients |
+| Curves | ✅ | ✅ | Cubic & quadratic beziers |
+| Transforms | ✅ | ✅ | Rotate, scale, skew |
+
+### Text Rendering
+
+| Feature | NanoVG | Skia | Notes |
+|---------|--------|------|-------|
+| Basic text | ✅ | ✅ | Both work well |
+| Multi-line | ⚠️ Basic | ✅ Advanced | Skia has paragraph API |
+| Font features | ⚠️ Limited | ✅ Full | OpenType features |
+| Bidirectional | ❌ | ✅ | RTL/LTR text |
+| Text shaping | ⚠️ Basic | ✅ Advanced | Complex scripts |
+
+### Images & Effects
+
+| Feature | NanoVG | Skia | Notes |
+|---------|--------|------|-------|
+| Bitmap loading | ✅ | ✅ | PNG, JPEG, etc. |
+| SVG support | ✅ | ✅ | Via nanosvg/Skia SVG |
+| Blur effects | ⚠️ Drop shadow only | ✅ | Skia has full filters |
+| Image filters | ❌ | ✅ | Color matrix, etc. |
+| Layer effects | ⚠️ Basic | ✅ | Advanced compositing |
+
+### Performance
+
+| Metric | NanoVG | Skia | Notes |
+|--------|--------|------|-------|
+| Binary size | ~200KB | ~2-3MB | NanoVG much smaller |
+| Memory usage | Low | Moderate | Skia uses more RAM |
+| Rendering speed | Fast | Moderate | NanoVG slightly faster |
+| Startup time | Instant | Fast | Minimal difference |
+
+## Backend-Specific Code
+
+When you need backend-specific features:
+
+```cpp
+#if defined IGRAPHICS_NANOVG
+  // NanoVG-specific code
+  NVGcontext* nvg = static_cast<NVGcontext*>(pGraphics->GetDrawContext());
+  nvgBeginPath(nvg);
+  nvgCircle(nvg, x, y, r);
+  nvgFillColor(nvg, nvgRGBA(255, 0, 0, 255));
+  nvgFill(nvg);
+  
+#elif defined IGRAPHICS_SKIA
+  // Skia-specific code
+  SkCanvas* canvas = static_cast<SkCanvas*>(pGraphics->GetDrawContext());
+  SkPaint paint;
+  paint.setColor(SK_ColorRED);
+  canvas->drawCircle(x, y, r, paint);
+#endif
+```
+
+<Warning>
+Backend-specific code reduces portability. Use IGraphics abstraction when possible.
+</Warning>
+
+## Switching Backends
+
+To switch between backends:
+
+<Steps>
+  <Step title="Update config.h">
+    Change `IGRAPHICS_NANOVG` to `IGRAPHICS_SKIA` (or vice versa)
+  </Step>
+  <Step title="Update graphics API defines">
+    Ensure appropriate GL/Metal defines for the new backend
+  </Step>
+  <Step title="Add/remove dependencies">
+    Add Skia libraries if switching to Skia, or remove them for NanoVG
+  </Step>
+  <Step title="Test thoroughly">
+    Some subtle rendering differences may exist
+  </Step>
+</Steps>
+
+<Info>
+Most IGraphics code is backend-agnostic and will work unchanged.
+</Info>
+
+## Best Practices
+
+<Tabs>
+  <Tab title="Choose NanoVG if...">
+  - Targeting older systems/web
+  - Want minimal dependencies
+  - Building most audio plugins
+  </Tab>
+  <Tab title="Choose Skia if...">
+  - Need advanced text layout
+  - Want highest quality rendering
+  - Need complex effects/filters
+  - Binary size is not a concern
+  - Building high-end visual plugins
+  </Tab>
+  <Tab title="Choose Skia if...">
+  - Need advanced text layout
+  - Want highest quality rendering
+  - Need complex effects/filters
+  - Binary size is not a concern
+  - Building high-end visual plugins
+  - Need complex typography
+  </Tab>
+  <Tab title="Backend-Agnostic Code">
+  
+```cpp
+// ✅ Good - works with both backends
+pGraphics->FillRect(COLOR_RED, bounds);
+pGraphics->DrawText(text, "Hello", bounds);
+pGraphics->DrawSVG(svg, bounds);
+
+// ⚠️ Backend-specific - wrap in #ifdef
+#ifdef IGRAPHICS_NANOVG
+NVGcontext* nvg = ...;
+nvgSomethingSpecial(nvg);
+#endif
+```
+  </Tab>
+</Tabs>
+
+## Troubleshooting
+
+<Accordion>
+  <AccordionItem title="Compilation error: 'Either NO_IGRAPHICS or one and only one choice...'">
+    You must define exactly one backend:
+    ```cpp
+    #define IGRAPHICS_NANOVG 1  // or IGRAPHICS_SKIA 1
+    ```
+  </AccordionItem>
+  
+  <AccordionItem title="NanoVG: Blank screen or nothing rendering">
+    Ensure you've defined a graphics API:
+    ```cpp
+    #define IGRAPHICS_GL2 1  // or GL3, METAL, etc.
+    #define IGRAPHICS_GL 1   // Required for OpenGL variants
+    ```
+  </AccordionItem>
+  
+  <AccordionItem title="Skia: Linker errors or missing symbols">
+    - Ensure Skia is built for your platform
+    - Check library paths in project settings
+    - Verify all required Skia modules are linked
+    - See `Dependencies/Build/README.md`
+  </AccordionItem>
+  
+  <AccordionItem title="Performance issues with NanoVG">
+    - Try switching GL2 → GL3 or GL3 → Metal
+    - Reduce overdraw (multiple transparent layers)
+    - Use layers for static content
+    - Profile with GPU debugging tools
+  </AccordionItem>
+  
+  <AccordionItem title="Text rendering looks bad">
+    NanoVG:
+    - Ensure correct draw scale for high-DPI
+    - Use integer font sizes when possible
+    
+    Skia:
+    - Enable subpixel rendering
+    - Check font hinting settings
+  </AccordionItem>
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Controls Library" icon="sliders" href="./controls">
+    Works identically on both backends
+  </Card>
+  <Card title="Custom Controls" icon="code" href="./custom-controls">
+    Draw using backend-agnostic API
+  </Card>
+  <Card title="Getting Started" icon="rocket" href="./getting-started">
+    Set up your first UI
+  </Card>
+  <Card title="Responsive UI" icon="mobile" href="./responsive-ui">
+    Handle scaling and resizing
+  </Card>
+</CardGroup>

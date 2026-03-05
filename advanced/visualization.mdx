@@ -1,0 +1,404 @@
+---
+title: Audio Visualization
+description: Send audio data from DSP to UI for meters, scopes, and analyzers
+---
+
+Visualize audio in real-time with iPlug2's thread-safe data transfer utilities. Send peak levels, waveforms, or spectrum data from the audio thread to UI controls without blocking.
+
+## Overview
+
+Audio processing happens on a realtime thread, but UI updates occur on the main thread. The `ISender` system provides lock-free communication between these threads.
+
+**Key Components:**
+
+- `ISender` - Base class for thread-safe data transfer
+- `IPeakSender` - Peak level metering
+- `IPeakAvgSender` - Peak + RMS/average metering  
+- `IBufferSender` - Raw audio buffer transfer
+- `ISpectrumSender` - FFT spectrum analysis
+- `IPlugQueue` - Lock-free SPSC queue (used internally)
+
+## Basic Flow
+
+<Steps>
+  <Step title="Create Sender (DSP side)">
+    Instantiate sender in your plugin class
+  </Step>
+  
+  <Step title="Process Data (Audio Thread)">
+    Call `ProcessBlock()` in your audio callback
+  </Step>
+  
+  <Step title="Transmit (Main Thread)">
+    Call `TransmitData()` in `OnIdle()`
+  </Step>
+  
+  <Step title="Receive (UI Control)">
+    Override `OnMsgFromDelegate()` to handle data
+  </Step>
+</Steps>
+
+## Peak Metering
+
+The simplest visualization - show audio levels:
+
+```cpp title="Basic Peak Meter"
+#include "ISender.h"
+
+class MyPlugin : public Plugin
+{
+public:
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+  {
+    // Your processing...
+    
+    // Send peaks to UI (tag = kCtrlTagMeter, 2 channels)
+    mPeakSender.ProcessBlock(outputs, nFrames, kCtrlTagMeter, 2);
+  }
+  
+  void OnIdle() override
+  {
+    mPeakSender.TransmitData(*this);
+  }
+  
+  void OnReset() override
+  {
+    mPeakSender.Reset(GetSampleRate());
+  }
+
+private:
+  IPeakSender<2> mPeakSender; // 2 channels
+};
+```
+
+Add a meter control in your UI:
+
+```cpp title="UI Setup"
+pGraphics->AttachControl(
+  new IVLEDMeterControl<2>(bounds), 
+  kCtrlTagMeter
+);
+```
+
+## IPlugDrumSynth Example
+
+The IPlugDrumSynth example shows peak metering with multi-channel support:
+
+```cpp title="IPlugDrumSynth.h:50"
+IPeakSender<8> mSender; // 8 channels for 4 stereo drum outputs
+```
+
+```cpp title="IPlugDrumSynth.cpp:137"
+void IPlugDrumSynth::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kParamGain)->Value() / 100.;
+  const int nChans = NOutChansConnected();
+
+  mDSP.ProcessBlock(outputs, nFrames);
+  
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = outputs[c][s] * gain;
+    }
+  }
+  
+  // Send all 8 channels to meter
+  mSender.ProcessBlock(outputs, nFrames, kCtrlTagMeter);
+}
+
+void IPlugDrumSynth::OnIdle()
+{
+  mSender.TransmitData(*this);
+}
+```
+
+## Spectrum Analyzer
+
+The IPlugVisualizer example demonstrates real-time FFT analysis:
+
+```cpp title="IPlugVisualizer.h:29"
+class IPlugVisualizer final : public Plugin
+{
+public:
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  void OnIdle() override;
+  void OnReset() override;
+  bool OnMessage(int msgTag, int ctrlTag, int dataSize, const void* pData) override;
+  
+private:
+  ISpectrumSender<2> mSender; // 2-channel spectrum analyzer
+};
+```
+
+### Processing Audio for FFT
+
+```cpp title="IPlugVisualizer.cpp:110"
+void IPlugVisualizer::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const int nInChans = NInChansConnected();
+  const int nOutChans = NOutChansConnected();
+
+  // Send input to spectrum analyzer
+  mSender.ProcessBlock(inputs, nFrames, kCtrlTagSpectrumAnalyzer, nInChans);
+
+  // Pass through
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nOutChans; c++) {
+      outputs[c][s] = inputs[c % nInChans][s];
+    }
+  }
+}
+
+void IPlugVisualizer::OnIdle()
+{
+  mSender.TransmitData(*this);
+}
+```
+
+### FFT Configuration Messages
+
+UI controls can send configuration to the DSP side:
+
+```cpp title="IPlugVisualizer.cpp:81"
+bool IPlugVisualizer::OnMessage(int msgTag, int ctrlTag, int dataSize, 
+                                const void* pData)
+{
+  if (msgTag == IVSpectrumAnalyzerControl<>::kMsgTagFFTSize)
+  {
+    int fftSize = *reinterpret_cast<const int*>(pData);
+    mSender.SetFFTSize(fftSize);
+    return true;
+  }
+  else if (msgTag == IVSpectrumAnalyzerControl<>::kMsgTagOverlap)
+  {
+    int overlap = *reinterpret_cast<const int*>(pData);
+    mSender.SetFFTSizeAndOverlap(mSender.GetFFTSize(), overlap);
+    return true;
+  }
+  else if (msgTag == IVSpectrumAnalyzerControl<>::kMsgTagWindowType)
+  {
+    int idx = *reinterpret_cast<const int*>(pData);
+    mSender.SetWindowType(static_cast<ISpectrumSender<2>::EWindowType>(idx));
+    return true;
+  }
+
+  return false;
+}
+```
+
+### Spectrum Analyzer UI
+
+```cpp title="IPlugVisualizer.cpp:39"
+pGraphics->AttachControl(
+  new IVSpectrumAnalyzerControl<2>(b, "Spectrum", style), 
+  kCtrlTagSpectrumAnalyzer
+);
+```
+
+## LFO Visualization
+
+The IPlugInstrument example shows simple value visualization:
+
+```cpp title="IPlugInstrument.cpp:96"
+void IPlugInstrument::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  mDSP.ProcessBlock(nullptr, outputs, 2, nFrames, 
+                    mTimeInfo.mPPQPos, mTimeInfo.mTransportIsRunning);
+  mMeterSender.ProcessBlock(outputs, nFrames, kCtrlTagMeter);
+  
+  // Send LFO value for visualization
+  mLFOVisSender.PushData({
+    kCtrlTagLFOVis, 
+    {float(mDSP.mLFO.GetLastOutput())}
+  });
+}
+
+void IPlugInstrument::OnIdle()
+{
+  mMeterSender.TransmitData(*this);
+  mLFOVisSender.TransmitData(*this);
+}
+```
+
+## Sender Types
+
+<Tabs>
+  <Tab title="IPeakSender">
+    Simple peak metering
+    ```cpp
+    IPeakSender<2> mSender; // 2 channels
+    mSender.ProcessBlock(outputs, nFrames, ctrlTag, 2);
+    ```
+  </Tab>
+  
+  <Tab title="IPeakAvgSender">
+    Peak + RMS with ballistics
+    ```cpp
+    IPeakAvgSender<2> mSender;
+    mSender.ProcessBlock(outputs, nFrames, ctrlTag, 2);
+    ```
+  </Tab>
+  
+  <Tab title="IBufferSender">
+    Raw waveform data
+    ```cpp
+    IBufferSender<2, 64, 512> mSender; // 512-sample buffers
+    mSender.ProcessBlock(outputs, nFrames, ctrlTag, 2);
+    ```
+  </Tab>
+  
+  <Tab title="ISpectrumSender">
+    FFT spectrum analysis
+    ```cpp
+    ISpectrumSender<2> mSender {1024}; // 1024-point FFT
+    mSender.ProcessBlock(inputs, nFrames, ctrlTag, 2);
+    ```
+  </Tab>
+</Tabs>
+
+## Custom Sender
+
+Create a custom sender for specialized data:
+
+```cpp title="Custom Sender Example"
+template <int MAXNC = 1>
+class MyCustomSender : public ISender<MAXNC, 64, float>
+{
+public:
+  void ProcessBlock(sample** inputs, int nFrames, int ctrlTag, int nChans = MAXNC)
+  {
+    // Analyze your data
+    float myValue = AnalyzeAudio(inputs, nFrames);
+    
+    // Push to queue
+    ISenderData<MAXNC, float> d {ctrlTag, nChans, 0};
+    d.vals[0] = myValue;
+    
+    this->PushData(d);
+  }
+  
+private:
+  float AnalyzeAudio(sample** inputs, int nFrames)
+  {
+    // Your analysis code
+    return 0.0f;
+  }
+};
+```
+
+## Receiving Data in Controls
+
+Controls receive data via `OnMsgFromDelegate()`:
+
+```cpp title="Custom Control Receiving Data"
+class MyMeterControl : public IControl
+{
+public:
+  void OnMsgFromDelegate(int msgTag, int dataSize, const void* pData) override
+  {
+    if (msgTag == ISender<>::kUpdateMessage)
+    {
+      auto* pSenderData = static_cast<const ISenderData<2, float>*>(pData);
+      
+      // Update meter values
+      mLevelL = pSenderData->vals[0];
+      mLevelR = pSenderData->vals[1];
+      
+      SetDirty(false); // Redraw
+    }
+  }
+  
+private:
+  float mLevelL = 0.0f;
+  float mLevelR = 0.0f;
+};
+```
+
+## IPlugQueue
+
+All senders use `IPlugQueue` internally - a lock-free SPSC (Single Producer Single Consumer) queue:
+
+```cpp title="IPlug/IPlugQueue.h:31"
+template<typename T>
+class IPlugQueue
+{
+public:
+  IPlugQueue(int size);
+  
+  bool Push(const T& item);        // Audio thread
+  bool Pop(T& item);               // Main thread
+  size_t ElementsAvailable() const;
+  const T& Peek();                 // Look without removing
+};
+```
+
+<Warning>
+`IPlugQueue` is SPSC only. One writer (audio thread), one reader (main thread). Not thread-safe for multiple producers or consumers.
+</Warning>
+
+## Performance Considerations
+
+<Steps>
+  <Step title="Queue Size">
+    Larger queues handle bursty UI updates:
+    ```cpp
+    IPeakSender<2, 128> mSender; // 128 element queue
+    ```
+  </Step>
+  
+  <Step title="Update Rate">
+    Don't send every block - use window sizes:
+    ```cpp
+    mSender.SetWindowSizeMs(5.0, sampleRate); // 5ms windows
+    ```
+  </Step>
+  
+  <Step title="Throttle TransmitData">
+    Call in `OnIdle()` (typically 60Hz), not faster
+  </Step>
+</Steps>
+
+## State Persistence
+
+Save visualization settings with plugin state:
+
+```cpp title="IPlugVisualizer.cpp:129"
+bool IPlugVisualizer::SerializeState(IByteChunk &chunk) const
+{
+  int fftSize = mSender.GetFFTSize();
+  int overlap = mSender.GetOverlap();
+  int windowType = static_cast<int>(mSender.GetWindowType());
+  
+  chunk.Put(&fftSize);
+  chunk.Put(&overlap);
+  chunk.Put(&windowType);
+
+  return SerializeParams(chunk);
+}
+
+int IPlugVisualizer::UnserializeState(const IByteChunk &chunk, int startPos)
+{
+  int fftSize, overlap, windowType;
+
+  startPos = chunk.Get(&fftSize, startPos);
+  startPos = chunk.Get(&overlap, startPos);
+  startPos = chunk.Get(&windowType, startPos);
+  
+  // Apply settings
+  mSender.SetFFTSizeAndOverlap(fftSize, overlap);
+  mSender.SetWindowType(static_cast<ISpectrumSender<2>::EWindowType>(windowType));
+
+  return UnserializeParams(chunk, startPos);
+}
+```
+
+## See Also
+
+- [IPlugVisualizer Example](@Examples/IPlugVisualizer) - Spectrum analyzer
+- [IPlugDrumSynth Example](@Examples/IPlugDrumSynth) - Multi-channel metering
+- [IPlugInstrument Example](@Examples/IPlugInstrument) - LFO visualization
+- [Threading](/advanced/threading) - Thread-safe communication details
+
+<Tip>
+The built-in `IVLEDMeterControl`, `IVSpectrumAnalyzerControl`, and `IVScopeControl` work seamlessly with these senders - just match the channel count!
+</Tip>

@@ -1,0 +1,674 @@
+---
+title: WebView Interface
+description: Building plugin UIs with HTML, CSS, and JavaScript using native webviews
+---
+
+iPlug2 supports building plugin UIs with standard web technologies (HTML, CSS, JavaScript) using platform-native webviews.
+
+<Info>
+WebView uses WKWebView on macOS/iOS and Microsoft Edge WebView2 on Windows. The web content runs locally - no internet connection required.
+</Info>
+
+## Getting Started
+
+<Steps>
+  <Step title="Copy the example project">
+    Start by duplicating the WebView example:
+    ```bash
+    ./duplicate.py IPlugWebUI MyPlugin
+    ```
+  </Step>
+  
+  <Step title="Project structure">
+    Your project will have:
+    ```
+    MyPlugin/
+    ├── MyPlugin.h              # Plugin header (C++)
+    ├── MyPlugin.cpp            # Plugin implementation (C++)
+    ├── config.h                # Plugin configuration
+    └── resources/
+        └── web/
+            ├── index.html
+            ├── script.js       # iPlug2 communication functions
+            ├── knob-control.js  # Custom web components
+            └── button-control.js
+    ```
+  </Step>
+  
+  <Step title="Build and run">
+    The web resources are bundled with your plugin. During development, you can edit HTML/CSS/JS and reload.
+  </Step>
+</Steps>
+
+## Plugin Implementation
+
+### Plugin Header (C++)
+
+Your plugin inherits from `Plugin` and uses `WebViewEditorDelegate`:
+
+```cpp
+#pragma once
+
+#include "IPlug_include_in_plug_hdr.h"
+#include "Oscillator.h"
+#include "Smoothers.h"
+
+using namespace iplug;
+
+const int kNumPresets = 3;
+
+enum EParams
+{
+  kGain = 0,
+  kNumParams
+};
+
+enum EMsgTags
+{
+  kMsgTagButton1 = 0,
+  kMsgTagButton2 = 1,
+  kMsgTagButton3 = 2,
+  kMsgTagBinaryTest = 3
+};
+
+class MyPlugin final : public Plugin
+{
+public:
+  MyPlugin(const InstanceInfo& info);
+  
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  void OnReset() override;
+  bool OnMessage(int msgTag, int ctrlTag, int dataSize, const void* pData) override;
+  void OnParamChange(int paramIdx) override;
+  
+  // WebView-specific methods
+  bool CanNavigateToURL(const char* url);
+  bool OnCanDownloadMIMEType(const char* mimeType) override;
+  void OnFailedToDownloadFile(const char* path) override;
+  void OnDownloadedFile(const char* path) override;
+  void OnGetLocalDownloadPathForFile(const char* fileName, WDL_String& localPath) override;
+
+private:
+  FastSinOscillator<sample> mOscillator {0., 440.};
+  LogParamSmooth<sample, 1> mGainSmoother;
+};
+```
+
+### Plugin Implementation (C++)
+
+Initialize the webview and load your HTML:
+
+```cpp
+#include "MyPlugin.h"
+#include "IPlug_include_in_plug_src.h"
+#include "IPlugPaths.h"
+
+MyPlugin::MyPlugin(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kGain)->InitGain("Gain", -70., -70, 0.);
+  
+#ifdef DEBUG
+  SetEnableDevTools(true);  // Enable browser dev tools in debug builds
+#endif
+  
+  // Initialize editor - this lambda is called when webview is ready
+  mEditorInitFunc = [&]()
+  {
+    LoadIndexHtml(__FILE__, GetBundleID());
+    EnableScroll(false);  // Disable scrolling
+  };
+  
+  MakePreset("Preset 1", -70.);
+  MakePreset("Preset 2", -30.);
+  MakePreset("Preset 3", 0.);
+}
+
+void MyPlugin::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kGain)->DBToAmp();
+    
+  mOscillator.ProcessBlock(inputs[0], nFrames);
+
+  for (int s = 0; s < nFrames; s++)
+  {
+    outputs[0][s] = inputs[0][s] * mGainSmoother.Process(gain);
+    outputs[1][s] = outputs[0][s];
+  }  
+}
+
+void MyPlugin::OnReset()
+{
+  auto sr = GetSampleRate();
+  mOscillator.SetSampleRate(sr);
+  mGainSmoother.SetSmoothTime(20., sr);
+}
+
+bool MyPlugin::OnMessage(int msgTag, int ctrlTag, int dataSize, const void* pData)
+{
+  // Handle messages from JavaScript
+  if (msgTag == kMsgTagButton1)
+    Resize(512, 335);
+  else if(msgTag == kMsgTagButton2)
+    Resize(1024, 335);
+  else if(msgTag == kMsgTagButton3)
+    Resize(1024, 768);
+  else if (msgTag == kMsgTagBinaryTest)
+  {
+    auto uint8Data = reinterpret_cast<const uint8_t*>(pData);
+    DBGMSG("Data Size %i bytes\n",  dataSize);
+    DBGMSG("Byte values: %i, %i, %i, %i\n", 
+           uint8Data[0], uint8Data[1], uint8Data[2], uint8Data[3]);
+  }
+
+  return false;
+}
+
+void MyPlugin::OnParamChange(int paramIdx)
+{
+  DBGMSG("Gain changed to %f\n", GetParam(paramIdx)->Value());
+}
+```
+
+## HTML Interface
+
+Create your UI in `resources/web/index.html`:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * {
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+    }
+  
+    body {
+      overflow: hidden;
+      padding: 20px;
+      background-color: #1a1a1a;
+      color: white;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+    }
+  
+    .container {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      align-items: center;
+    }
+  
+    button-control {
+      padding: 10px 20px;
+      background: #4a90e2;
+      border: none;
+      border-radius: 6px;
+      color: white;
+      cursor: pointer;
+      font-family: inherit;
+    }
+  
+    button-control:hover {
+      background: #357abd;
+    }
+  </style>
+  
+  <script src="script.js"></script>
+  <script type="module" src="knob-control.js"></script>
+  <script type="module" src="button-control.js"></script>
+  
+  <script>
+    // Called when parameter changes in the plugin
+    function OnParamChange(param, value) {
+      const knob = document.querySelector(`knob-control[param-id="${param}"]`);
+      if (knob) {
+        knob.updateValueFromHost(value);
+      }
+    }
+  
+    // Called when C++ sends a message to UI
+    function OnMessage(msgTag, dataSize, data) {
+      if (msgTag == -1 && dataSize > 0) {
+        let json = JSON.parse(window.atob(data));
+        
+        // Handle parameter info
+        if (json["id"] == "params") {
+          window["parameters"] = json["params"];
+          
+          // Initialize knobs with parameter info
+          document.querySelectorAll('knob-control').forEach(element => {
+            const paramInfo = json["params"][element.paramId];
+            element.setAttribute("min", paramInfo["min"]);
+            element.setAttribute("max", paramInfo["max"]);
+            element.setAttribute("label", paramInfo["name"]);
+            element.setAttribute("default-value", paramInfo["default"]);
+          });
+        }
+      }
+    }
+  </script>
+</head>
+<body>
+  <div class="container">
+    <h1>My Audio Plugin</h1>
+    
+    <knob-control label="Gain" param-id="0"></knob-control>
+    
+    <div style="display: flex; gap: 10px;">
+      <button-control onclick="SAMFUI(0)">Small GUI</button-control>
+      <button-control onclick="SAMFUI(1)">Medium GUI</button-control>
+      <button-control onclick="SAMFUI(2)">Large GUI</button-control>
+    </div>
+  </div>
+</body>
+</html>
+```
+
+## JavaScript Communication
+
+The `script.js` file provides communication functions:
+
+```javascript
+// ========================================
+// FROM PLUGIN TO UI (receive)
+// ========================================
+
+// Receive parameter value changes
+function SPVFD(paramIdx, val) {
+  console.log("Parameter " + paramIdx + " = " + val);
+  OnParamChange(paramIdx, val);
+}
+
+// Receive control value changes
+function SCVFD(ctrlTag, val) {
+  OnControlChange(ctrlTag, val);
+}
+
+// Receive control messages (e.g., meter data)
+function SCMFD(ctrlTag, msgTag, msg) {
+  console.log("Control message: " + ctrlTag + ", " + msgTag);
+}
+
+// Receive arbitrary messages
+function SAMFD(msgTag, dataSize, msg) {
+  OnMessage(msgTag, dataSize, msg);
+}
+
+// Receive MIDI messages
+function SMMFD(statusByte, dataByte1, dataByte2) {
+  console.log("MIDI: " + statusByte + ", " + dataByte1 + ", " + dataByte2);
+}
+
+// ========================================
+// FROM UI TO PLUGIN (send)
+// ========================================
+
+// Send arbitrary message to plugin
+// data should be a base64 encoded string
+function SAMFUI(msgTag, ctrlTag = -1, data = 0) {
+  var message = {
+    "msg": "SAMFUI",
+    "msgTag": msgTag,
+    "ctrlTag": ctrlTag,
+    "data": data
+  };
+  
+  IPlugSendMsg(message);
+}
+
+// Send MIDI message to plugin
+function SMMFUI(statusByte, dataByte1, dataByte2) {
+  var message = {
+    "msg": "SMMFUI",
+    "statusByte": statusByte,
+    "dataByte1": dataByte1,
+    "dataByte2": dataByte2
+  };
+  
+  IPlugSendMsg(message);
+}
+
+// Begin parameter change (start gesture)
+function BPCFUI(paramIdx) {
+  if (paramIdx < 0) {
+    console.log("BPCFUI paramIdx must be >= 0")
+    return;
+  }
+  
+  var message = {
+    "msg": "BPCFUI",
+    "paramIdx": parseInt(paramIdx),
+  };
+  
+  IPlugSendMsg(message);
+}
+
+// End parameter change (end gesture)
+function EPCFUI(paramIdx) {
+  if (paramIdx < 0) {
+    console.log("EPCFUI paramIdx must be >= 0")
+    return;
+  }
+  
+  var message = {
+    "msg": "EPCFUI",
+    "paramIdx": parseInt(paramIdx),
+  };
+  
+  IPlugSendMsg(message);
+}
+
+// Send parameter value (normalized 0-1)
+function SPVFUI(paramIdx, value) {
+  if (paramIdx < 0) {
+    console.log("SPVFUI paramIdx must be >= 0")
+    return;
+  }
+  
+  var message = {
+    "msg": "SPVFUI",
+    "paramIdx": parseInt(paramIdx),
+    "value": value
+  };
+
+  IPlugSendMsg(message);
+}
+```
+
+## Web Components
+
+Create reusable custom elements for controls:
+
+```javascript
+// knob-control.js
+class KnobControl extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this.isDragging = false;
+    this.startY = 0;
+    this.startValue = 0;
+  }
+  
+  connectedCallback() {
+    this.paramId = parseInt(this.getAttribute('param-id') || '0');
+    this.label = this.getAttribute('label') || 'Knob';
+    this.min = parseFloat(this.getAttribute('min') || '0');
+    this.max = parseFloat(this.getAttribute('max') || '1');
+    this.value = parseFloat(this.getAttribute('default-value') || '0.5');
+    
+    this.render();
+    this.attachListeners();
+  }
+  
+  render() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host {
+          display: inline-block;
+          width: 60px;
+          text-align: center;
+          cursor: ns-resize;
+        }
+        
+        .knob {
+          width: 60px;
+          height: 60px;
+          border-radius: 50%;
+          background: linear-gradient(145deg, #2a2a2a, #1a1a1a);
+          border: 2px solid #444;
+          position: relative;
+          margin-bottom: 8px;
+        }
+        
+        .indicator {
+          position: absolute;
+          width: 4px;
+          height: 20px;
+          background: #4a90e2;
+          top: 8px;
+          left: 50%;
+          transform-origin: center 22px;
+          transform: translateX(-50%) rotate(calc(${this.getNormalizedValue()} * 270deg - 135deg));
+          border-radius: 2px;
+        }
+        
+        .label {
+          font-size: 12px;
+          color: white;
+        }
+        
+        .value {
+          font-size: 10px;
+          color: #999;
+          margin-top: 4px;
+        }
+      </style>
+      
+      <div class="knob">
+        <div class="indicator"></div>
+      </div>
+      <div class="label">${this.label}</div>
+      <div class="value">${this.value.toFixed(2)}</div>
+    `;
+  }
+  
+  getNormalizedValue() {
+    return (this.value - this.min) / (this.max - this.min);
+  }
+  
+  attachListeners() {
+    const knob = this.shadowRoot.querySelector('.knob');
+    
+    knob.addEventListener('mousedown', (e) => {
+      this.isDragging = true;
+      this.startY = e.clientY;
+      this.startValue = this.value;
+      BPCFUI(this.paramId);  // Begin gesture
+      e.preventDefault();
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+      if (!this.isDragging) return;
+      
+      const delta = (this.startY - e.clientY) / 100;
+      this.value = Math.max(this.min, Math.min(this.max, 
+                           this.startValue + delta * (this.max - this.min)));
+      
+      SPVFUI(this.paramId, this.getNormalizedValue());  // Send value
+      this.render();
+    });
+    
+    document.addEventListener('mouseup', () => {
+      if (this.isDragging) {
+        EPCFUI(this.paramId);  // End gesture
+        this.isDragging = false;
+      }
+    });
+  }
+  
+  // Called when plugin sends parameter update
+  updateValueFromHost(normalizedValue) {
+    this.value = this.min + normalizedValue * (this.max - this.min);
+    this.render();
+  }
+}
+
+customElements.define('knob-control', KnobControl);
+```
+
+## Communication Patterns
+
+### Parameter Changes
+
+**From UI to Plugin:**
+
+```javascript
+// 1. Start gesture
+BPCFUI(paramIndex);
+
+// 2. Send value changes (normalized 0-1)
+SPVFUI(paramIndex, normalizedValue);
+
+// 3. End gesture
+EPCFUI(paramIndex);
+```
+
+**From Plugin to UI:**
+
+```cpp
+// C++ side - automatically calls SPVFD in JavaScript
+SendParameterValueFromDelegate(paramIdx, value, true);
+```
+
+### Binary Data
+
+Send binary data (e.g., meter values) using base64:
+
+**C++ to JavaScript:**
+
+```cpp
+SendControlMsgFromDelegate(ctrlTag, msgTag, dataSize, pData);
+```
+
+**JavaScript receives:**
+
+```javascript
+function SCMFD(ctrlTag, msgTag, dataSize, msg) {
+  // msg is base64 encoded
+  const msgData = atob(msg);
+  const bytes = new Uint8Array(msgData.length);
+  for (let i = 0; i < msgData.length; i++) {
+    bytes[i] = msgData.charCodeAt(i);
+  }
+  
+  // Parse as needed
+  const floatData = new Float32Array(bytes.buffer, 12);
+}
+```
+
+## Development Tools
+
+<Tip>
+**Enable DevTools in debug builds**
+
+```cpp
+#ifdef DEBUG
+SetEnableDevTools(true);
+#endif
+```
+
+Right-click in the webview and select "Inspect Element" to access Chrome/Safari DevTools.
+</Tip>
+
+## Hot Reload
+
+During development, you can edit HTML/CSS/JS files and reload:
+
+```cpp
+// In debug builds, load from source directory
+mEditorInitFunc = [&]() {
+  LoadIndexHtml(__FILE__, GetBundleID());
+};
+```
+
+The `LoadIndexHtml` function loads from your project directory in debug mode, and from the bundle in release mode.
+
+## WebView Configuration
+
+```cpp
+// Enable/disable scrolling
+EnableScroll(false);
+
+// Load custom URL (for development)
+LoadURL("http://localhost:5173/");
+
+// Load HTML file
+LoadFile("index.html", GetBundleID());
+
+// Load HTML string directly
+LoadHTML("<html><body>Hello</body></html>");
+
+// Set custom URL scheme
+SetCustomUrlScheme("myplug");
+```
+
+## Navigation Control
+
+Control which URLs can be navigated to:
+
+```cpp
+bool MyPlugin::CanNavigateToURL(const char* url)
+{
+  DBGMSG("Navigating to URL %s\n", url);
+  // Return true to allow, false to block
+  return std::string_view(url).find("iplug2.github.io") != std::string_view::npos;
+}
+```
+
+## File Downloads
+
+Handle file downloads from the webview:
+
+```cpp
+bool MyPlugin::OnCanDownloadMIMEType(const char* mimeType)
+{
+  // Allow all except HTML
+  return std::string_view(mimeType) != "text/html";
+}
+
+void MyPlugin::OnDownloadedFile(const char* path)
+{
+  DBGMSG("Downloaded file to %s\n", path);
+}
+
+void MyPlugin::OnGetLocalDownloadPathForFile(const char* fileName, WDL_String& localPath)
+{
+  // Set download location
+  DesktopPath(localPath);
+  localPath.AppendFormatted(MAX_WIN32_PATH_LEN, "/%s", fileName);
+}
+```
+
+## Best Practices
+
+<Warning>
+**Always use parameter gestures**
+
+Call `BPCFUI()` before changing parameters and `EPCFUI()` after. This ensures proper host automation recording.
+</Warning>
+
+<Note>
+**Normalize parameter values**
+
+Always send normalized (0-1) values to `SPVFUI()`. The plugin will handle denormalization based on parameter ranges.
+</Note>
+
+<Tip>
+**Use Web Components**
+
+Custom elements provide reusable, encapsulated controls that work like native HTML elements.
+</Tip>
+
+## Platform Differences
+
+- **macOS/iOS**: Uses WKWebView (Safari/WebKit engine)
+- **Windows**: Uses Edge WebView2 (Chromium engine)
+
+Test on all target platforms as rendering and JavaScript features may differ slightly.
+
+## Example Project
+
+See the complete example in `Examples/IPlugWebUI/` which demonstrates:
+
+- Custom knob and button web components
+- Parameter control with gestures
+- GUI resizing from JavaScript
+- Binary data communication
+- MIDI message handling
+- File drag-and-drop
+- External link navigation

@@ -1,0 +1,456 @@
+---
+title: Web UI
+description: Build cross-platform plugin interfaces using HTML, CSS, and JavaScript
+---
+
+The IPlugWebUI example demonstrates how to build plugin interfaces using web technologies (HTML, CSS, JavaScript). This approach enables truly cross-platform UIs that work identically across Windows, macOS, iOS, and web (WASM) builds.
+
+## What This Example Demonstrates
+
+- WebView-based plugin UI
+- Custom HTML/CSS/JavaScript interface
+- Web Components for reusable controls
+- Bidirectional communication (JavaScript ↔ C++)
+- Dynamic window resizing from UI
+- File download/upload handling
+- Drag-and-drop file operations
+- Development tools support
+
+## Architecture
+
+<CardGroup cols={3}>
+  <Card title="C++ Plugin" icon="gear">
+    Audio processing and WebView management
+  </Card>
+  <Card title="HTML/CSS" icon="palette">
+    UI layout and styling
+  </Card>
+  <Card title="JavaScript" icon="code">
+    UI logic and C++ communication
+  </Card>
+</CardGroup>
+
+## C++ Plugin Setup
+
+```cpp
+IPlugWebUI::IPlugWebUI(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kGain)->InitGain("Gain", -70., -70, 0.);
+  
+#ifdef DEBUG
+  SetEnableDevTools(true);  // Enable browser dev tools
+#endif
+  
+  mEditorInitFunc = [&]()
+  {
+    LoadIndexHtml(__FILE__, GetBundleID());
+    EnableScroll(false);
+  };
+  
+  MakePreset("One", -70.);
+  MakePreset("Two", -30.);
+  MakePreset("Three", 0.);
+}
+```
+
+<Info>
+  `LoadIndexHtml()` loads the HTML file from your plugin's resources folder. The WebView automatically finds `index.html` in `resources/web/`.
+</Info>
+
+## HTML Structure
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style type="text/css">
+    * {
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+    }
+  
+    body {
+      overflow: hidden;
+      padding: 0 20px;
+      background-color: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", 
+        Roboto, Helvetica, Arial, sans-serif;
+    }
+    
+    button-control,
+    knob-control {
+      font-family: inherit;
+    }
+  </style>
+  
+  <script src="script.js"></script>
+  <script type="module" src="knob-control.js"></script>
+  <script type="module" src="button-control.js"></script>
+  <script>
+    function OnParamChange(param, value) {
+      // Find the knob control with matching param-id
+      const knob = document.querySelector(`knob-control[param-id="${param}"]`);
+      if (knob) {
+        knob.updateValueFromHost(value);
+      }
+    }
+  </script>
+</head>
+<body>
+  <h1>IPlugWebView - testing UI</h1>
+  <div class="controls-container">
+    <div class="button-group">
+      <button-control onclick="SAMFUI(0)">Small GUI</button-control>
+      <button-control onclick="SAMFUI(1)">Medium GUI</button-control>
+      <button-control onclick="SAMFUI(2)">Large GUI</button-control>
+    </div>
+    
+    <div class="knob-container">
+      <knob-control label="Gain" param-id=0></knob-control>
+    </div>
+  </div>
+</body>
+</html>
+```
+
+## JavaScript Communication API
+
+The `script.js` file provides functions for bidirectional communication:
+
+### From C++ to JavaScript
+
+```javascript
+// Called when parameter changes from host/automation
+function SPVFD(paramIdx, val) {
+  console.log("paramIdx: " + paramIdx + " value:" + val);
+  OnParamChange(paramIdx, val);
+}
+
+// Called for control messages
+function SCMFD(ctrlTag, msgTag, msg) {
+  console.log("ctrlTag: " + ctrlTag + " msgTag:" + msgTag);
+}
+
+// Called for arbitrary messages
+function SAMFD(msgTag, dataSize, msg) {
+  OnMessage(msgTag, dataSize, msg);
+}
+
+// Called for MIDI messages
+function SMMFD(statusByte, dataByte1, dataByte2) {
+  console.log("Got MIDI Message" + status + ":" + dataByte1 + ":" + dataByte2);
+}
+```
+
+### From JavaScript to C++
+
+```javascript
+// Send arbitrary message
+function SAMFUI(msgTag, ctrlTag = -1, data = 0) {
+  var message = {
+    "msg": "SAMFUI",
+    "msgTag": msgTag,
+    "ctrlTag": ctrlTag,
+    "data": data  // base64 encoded string
+  };
+  IPlugSendMsg(message);
+}
+
+// Send MIDI message
+function SMMFUI(statusByte, dataByte1, dataByte2) {
+  var message = {
+    "msg": "SMMFUI",
+    "statusByte": statusByte,
+    "dataByte1": dataByte1,
+    "dataByte2": dataByte2
+  };
+  IPlugSendMsg(message);
+}
+
+// Begin parameter change (start gesture)
+function BPCFUI(paramIdx) {
+  var message = {
+    "msg": "BPCFUI",
+    "paramIdx": parseInt(paramIdx),
+  };
+  IPlugSendMsg(message);
+}
+
+// Send parameter value
+function SPVFUI(paramIdx, value) {
+  var message = {
+    "msg": "SPVFUI",
+    "paramIdx": parseInt(paramIdx),
+    "value": value  // normalized 0-1
+  };
+  IPlugSendMsg(message);
+}
+
+// End parameter change (end gesture)
+function EPCFUI(paramIdx) {
+  var message = {
+    "msg": "EPCFUI",
+    "paramIdx": parseInt(paramIdx),
+  };
+  IPlugSendMsg(message);
+}
+```
+
+<Note>
+  Always call `BPCFUI` before sending parameter changes and `EPCFUI` after to properly notify the host of automation gestures.
+</Note>
+
+## Custom Web Component: Knob Control
+
+The example includes a custom `<knob-control>` web component:
+
+```javascript
+class KnobControl extends HTMLElement {
+  constructor() {
+    super();
+    
+    this.paramId = 0;
+    this.defaultValue = 0.0;
+    this.value = 0.0;
+    this.label = this.getAttribute('label') || '';
+    this.minValue = parseFloat(this.getAttribute('min')) || 0;
+    this.maxValue = parseFloat(this.getAttribute('max')) || 100;
+    
+    this.attachShadow({ mode: 'open' });
+    this.shadowRoot.innerHTML = `
+      <style>
+        .container {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+        }
+        .label {
+          margin-bottom: 8px;
+          color: black;
+          font-size: 14px;
+        }
+      </style>
+      <div class="container">
+        <div class="label">${this.label}</div>
+        <svg viewBox="0 0 100 100" width="80" height="80">
+          <circle cx="50" cy="50" r="42" fill="#000" 
+            stroke="#fff" stroke-width="2"></circle>
+          <line class="pointer" x1="50" y1="10" x2="50" y2="50" 
+            stroke="#f00" stroke-width="4"></line>
+        </svg>
+        <div class="value">0</div>
+      </div>
+    `;
+  }
+  
+  connectedCallback() {
+    this.paramId = this.getAttribute('param-id') || -1;
+    this.setupInteraction();
+  }
+  
+  setupInteraction() {
+    const circle = this.shadowRoot.querySelector('circle');
+    
+    circle.addEventListener('mousedown', (e) => {
+      BPCFUI(this.paramId);  // Begin gesture
+      
+      const initialY = e.clientY;
+      const initialValue = this.value;
+      
+      const onMove = (e) => {
+        const deltaY = initialY - e.clientY;
+        const valueChange = deltaY * (this.maxValue - this.minValue) / 100;
+        const value = Math.min(Math.max(
+          initialValue + valueChange, 
+          this.minValue
+        ), this.maxValue);
+        
+        this.updateValue(value);
+      };
+      
+      const onEnd = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onEnd);
+        EPCFUI(this.paramId);  // End gesture
+      };
+      
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onEnd);
+    });
+  }
+  
+  updateValue(value) {
+    this.value = value;
+    const normValue = (value - this.minValue) / (this.maxValue - this.minValue);
+    SPVFUI(this.paramId, normValue);
+    
+    // Update visual representation
+    const angle = -135 + normValue * 270;
+    const pointer = this.shadowRoot.querySelector('.pointer');
+    pointer.setAttribute('transform', `rotate(${angle}, 50, 50)`);
+  }
+  
+  updateValueFromHost(normalizedValue) {
+    const value = this.minValue + 
+      (normalizedValue * (this.maxValue - this.minValue));
+    this.value = value;
+    // Update visual without sending back to host
+  }
+}
+
+customElements.define('knob-control', KnobControl);
+```
+
+## Handling Messages in C++
+
+```cpp
+bool IPlugWebUI::OnMessage(int msgTag, int ctrlTag, int dataSize, const void* pData)
+{
+  if (msgTag == kMsgTagButton1)
+    Resize(512, 335);
+  else if(msgTag == kMsgTagButton2)
+    Resize(1024, 335);
+  else if(msgTag == kMsgTagButton3)
+    Resize(1024, 768);
+  else if (msgTag == kMsgTagBinaryTest)
+  {
+    auto uint8Data = reinterpret_cast<const uint8_t*>(pData);
+    DBGMSG("Data Size %i bytes\n",  dataSize);
+    DBGMSG("Byte values: %i, %i, %i, %i\n", 
+      uint8Data[0], uint8Data[1], uint8Data[2], uint8Data[3]);
+  }
+
+  return false;
+}
+```
+
+## File Operations
+
+### Download Handling
+
+```cpp
+bool IPlugWebUI::OnCanDownloadMIMEType(const char* mimeType)
+{
+  return std::string_view(mimeType) != "text/html";
+}
+
+void IPlugWebUI::OnDownloadedFile(const char* path)
+{
+  WDL_String str;
+  str.SetFormatted(64, "Downloaded file to %s\n", path);
+  LoadHTML(str.Get());
+}
+
+void IPlugWebUI::OnGetLocalDownloadPathForFile(
+  const char* fileName, 
+  WDL_String& localPath
+) {
+  DesktopPath(localPath);
+  localPath.AppendFormatted(MAX_WIN32_PATH_LEN, "/%s", fileName);
+}
+```
+
+### Drag-and-Drop in HTML
+
+```html
+<div id="dropzone" class="dropzone">
+  <p>Drag and drop a WAV file here</p>
+</div>
+
+<script>
+  const dropzone = document.getElementById('dropzone');
+  
+  dropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    
+    if (file && file.type === 'audio/x-wav') {
+      // Handle file upload
+      console.log('Dropped file:', file.name);
+    }
+  });
+</script>
+```
+
+## Development Tools
+
+<Tabs>
+  <Tab title="Chrome DevTools">
+    Enable browser developer tools for debugging:
+    
+    ```cpp
+    #ifdef DEBUG
+    SetEnableDevTools(true);
+    #endif
+    ```
+    
+    Right-click in the plugin window to open DevTools.
+  </Tab>
+  
+  <Tab title="Live Reload">
+    For faster development, load from localhost:
+    
+    ```cpp
+    mEditorInitFunc = [&]() {
+    #ifdef DEBUG
+      LoadURL("http://localhost:5173/");
+    #else
+      LoadIndexHtml(__FILE__, GetBundleID());
+    #endif
+      EnableScroll(false);
+    };
+    ```
+    
+    Run a local dev server (Vite, webpack-dev-server, etc.) for live reload.
+  </Tab>
+</Tabs>
+
+## Communication Patterns
+
+<Steps>
+  <Step title="Parameter editing gesture">
+    Call `BPCFUI(paramIdx)` when user starts interacting.
+  </Step>
+  
+  <Step title="Send parameter values">
+    Call `SPVFUI(paramIdx, normalizedValue)` for each value update.
+  </Step>
+  
+  <Step title="End editing gesture">
+    Call `EPCFUI(paramIdx)` when user finishes interacting.
+  </Step>
+  
+  <Step title="Handle parameter updates">
+    Implement `OnParamChange()` in JavaScript to receive automation.
+  </Step>
+</Steps>
+
+## Advantages of Web UI
+
+<CardGroup cols={2}>
+  <Card title="Cross-Platform" icon="globe">
+    Identical UI on Windows, macOS, iOS, and Web (WASM)
+  </Card>
+  <Card title="Rich Ecosystem" icon="box">
+    Use any web framework, library, or component
+  </Card>
+  <Card title="Fast Iteration" icon="bolt">
+    Hot reload during development, no recompilation
+  </Card>
+  <Card title="Web Standards" icon="code">
+    CSS animations, SVG graphics, Canvas, WebGL
+  </Card>
+</CardGroup>
+
+<Warning>
+  Web UIs have higher baseline memory usage than native UIs. Consider this for plugins that need minimal resource usage.
+</Warning>
+
+## Related Examples
+
+- [Svelte UI](/examples/svelte-ui) - Modern reactive framework with Svelte
+- [P5.js](/examples/p5js) - Creative coding with P5.js
+- [Responsive UI](/examples/responsive-ui) - IGraphics responsive layout

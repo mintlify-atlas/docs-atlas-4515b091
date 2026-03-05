@@ -1,0 +1,449 @@
+---
+title: WAM Platform API
+description: Web Audio Module API implementation for browser-based iPlug2 plugins
+---
+
+# WAM Platform API
+
+The WAM (Web Audio Module) implementation enables iPlug2 plugins to run in web browsers using WebAssembly and the Web Audio API.
+
+## Overview
+
+The `IPlugWAM` class implements the WAM specification, allowing audio plugins to run as AudioWorklet processors in modern web browsers. The plugin runs in the AudioWorkletGlobalScope, sandboxed from the main JavaScript thread.
+
+<Info>
+WAM (Web Audio Module) is a standard for audio plugins on the web, using WebAssembly for DSP and the Web Audio API for audio routing. iPlug2 compiles your C++ plugin to WASM for near-native performance in the browser.
+</Info>
+
+## Core Class
+
+### IPlugWAM
+
+Defined in: `IPlug/WEB/IPlugWAM.h`
+
+```cpp
+class IPlugWAM : public IPlugAPIBase
+               , public IPlugProcessor
+               , public Processor
+```
+
+Inherits from:
+- `IPlugAPIBase` - Core iPlug API interface
+- `IPlugProcessor` - Audio processing interface
+- `WAM::Processor` - WAM processor base class
+
+<Note>
+The WAM processor runs in the AudioWorkletGlobalScope, completely isolated from the main thread. All communication with the UI uses message passing.
+</Note>
+
+## Key Methods
+
+### WAM Lifecycle
+
+#### init
+```cpp
+const char* init(uint32_t bufsize, uint32_t sr, void* pDesc) override;
+```
+Initializes the WAM processor.
+
+**Parameters:**
+- `bufsize` - Buffer size in frames
+- `sr` - Sample rate in Hz
+- `pDesc` - Descriptor information
+
+**Returns:** `nullptr` on success, error message on failure
+
+#### terminate
+```cpp
+void terminate() override;
+```
+Cleans up the WAM processor.
+
+**Called:** When the processor is destroyed.
+
+#### resize
+```cpp
+void resize(uint32_t bufsize) override;
+```
+Handles buffer size changes.
+
+**Parameters:**
+- `bufsize` - New buffer size in frames
+
+### Audio Processing
+
+#### onProcess
+```cpp
+void onProcess(WAM::AudioBus* pAudio, void* pData) override;
+```
+Main audio processing callback.
+
+**Parameters:**
+- `pAudio` - Audio bus with input/output buffers
+- `pData` - Additional processing data
+
+**Called:** From the audio thread for each processing block.
+
+<Warning>
+This runs in the AudioWorklet thread. Keep processing real-time safe: no allocations, no blocking calls.
+</Warning>
+
+### MIDI Handling
+
+#### onMidi
+```cpp
+void onMidi(byte status, byte data1, byte data2) override;
+```
+Receives MIDI messages.
+
+**Parameters:**
+- `status` - MIDI status byte
+- `data1` - First data byte
+- `data2` - Second data byte
+
+**Example:**
+```cpp
+void MyPlugin::onMidi(byte status, byte data1, byte data2)
+{
+  IMidiMsg msg(0, status, data1, data2);
+  ProcessMidiMsg(msg);
+}
+```
+
+#### onSysex
+```cpp
+void onSysex(byte* pData, uint32_t size) override;
+```
+Receives System Exclusive messages.
+
+**Parameters:**
+- `pData` - SysEx data buffer
+- `size` - Data size in bytes
+
+### Parameter Handling
+
+#### onParam
+```cpp
+void onParam(uint32_t idparam, double value) override;
+```
+Receives parameter changes from the UI or host.
+
+**Parameters:**
+- `idparam` - Parameter ID
+- `value` - New parameter value
+
+**Called:** When a parameter changes in the UI.
+
+### Messaging
+
+WAM uses a message-passing system for communication between the UI and audio processor.
+
+#### onMessage (String Data)
+```cpp
+void onMessage(char* verb, char* res, char* data) override;
+```
+Receives string messages.
+
+**Parameters:**
+- `verb` - Message verb (command)
+- `res` - Resource identifier
+- `data` - String data
+
+#### onMessage (Numeric Data)
+```cpp
+void onMessage(char* verb, char* res, double data) override;
+```
+Receives numeric messages.
+
+**Parameters:**
+- `verb` - Message verb
+- `res` - Resource identifier
+- `data` - Numeric data
+
+#### onMessage (Binary Data)
+```cpp
+void onMessage(char* verb, char* res, void* data, uint32_t size) override;
+```
+Receives binary messages.
+
+**Parameters:**
+- `verb` - Message verb
+- `res` - Resource identifier
+- `data` - Binary data buffer
+- `size` - Data size in bytes
+
+## IPlug Processor Overrides
+
+### SetLatency
+```cpp
+void SetLatency(int samples) override;
+```
+Sets latency (no-op in WAM).
+
+**Parameters:**
+- `samples` - Latency in samples
+
+<Note>
+Latency compensation is handled by the Web Audio API automatically.
+</Note>
+
+### SendMidiMsg
+```cpp
+bool SendMidiMsg(const IMidiMsg& msg) override;
+```
+Sends MIDI output (not supported in WAM).
+
+**Parameters:**
+- `msg` - MIDI message
+
+**Returns:** `false` (MIDI output not supported)
+
+### SendSysEx
+```cpp
+bool SendSysEx(const ISysEx& msg) override;
+```
+Sends SysEx output (not supported in WAM).
+
+**Parameters:**
+- `msg` - SysEx message
+
+**Returns:** `false` (SysEx output not supported)
+
+## Editor Delegate Overrides
+
+WAM overrides editor communication methods to use the WAM messaging system:
+
+### SendControlValueFromDelegate
+```cpp
+void SendControlValueFromDelegate(int ctrlTag, double normalizedValue) override;
+```
+Sends a control value change from the UI to audio processor.
+
+**Parameters:**
+- `ctrlTag` - Control tag
+- `normalizedValue` - Normalized value (0.0 to 1.0)
+
+### SendControlMsgFromDelegate
+```cpp
+void SendControlMsgFromDelegate(
+    int ctrlTag,
+    int msgTag,
+    int dataSize,
+    const void* pData) override;
+```
+Sends a control message from UI to audio processor.
+
+**Parameters:**
+- `ctrlTag` - Control tag
+- `msgTag` - Message tag
+- `dataSize` - Data size in bytes
+- `pData` - Message data
+
+### SendParameterValueFromDelegate
+```cpp
+void SendParameterValueFromDelegate(
+    int paramIdx,
+    double value,
+    bool normalized) override;
+```
+Sends a parameter value from UI to audio processor.
+
+**Parameters:**
+- `paramIdx` - Parameter index
+- `value` - Parameter value
+- `normalized` - Whether value is normalized
+
+### SendArbitraryMsgFromDelegate
+```cpp
+void SendArbitraryMsgFromDelegate(
+    int msgTag,
+    int dataSize = 0,
+    const void* pData = nullptr) override;
+```
+Sends an arbitrary message from UI to audio processor.
+
+**Parameters:**
+- `msgTag` - Message tag
+- `dataSize` - Data size in bytes
+- `pData` - Message data
+
+## Factory Function
+
+### MakePlug
+```cpp
+IPlugWAM* MakePlug(const InstanceInfo& info);
+```
+Factory function to create WAM processor instances.
+
+**Parameters:**
+- `info` - Instance information (empty for WAM)
+
+**Returns:** Pointer to new plugin instance
+
+**Example:**
+```cpp
+IPlugWAM* MakePlug(const InstanceInfo& info)
+{
+  return new MyPlugin(info, MakeConfig(kNumParams, kNumPresets));
+}
+```
+
+## Building for Web
+
+### Emscripten Compilation
+
+WAM plugins compile to WebAssembly using Emscripten:
+
+```bash
+# Build WAM target
+./duplicate.py MyPlugin --web
+cd MyPlugin-web
+./build-web.sh
+```
+
+### Build Configuration
+
+Emscripten compiler flags (in build scripts):
+
+```bash
+emcc \
+  -O3 \
+  -s WASM=1 \
+  -s AUDIO_WORKLET=1 \
+  -s ALLOW_MEMORY_GROWTH=1 \
+  -s MODULARIZE=1 \
+  -s EXPORT_ES6=1
+```
+
+<CardGroup cols={2}>
+  <Card title="Optimization" icon="gauge-high">
+    **Emscripten Flags:**
+    - `-O3` - Maximum optimization
+    - `-Os` - Optimize for size
+    - `--closure` - Google Closure Compiler
+  </Card>
+  
+  <Card title="Features" icon="gear">
+    **WASM Options:**
+    - `AUDIO_WORKLET=1` - Enable AudioWorklet
+    - `ALLOW_MEMORY_GROWTH=1` - Dynamic memory
+    - `MODULARIZE=1` - Module export
+  </Card>
+</CardGroup>
+
+## Web Audio Integration
+
+### HTML Integration
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <title>My WAM Plugin</title>
+</head>
+<body>
+  <div id="plugin-container"></div>
+  
+  <script type="module">
+    import { loadWAM } from './MyPlugin.js';
+    
+    async function init() {
+      const audioContext = new AudioContext();
+      
+      // Load WAM
+      const wam = await loadWAM(audioContext);
+      
+      // Connect to audio graph
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(wam.audioNode);
+      wam.audioNode.connect(audioContext.destination);
+      
+      // Mount UI
+      const container = document.getElementById('plugin-container');
+      container.appendChild(wam.domElement);
+    }
+    
+    init();
+  </script>
+</body>
+</html>
+```
+
+### WAM API Usage
+
+```javascript
+// Set parameter
+await wam.setParameter(paramId, value);
+
+// Get parameter
+const value = await wam.getParameter(paramId);
+
+// Send MIDI
+wam.sendMidi([0x90, 60, 100]); // Note on, middle C, velocity 100
+
+// Save state
+const state = await wam.getState();
+
+// Load state
+await wam.setState(state);
+```
+
+## Limitations
+
+<Warning>
+**No File I/O**: WAM plugins cannot access the file system directly. Use the File API for user file access.
+</Warning>
+
+<Warning>
+**No MIDI Output**: MIDI output is not supported in the current WAM specification.
+</Warning>
+
+<Warning>
+**Memory Constraints**: Browsers limit WASM memory. Keep sample libraries and buffers reasonable in size.
+</Warning>
+
+<Info>
+**Threading**: JavaScript is single-threaded. All audio processing must complete within the AudioWorklet processing callback.
+</Info>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Code Size" icon="compress">
+    Minimize WASM binary size. Users download it on page load. Use `-Os` optimization and link-time optimization.
+  </Card>
+  
+  <Card title="Startup Time" icon="stopwatch">
+    Optimize initialization. The `init()` method should complete quickly to avoid blocking the audio thread.
+  </Card>
+  
+  <Card title="UI Performance" icon="gauge">
+    Keep UI lightweight. Use efficient graphics and minimize DOM manipulation for smooth performance.
+  </Card>
+  
+  <Card title="Browser Testing" icon="browser">
+    Test in multiple browsers. Chrome, Firefox, Safari, and Edge have different WASM performance characteristics.
+  </Card>
+</CardGroup>
+
+## Common Issues
+
+<Tip>
+**Debugging**: Use browser DevTools for debugging. Set breakpoints in WASM code with source maps enabled.
+</Tip>
+
+<Tip>
+**CORS Issues**: Serve WASM files with proper MIME types and CORS headers when hosting on a web server.
+</Tip>
+
+<Tip>
+**Audio Glitches**: If you experience glitches, check AudioWorklet buffer sizes and reduce DSP complexity.
+</Tip>
+
+## Related Documentation
+
+- [IPlugAPIBase](/api/core/iplugapibase) - Base API functionality
+- [IPlugProcessor](/api/core/iplugprocessor) - Audio processing interface
+- [Web Build Guide](/guides/web-builds) - Building for web platforms
+- [WAM Specification](https://www.webaudiomodules.org/) - Official WAM documentation
+- [Emscripten Documentation](https://emscripten.org/docs/) - WebAssembly compiler docs

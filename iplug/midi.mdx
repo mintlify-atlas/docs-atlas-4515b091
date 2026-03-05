@@ -1,0 +1,638 @@
+---
+title: 'MIDI Handling'
+description: 'Process MIDI messages, SysEx, and MIDI queues in iPlug2'
+---
+
+iPlug2 provides comprehensive MIDI support through the `IMidiMsg` and `ISysEx` structs, along with `IMidiQueue` for timestamped message handling.
+
+## MIDI Configuration
+
+Enable MIDI in your plugin's `config.h`:
+
+```cpp config.h
+#define PLUG_TYPE 0              // 0=Effect, 1=Instrument, 2=MIDI Effect
+#define PLUG_DOES_MIDI_IN 1      // Enable MIDI input
+#define PLUG_DOES_MIDI_OUT 0     // Enable MIDI output
+#define PLUG_DOES_MPE 0          // MIDI Polyphonic Expression
+```
+
+### Query MIDI Support
+
+```cpp
+bool DoesMIDIIn() const;   // PLUG_DOES_MIDI_IN
+bool DoesMIDIOut() const;  // PLUG_DOES_MIDI_OUT
+bool DoesMPE() const;      // PLUG_DOES_MPE
+```
+
+## IMidiMsg Structure
+
+### Basic Structure
+
+```cpp IPlugMidi.h
+struct IMidiMsg
+{
+  int mOffset;        // Sample offset in current block
+  uint8_t mStatus;    // Status byte (type + channel)
+  uint8_t mData1;     // First data byte
+  uint8_t mData2;     // Second data byte
+};
+```
+
+### MIDI Status Messages
+
+```cpp
+enum EStatusMsg
+{
+  kNone = 0,
+  kNoteOff = 8,
+  kNoteOn = 9,
+  kPolyAftertouch = 10,
+  kControlChange = 11,
+  kProgramChange = 12,
+  kChannelAftertouch = 13,
+  kPitchWheel = 14
+};
+```
+
+## Receiving MIDI
+
+### ProcessMidiMsg
+
+Override to handle incoming MIDI messages:
+
+```cpp
+virtual void ProcessMidiMsg(const IMidiMsg& msg);
+
+// Example: Simple synthesizer
+void ProcessMidiMsg(const IMidiMsg& msg) override
+{
+  switch (msg.StatusMsg())
+  {
+    case IMidiMsg::kNoteOn:
+    {
+      int note = msg.NoteNumber();
+      int velocity = msg.Velocity();
+      int channel = msg.Channel();
+      
+      if (velocity > 0)
+        mVoiceManager.NoteOn(note, velocity);
+      else
+        mVoiceManager.NoteOff(note);
+      break;
+    }
+    
+    case IMidiMsg::kNoteOff:
+    {
+      int note = msg.NoteNumber();
+      mVoiceManager.NoteOff(note);
+      break;
+    }
+    
+    case IMidiMsg::kPitchWheel:
+    {
+      double bend = msg.PitchWheel();  // Range: [-1, 1]
+      mPitchBend = bend * 2.0;  // ±2 semitones
+      break;
+    }
+    
+    case IMidiMsg::kControlChange:
+    {
+      int cc = msg.ControlChangeIdx();
+      double value = msg.ControlChange(cc);  // [0, 1]
+      
+      if (cc == IMidiMsg::kModWheel)
+        mModulation = value;
+      break;
+    }
+  }
+}
+```
+
+<Warning>
+**Realtime Safety**
+
+`ProcessMidiMsg()` is called on the audio thread before `ProcessBlock()`. Follow realtime-safe practices:
+- ✅ Store messages for processing
+- ✅ Update synthesis parameters
+- ❌ Don't allocate memory
+- ❌ Don't acquire locks
+</Warning>
+
+## Creating MIDI Messages
+
+### Note Messages
+
+```cpp
+// Note On
+void MakeNoteOnMsg(int noteNumber, int velocity, int offset, int channel = 0);
+
+IMidiMsg msg;
+msg.MakeNoteOnMsg(60, 100, 0, 0);  // Middle C, velocity 100, channel 1
+
+// Note Off
+void MakeNoteOffMsg(int noteNumber, int offset, int channel = 0);
+
+msg.MakeNoteOffMsg(60, 512, 0);  // Note off at sample 512
+```
+
+### Control Change
+
+```cpp
+void MakeControlChangeMsg(EControlChangeMsg idx, double value, 
+                          int channel = 0, int offset = 0);
+
+// Value range: [0, 1] normalized
+msg.MakeControlChangeMsg(IMidiMsg::kModWheel, 0.5, 0, 0);
+msg.MakeControlChangeMsg(IMidiMsg::kSustainOnOff, 1.0, 0, 0);
+```
+
+### Pitch Wheel
+
+```cpp
+void MakePitchWheelMsg(double value, int channel = 0, int offset = 0);
+
+// Value range: [-1, 1] where 0 = no pitch change
+msg.MakePitchWheelMsg(0.0, 0, 0);    // Center
+msg.MakePitchWheelMsg(1.0, 0, 0);    // Max up
+msg.MakePitchWheelMsg(-1.0, 0, 0);   // Max down
+```
+
+### Program Change
+
+```cpp
+void MakeProgramChange(int program, int channel = 0, int offset = 0);
+
+msg.MakeProgramChange(42, 0, 0);  // Select program 42
+```
+
+### Aftertouch
+
+```cpp
+// Channel Aftertouch
+void MakeChannelATMsg(int pressure, int offset, int channel);
+
+msg.MakeChannelATMsg(64, 0, 0);  // Pressure 64
+
+// Polyphonic Aftertouch
+void MakePolyATMsg(int noteNumber, int pressure, int offset, int channel);
+
+msg.MakePolyATMsg(60, 100, 0, 0);  // Note 60, pressure 100
+```
+
+## Querying MIDI Messages
+
+### Message Type and Channel
+
+```cpp
+IMidiMsg::EStatusMsg StatusMsg() const;  // Message type
+int Channel() const;                     // [0, 15] for channels 1-16
+
+// Example
+if (msg.StatusMsg() == IMidiMsg::kNoteOn)
+{
+  int midiChannel = msg.Channel() + 1;  // Convert to 1-16
+  DBGMSG("Note on channel %d\n", midiChannel);
+}
+```
+
+### Note Information
+
+```cpp
+int NoteNumber() const;     // [0, 127] or -1 if N/A
+int Velocity() const;       // [0, 127] or -1 if N/A
+
+// Example
+if (msg.StatusMsg() == IMidiMsg::kNoteOn)
+{
+  int note = msg.NoteNumber();
+  int vel = msg.Velocity();
+  
+  if (vel > 0)
+    StartNote(note, vel);
+  else
+    StopNote(note);  // Velocity 0 = note off
+}
+```
+
+### Control Change
+
+```cpp
+IMidiMsg::EControlChangeMsg ControlChangeIdx() const;
+double ControlChange(EControlChangeMsg idx) const;  // [0, 1] or -1 if N/A
+
+// Example
+if (msg.StatusMsg() == IMidiMsg::kControlChange)
+{
+  auto ccIdx = msg.ControlChangeIdx();
+  
+  switch (ccIdx)
+  {
+    case IMidiMsg::kModWheel:
+      mModDepth = msg.ControlChange(ccIdx);
+      break;
+      
+    case IMidiMsg::kSustainOnOff:
+      mSustain = IMidiMsg::ControlChangeOnOff(msg.ControlChange(ccIdx));
+      break;
+  }
+}
+```
+
+### Pitch Wheel
+
+```cpp
+double PitchWheel() const;  // [-1, 1] or 0 if N/A
+
+double bend = msg.PitchWheel();
+mPitchBendSemitones = bend * 2.0;  // ±2 semitones range
+```
+
+### Other Messages
+
+```cpp
+int Program() const;           // [0, 127] or -1 if N/A
+int ChannelAfterTouch() const; // [0, 127] or -1 if N/A
+int PolyAfterTouch() const;    // [0, 127] or -1 if N/A
+```
+
+## MIDI Control Change Constants
+
+```cpp
+enum EControlChangeMsg
+{
+  kModWheel = 1,
+  kBreathController = 2,
+  kFootController = 4,
+  kPortamentoTime = 5,
+  kChannelVolume = 7,
+  kBalance = 8,
+  kPan = 10,
+  kExpressionController = 11,
+  kSustainOnOff = 64,
+  kPortamentoOnOff = 65,
+  kSustenutoOnOff = 66,
+  kSoftPedalOnOff = 67,
+  kLegatoOnOff = 68,
+  kResonance = 71,
+  kReleaseTime = 72,
+  kAttackTime = 73,
+  kCutoffFrequency = 74,
+  kAllNotesOff = 123
+  // ... and more
+};
+
+// Get CC name as string
+const char* CCNameStr(int idx);
+DBGMSG("CC: %s\n", IMidiMsg::CCNameStr(1));  // "Modulation"
+```
+
+## Sending MIDI
+
+Plugins can send MIDI output (if `PLUG_DOES_MIDI_OUT` is enabled):
+
+```cpp
+virtual bool SendMidiMsg(const IMidiMsg& msg) = 0;
+virtual bool SendMidiMsgs(WDL_TypedBuf<IMidiMsg>& msgs);
+
+// Example: MIDI arpeggiator effect
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  // Generate arpeggiated notes
+  IMidiMsg noteOn, noteOff;
+  
+  noteOn.MakeNoteOnMsg(60, 100, 0, 0);
+  SendMidiMsg(noteOn);
+  
+  noteOff.MakeNoteOffMsg(60, nFrames - 1, 0);
+  SendMidiMsg(noteOff);
+  
+  // Pass through audio
+  PassThroughBuffers(0.f, nFrames);
+}
+```
+
+## SysEx Messages
+
+### ISysEx Structure
+
+```cpp
+struct ISysEx
+{
+  int mOffset;           // Sample offset
+  int mSize;             // Size in bytes
+  const uint8_t* mData;  // Pointer to data (not owned)
+};
+```
+
+### Processing SysEx
+
+```cpp
+virtual void ProcessSysEx(const ISysEx& msg);
+virtual bool SendSysEx(const ISysEx& msg);
+
+// Example
+void ProcessSysEx(const ISysEx& msg) override
+{
+  // Check manufacturer ID (first byte after 0xF0)
+  if (msg.mSize > 1 && msg.mData[0] == 0x43)  // Yamaha
+  {
+    // Parse SysEx message
+    ParseYamahaSysEx(msg.mData, msg.mSize);
+  }
+}
+```
+
+<Note>
+`ISysEx` does not own the data. The pointer is only valid during the callback. Copy the data if you need to store it.
+</Note>
+
+## IMidiQueue - Timestamped Messages
+
+For accurate timing, use `IMidiQueue` to queue messages with sample offsets:
+
+```cpp
+class IMidiQueue
+{
+public:
+  IMidiQueue(int size = DEFAULT_BLOCK_SIZE);
+  
+  void Add(const IMidiMsg& msg);  // Add message
+  void Remove();                  // Remove front message
+  bool Empty() const;             // Queue empty?
+  int ToDo() const;               // Messages remaining
+  IMidiMsg& Peek() const;         // Get next message (don't remove)
+  void Flush(int nFrames);        // Update offsets, compact
+  void Clear();                   // Clear queue
+  int Resize(int size);           // Resize queue
+};
+```
+
+### Example: Using IMidiQueue
+
+```cpp
+class MySynth : public iplug::Plugin
+{
+public:
+  MySynth(const InstanceInfo& info)
+  : Plugin(info, MakeConfig(kNumParams, kNumPresets))
+  {}
+  
+  void OnReset() override
+  {
+    mMidiQueue.Resize(GetBlockSize());
+  }
+  
+  void ProcessMidiMsg(const IMidiMsg& msg) override
+  {
+    // Queue timestamped messages
+    mMidiQueue.Add(msg);
+  }
+  
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+  {
+    // Process queued MIDI messages at correct sample offsets
+    for (int s = 0; s < nFrames; s++)
+    {
+      // Process all MIDI messages at this sample
+      while (!mMidiQueue.Empty())
+      {
+        IMidiMsg& msg = mMidiQueue.Peek();
+        if (msg.mOffset > s) break;  // Future message
+        
+        // Handle message at exact sample offset
+        switch (msg.StatusMsg())
+        {
+          case IMidiMsg::kNoteOn:
+            if (msg.Velocity() > 0)
+              mVoiceManager.NoteOn(msg.NoteNumber(), msg.Velocity());
+            else
+              mVoiceManager.NoteOff(msg.NoteNumber());
+            break;
+            
+          case IMidiMsg::kNoteOff:
+            mVoiceManager.NoteOff(msg.NoteNumber());
+            break;
+        }
+        
+        mMidiQueue.Remove();
+      }
+      
+      // Synthesize audio for this sample
+      double sample = mVoiceManager.Process();
+      outputs[0][s] = sample;
+      outputs[1][s] = sample;
+    }
+    
+    // Update remaining message offsets for next block
+    mMidiQueue.Flush(nFrames);
+  }
+  
+private:
+  IMidiQueue mMidiQueue;
+  VoiceManager mVoiceManager;
+};
+```
+
+## MIDI Learn Example
+
+```cpp
+class MyPlugin : public iplug::Plugin
+{
+public:
+  void ProcessMidiMsg(const IMidiMsg& msg) override
+  {
+    if (mMidiLearnMode && msg.StatusMsg() == IMidiMsg::kControlChange)
+    {
+      // Map CC to parameter
+      int cc = msg.ControlChangeIdx();
+      mCCMap[cc] = mMidiLearnParam;
+      mMidiLearnMode = false;
+      DBGMSG("Learned CC %d -> Param %d\n", cc, mMidiLearnParam);
+      return;
+    }
+    
+    // Process mapped CCs
+    if (msg.StatusMsg() == IMidiMsg::kControlChange)
+    {
+      int cc = msg.ControlChangeIdx();
+      auto it = mCCMap.find(cc);
+      if (it != mCCMap.end())
+      {
+        int paramIdx = it->second;
+        double value = msg.ControlChange(cc);
+        GetParam(paramIdx)->SetNormalized(value);
+      }
+    }
+  }
+  
+  void StartMidiLearn(int paramIdx)
+  {
+    mMidiLearnMode = true;
+    mMidiLearnParam = paramIdx;
+  }
+  
+private:
+  bool mMidiLearnMode = false;
+  int mMidiLearnParam = -1;
+  std::map<int, int> mCCMap;  // CC number -> parameter index
+};
+```
+
+## Debugging MIDI
+
+```cpp
+// Log message (trace builds)
+void LogMsg();
+
+// Print message (debug builds)
+void PrintMsg() const;
+
+// Get status as string
+static const char* StatusMsgStr(EStatusMsg msg);
+
+// Example
+void ProcessMidiMsg(const IMidiMsg& msg) override
+{
+#ifdef _DEBUG
+  msg.PrintMsg();
+  // Output: "midi: offset 0, (noteon:0:60:100)"
+#endif
+  
+  // Process message...
+}
+```
+
+## Complete Synth Example
+
+```cpp
+class SimpleSynth : public iplug::Plugin
+{
+public:
+  SimpleSynth(const InstanceInfo& info)
+  : Plugin(info, MakeConfig(kNumParams, kNumPresets))
+  {
+    GetParam(kGain)->InitGain("Gain", 0., -70., 12.);
+    
+    for (int i = 0; i < MAX_VOICES; i++)
+      mVoices[i].SetSampleRate(GetSampleRate());
+  }
+  
+  void OnReset() override
+  {
+    mMidiQueue.Resize(GetBlockSize());
+  }
+  
+  void ProcessMidiMsg(const IMidiMsg& msg) override
+  {
+    mMidiQueue.Add(msg);
+  }
+  
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+  {
+    const double gain = GetParam(kGain)->DBToAmp();
+    
+    // Clear outputs
+    memset(outputs[0], 0, nFrames * sizeof(sample));
+    memset(outputs[1], 0, nFrames * sizeof(sample));
+    
+    for (int s = 0; s < nFrames; s++)
+    {
+      // Process MIDI at this sample
+      while (!mMidiQueue.Empty())
+      {
+        IMidiMsg& msg = mMidiQueue.Peek();
+        if (msg.mOffset > s) break;
+        
+        ProcessMidiMessage(msg);
+        mMidiQueue.Remove();
+      }
+      
+      // Sum all voices
+      double sample = 0.0;
+      for (int v = 0; v < MAX_VOICES; v++)
+      {
+        if (mVoices[v].IsActive())
+          sample += mVoices[v].Process();
+      }
+      
+      outputs[0][s] = sample * gain;
+      outputs[1][s] = sample * gain;
+    }
+    
+    mMidiQueue.Flush(nFrames);
+  }
+  
+private:
+  void ProcessMidiMessage(const IMidiMsg& msg)
+  {
+    switch (msg.StatusMsg())
+    {
+      case IMidiMsg::kNoteOn:
+        if (msg.Velocity() > 0)
+          NoteOn(msg.NoteNumber(), msg.Velocity());
+        else
+          NoteOff(msg.NoteNumber());
+        break;
+        
+      case IMidiMsg::kNoteOff:
+        NoteOff(msg.NoteNumber());
+        break;
+        
+      case IMidiMsg::kPitchWheel:
+        mPitchBend = msg.PitchWheel() * 2.0;  // ±2 semitones
+        break;
+        
+      case IMidiMsg::kControlChange:
+        if (msg.ControlChangeIdx() == IMidiMsg::kAllNotesOff)
+          AllNotesOff();
+        break;
+    }
+  }
+  
+  void NoteOn(int note, int velocity)
+  {
+    // Find free voice
+    for (int v = 0; v < MAX_VOICES; v++)
+    {
+      if (!mVoices[v].IsActive())
+      {
+        mVoices[v].Start(note, velocity / 127.0);
+        return;
+      }
+    }
+    // Voice stealing: steal oldest
+    mVoices[0].Start(note, velocity / 127.0);
+  }
+  
+  void NoteOff(int note)
+  {
+    for (int v = 0; v < MAX_VOICES; v++)
+    {
+      if (mVoices[v].GetNote() == note)
+        mVoices[v].Release();
+    }
+  }
+  
+  void AllNotesOff()
+  {
+    for (int v = 0; v < MAX_VOICES; v++)
+      mVoices[v].Release();
+  }
+  
+  static constexpr int MAX_VOICES = 16;
+  IMidiQueue mMidiQueue;
+  Voice mVoices[MAX_VOICES];
+  double mPitchBend = 0.0;
+};
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Processor" icon="waveform" href="/iplug/processor">
+    Integrate MIDI with audio processing
+  </Card>
+  <Card title="Parameters" icon="sliders" href="/iplug/parameters">
+    Map MIDI CC to parameters
+  </Card>
+</CardGroup>

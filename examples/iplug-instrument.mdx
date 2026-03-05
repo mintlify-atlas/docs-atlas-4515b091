@@ -1,0 +1,538 @@
+---
+title: IPlugInstrument Example
+description: An MPE-capable polyphonic synthesizer demonstrating MIDI processing, voice management, and modulation
+---
+
+IPlugInstrument is a full-featured polyphonic synthesizer example that demonstrates MIDI processing, voice allocation, envelope generators, LFO modulation, and realtime audio visualization.
+
+## What You'll Learn
+
+<CardGroup cols={2}>
+  <Card title="MIDI Processing" icon="music">
+    Handle note on/off, pitch bend, and MPE messages
+  </Card>
+  <Card title="Voice Management" icon="layer-group">
+    Polyphonic synthesis with voice allocation
+  </Card>
+  <Card title="Modulation" icon="wave-square">
+    ADSR envelopes and tempo-synced LFO
+  </Card>
+  <Card title="Data Visualization" icon="chart-line">
+    Send audio data from DSP to UI thread safely
+  </Card>
+</CardGroup>
+
+## Project Structure
+
+```
+Examples/IPlugInstrument/
+├── IPlugInstrument.h         # Plugin class and parameter enum
+├── IPlugInstrument.cpp       # Implementation and UI
+├── IPlugInstrument_DSP.h     # Synthesizer DSP engine
+├── config.h                  # Plugin metadata
+└── resources/                # Assets
+```
+
+<Info>
+This example separates DSP logic into a dedicated header file for better organization.
+</Info>
+
+## Parameters Overview
+
+The synthesizer includes 11 parameters for sound shaping:
+
+```cpp IPlugInstrument.h
+enum EParams
+{
+  kParamGain = 0,
+  kParamNoteGlideTime,
+  kParamAttack,
+  kParamDecay,
+  kParamSustain,
+  kParamRelease,
+  kParamLFOShape,
+  kParamLFORateHz,
+  kParamLFORateTempo,
+  kParamLFORateMode,
+  kParamLFODepth,
+  kNumParams
+};
+```
+
+### Parameter Categories
+
+<Tabs>
+  <Tab title="Gain & Glide">
+    - **Gain**: Master output level (0-100%)
+    - **Note Glide Time**: Portamento/glide between notes (0-30ms)
+  </Tab>
+  <Tab title="ADSR Envelope">
+    - **Attack**: Envelope attack time (1-1000ms)
+    - **Decay**: Envelope decay time (1-1000ms)
+    - **Sustain**: Envelope sustain level (0-100%)
+    - **Release**: Envelope release time (2-1000ms)
+  </Tab>
+  <Tab title="LFO Modulation">
+    - **LFO Shape**: Waveform (Triangle, Sine, Square, etc.)
+    - **LFO Rate Hz**: Free-running rate (0.01-40 Hz)
+    - **LFO Rate Tempo**: Tempo-synced rate (1/1, 1/2, 1/4, etc.)
+    - **LFO Sync**: Toggle between Hz and tempo sync
+    - **LFO Depth**: Modulation amount (0-100%)
+  </Tab>
+</Tabs>
+
+## Parameter Initialization
+
+The constructor shows various parameter initialization techniques:
+
+```cpp IPlugInstrument.cpp
+IPlugInstrument::IPlugInstrument(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kParamGain)->InitDouble("Gain", 100., 0., 100.0, 0.01, "%");
+  GetParam(kParamNoteGlideTime)->InitMilliseconds("Note Glide Time", 0., 0.0, 30.);
+  
+  // ADSR with power curve shaping for natural feel
+  GetParam(kParamAttack)->InitDouble("Attack", 10., 1., 1000., 0.1, "ms", 
+    IParam::kFlagsNone, "ADSR", IParam::ShapePowCurve(3.));
+  GetParam(kParamDecay)->InitDouble("Decay", 10., 1., 1000., 0.1, "ms", 
+    IParam::kFlagsNone, "ADSR", IParam::ShapePowCurve(3.));
+  GetParam(kParamSustain)->InitDouble("Sustain", 50., 0., 100., 1, "%", 
+    IParam::kFlagsNone, "ADSR");
+  GetParam(kParamRelease)->InitDouble("Release", 10., 2., 1000., 0.1, "ms", 
+    IParam::kFlagsNone, "ADSR");
+  
+  // LFO parameters
+  GetParam(kParamLFOShape)->InitEnum("LFO Shape", LFO<>::kTriangle, {LFO_SHAPE_VALIST});
+  GetParam(kParamLFORateHz)->InitFrequency("LFO Rate", 1., 0.01, 40.);
+  GetParam(kParamLFORateTempo)->InitEnum("LFO Rate", LFO<>::k1, {LFO_TEMPODIV_VALIST});
+  GetParam(kParamLFORateMode)->InitBool("LFO Sync", true);
+  GetParam(kParamLFODepth)->InitPercentage("LFO Depth");
+}
+```
+
+<Tip>
+Use `IParam::ShapePowCurve()` to create non-linear parameter curves that feel more natural for time-based parameters.
+</Tip>
+
+## UI Construction
+
+The UI includes multiple control types and interactive elements:
+
+```cpp IPlugInstrument.cpp
+mLayoutFunc = [&](IGraphics* pGraphics) {
+  pGraphics->AttachCornerResizer(EUIResizerMode::Scale, false);
+  pGraphics->AttachPanelBackground(COLOR_GRAY);
+  pGraphics->EnableMouseOver(true);
+  pGraphics->EnableMultiTouch(true);
+  pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
+  
+  const IRECT b = pGraphics->GetBounds().GetPadded(-20.f);
+  
+  // Keyboard at bottom
+  IRECT keyboardBounds = b.GetFromBottom(300);
+  IRECT wheelsBounds = keyboardBounds.ReduceFromLeft(100.f).GetPadded(-10.f);
+  
+  pGraphics->AttachControl(
+    new IVKeyboardControl(keyboardBounds), 
+    kCtrlTagKeyboard
+  );
+  
+  // Pitch bend and mod wheels
+  pGraphics->AttachControl(
+    new IWheelControl(wheelsBounds.FracRectHorizontal(0.5)), 
+    kCtrlTagBender
+  );
+  pGraphics->AttachControl(
+    new IWheelControl(
+      wheelsBounds.FracRectHorizontal(0.5, true), 
+      IMidiMsg::EControlChangeMsg::kModWheel
+    )
+  );
+  
+  // Control knobs
+  const IRECT controls = b.GetGridCell(1, 2, 2);
+  pGraphics->AttachControl(
+    new IVKnobControl(
+      controls.GetGridCell(0, 2, 6).GetCentredInside(90), 
+      kParamGain, 
+      "Gain"
+    )
+  );
+  pGraphics->AttachControl(
+    new IVKnobControl(
+      controls.GetGridCell(1, 2, 6).GetCentredInside(90), 
+      kParamNoteGlideTime, 
+      "Glide"
+    )
+  );
+  
+  // ADSR sliders
+  const IRECT sliders = controls.GetGridCell(2, 2, 6)
+    .Union(controls.GetGridCell(3, 2, 6))
+    .Union(controls.GetGridCell(4, 2, 6));
+  
+  pGraphics->AttachControl(
+    new IVSliderControl(
+      sliders.GetGridCell(0, 1, 4).GetMidHPadded(30.), 
+      kParamAttack, 
+      "Attack"
+    )
+  );
+  pGraphics->AttachControl(
+    new IVSliderControl(
+      sliders.GetGridCell(1, 1, 4).GetMidHPadded(30.), 
+      kParamDecay, 
+      "Decay"
+    )
+  );
+  pGraphics->AttachControl(
+    new IVSliderControl(
+      sliders.GetGridCell(2, 1, 4).GetMidHPadded(30.), 
+      kParamSustain, 
+      "Sustain"
+    )
+  );
+  pGraphics->AttachControl(
+    new IVSliderControl(
+      sliders.GetGridCell(3, 1, 4).GetMidHPadded(30.), 
+      kParamRelease, 
+      "Release"
+    )
+  );
+  
+  // Level meter
+  pGraphics->AttachControl(
+    new IVLEDMeterControl<2>(
+      controls.GetFromRight(100).GetPadded(-30)
+    ), 
+    kCtrlTagMeter
+  );
+};
+```
+
+### Control Tags for Data Sending
+
+Controls that receive realtime data are tagged:
+
+```cpp IPlugInstrument.h
+enum EControlTags
+{
+  kCtrlTagMeter = 0,
+  kCtrlTagLFOVis,
+  kCtrlTagScope,
+  kCtrlTagRTText,
+  kCtrlTagKeyboard,
+  kCtrlTagBender,
+  kNumCtrlTags
+};
+```
+
+<Info>
+Control tags allow you to reference UI elements from the DSP thread to send visualization data.
+</Info>
+
+## MIDI Processing
+
+The plugin processes MIDI messages in `ProcessMidiMsg`:
+
+```cpp IPlugInstrument.cpp
+void IPlugInstrument::ProcessMidiMsg(const IMidiMsg& msg)
+{
+  int status = msg.StatusMsg();
+  
+  switch (status)
+  {
+    case IMidiMsg::kNoteOn:
+    case IMidiMsg::kNoteOff:
+    case IMidiMsg::kPolyAftertouch:
+    case IMidiMsg::kControlChange:
+    case IMidiMsg::kProgramChange:
+    case IMidiMsg::kChannelAftertouch:
+    case IMidiMsg::kPitchWheel:
+    {
+      goto handle;
+    }
+    default:
+      return;
+  }
+  
+handle:
+  mDSP.ProcessMidiMsg(msg);
+  SendMidiMsg(msg);  // Echo to host for MIDI-through
+}
+```
+
+<Steps>
+  <Step title="Filter Messages">
+    Check message status to handle only relevant MIDI messages
+  </Step>
+  <Step title="Pass to DSP">
+    Forward valid messages to the DSP engine's voice allocator
+  </Step>
+  <Step title="Send Through">
+    Echo messages back to host for MIDI monitoring/recording
+  </Step>
+</Steps>
+
+## Audio Processing
+
+The main audio processing delegates to the DSP engine:
+
+```cpp IPlugInstrument.cpp
+void IPlugInstrument::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  // Process synthesizer voices
+  mDSP.ProcessBlock(nullptr, outputs, 2, nFrames, 
+                    mTimeInfo.mPPQPos, 
+                    mTimeInfo.mTransportIsRunning);
+  
+  // Send meter data to UI
+  mMeterSender.ProcessBlock(outputs, nFrames, kCtrlTagMeter);
+  
+  // Send LFO visualization data
+  mLFOVisSender.PushData({
+    kCtrlTagLFOVis, 
+    {float(mDSP.mLFO.GetLastOutput())}
+  });
+}
+```
+
+### Data Transmission to UI
+
+The example uses ISender classes to safely pass data to the UI thread:
+
+```cpp IPlugInstrument.h
+IPeakAvgSender<2> mMeterSender;
+ISender<1> mLFOVisSender;
+```
+
+```cpp IPlugInstrument.cpp
+void IPlugInstrument::OnIdle()
+{
+  mMeterSender.TransmitData(*this);
+  mLFOVisSender.TransmitData(*this);
+}
+```
+
+<Warning>
+Always use ISender classes to pass data from the audio thread to the UI. Direct UI manipulation from `ProcessBlock` is not thread-safe.
+</Warning>
+
+## DSP Engine Architecture
+
+The synthesizer engine is defined in a separate header:
+
+```cpp IPlugInstrument_DSP.h
+template<typename T>
+class IPlugInstrumentDSP
+{
+public:
+  class Voice : public SynthVoice
+  {
+  public:
+    Voice()
+    : mAMPEnv("gain", [&](){ mOSC.Reset(); })
+    {}
+
+    bool GetBusy() const override
+    {
+      return mAMPEnv.GetBusy();
+    }
+
+    void Trigger(double level, bool isRetrigger) override
+    {
+      mOSC.Reset();
+      
+      if(isRetrigger)
+        mAMPEnv.Retrigger(level);
+      else
+        mAMPEnv.Start(level);
+    }
+    
+    void Release() override
+    {
+      mAMPEnv.Release();
+    }
+
+    void ProcessSamplesAccumulating(T** inputs, T** outputs, 
+                                    int nInputs, int nOutputs, 
+                                    int startIdx, int nFrames) override
+    {
+      double pitch = mInputs[kVoiceControlPitch].endValue;
+      double pitchBend = mInputs[kVoiceControlPitchBend].endValue;
+      
+      // Get timbre control with sample-accurate ramps
+      mInputs[kVoiceControlTimbre].Write(mTimbreBuffer.Get(), startIdx, nFrames);
+      
+      // Convert pitch to frequency
+      double osc1Freq = 440. * pow(2., pitch + pitchBend + inputs[kModLFO][0]);
+      
+      // Generate audio
+      for(auto i = startIdx; i < startIdx + nFrames; i++)
+      {
+        float noise = mTimbreBuffer.Get()[i] * Rand();
+        
+        outputs[0][i] += (mOSC.Process(osc1Freq) + noise) * 
+                         mAMPEnv.Process(inputs[kModSustainSmoother][i]) * 
+                         mGain;
+        outputs[1][i] = outputs[0][i];
+      }
+    }
+
+  public:
+    FastSinOscillator<T> mOSC;
+    ADSREnvelope<T> mAMPEnv;
+  };
+
+  MidiSynth mSynth { VoiceAllocator::kPolyModePoly, MidiSynth::kDefaultBlockSize };
+  LFO<T> mLFO;
+};
+```
+
+### Voice Lifecycle
+
+<Steps>
+  <Step title="Trigger">
+    Called when a note-on is received, starts the envelope
+  </Step>
+  <Step title="ProcessSamplesAccumulating">
+    Generates audio samples while the voice is active
+  </Step>
+  <Step title="Release">
+    Called on note-off, begins envelope release phase
+  </Step>
+  <Step title="GetBusy">
+    Returns false when envelope completes, voice can be reused
+  </Step>
+</Steps>
+
+## Parameter Handling
+
+Parameter changes are forwarded to the DSP engine:
+
+```cpp IPlugInstrument.cpp
+void IPlugInstrument::OnParamChange(int paramIdx)
+{
+  mDSP.SetParam(paramIdx, GetParam(paramIdx)->Value());
+}
+```
+
+The DSP engine updates internal state:
+
+```cpp IPlugInstrument_DSP.h
+void SetParam(int paramIdx, double value)
+{
+  using EEnvStage = ADSREnvelope<sample>::EStage;
+  
+  switch (paramIdx) {
+    case kParamNoteGlideTime:
+      mSynth.SetNoteGlideTime(value / 1000.);
+      break;
+    case kParamGain:
+      mParamsToSmooth[kModGainSmoother] = (T) value / 100.;
+      break;
+    case kParamSustain:
+      mParamsToSmooth[kModSustainSmoother] = (T) value / 100.;
+      break;
+    case kParamAttack:
+    case kParamDecay:
+    case kParamRelease:
+    {
+      EEnvStage stage = static_cast<EEnvStage>(
+        EEnvStage::kAttack + (paramIdx - kParamAttack)
+      );
+      mSynth.ForEachVoice([stage, value](SynthVoice& voice) {
+        dynamic_cast<IPlugInstrumentDSP::Voice&>(voice)
+          .mAMPEnv.SetStageTime(stage, value);
+      });
+      break;
+    }
+    case kParamLFODepth:
+      mLFO.SetScalar(value / 100.);
+      break;
+    case kParamLFORateHz:
+      mLFO.SetFreqCPS(value);
+      break;
+    // ... more cases
+  }
+}
+```
+
+<Tip>
+Use parameter smoothing for audio-rate parameters like gain to avoid zipper noise.
+</Tip>
+
+## Dynamic UI Updates
+
+Some parameters trigger UI changes:
+
+```cpp IPlugInstrument.cpp
+void IPlugInstrument::OnParamChangeUI(int paramIdx, EParamSource source)
+{
+  #if IPLUG_EDITOR
+  if (auto pGraphics = GetUI())
+  {
+    if (paramIdx == kParamLFORateMode)
+    {
+      const auto sync = GetParam(kParamLFORateMode)->Bool();
+      pGraphics->HideControl(kParamLFORateHz, sync);
+      pGraphics->HideControl(kParamLFORateTempo, !sync);
+    }
+  }
+  #endif
+}
+```
+
+This hides/shows different LFO rate controls based on sync mode.
+
+## Plugin Configuration
+
+Key settings in config.h:
+
+```cpp config.h
+#define PLUG_TYPE 1                 // Instrument
+#define PLUG_DOES_MIDI_IN 1         // Receives MIDI
+#define PLUG_DOES_MPE 1             // MPE support
+#define PLUG_CHANNEL_IO "0-2"       // No input, stereo output
+
+#define VST3_SUBCATEGORY "Instrument|Synth"
+#define AAX_PLUG_CATEGORY_STR "Synth"
+```
+
+## Key Features Demonstrated
+
+<CardGroup cols={2}>
+  <Card title="Polyphonic Voices" icon="layer-group">
+    Voice allocation with 16 voices, proper note stealing
+  </Card>
+  <Card title="ADSR Envelopes" icon="wave-square">
+    Per-voice amplitude envelopes with customizable curves
+  </Card>
+  <Card title="LFO Modulation" icon="rotate">
+    Tempo-synced or free-running LFO with multiple shapes
+  </Card>
+  <Card title="MPE Support" icon="hand-pointer">
+    MIDI Polyphonic Expression for per-note pitch bend and pressure
+  </Card>
+  <Card title="Pitch Bend" icon="arrows-left-right">
+    Smooth pitch bend with configurable range
+  </Card>
+  <Card title="Visualizations" icon="chart-area">
+    Realtime meter and LFO display
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="IPlugControls" icon="arrow-right" href="/examples/iplug-controls">
+    Explore all available UI controls
+  </Card>
+  <Card title="MidiSynth Class" icon="book" href="/api/midisynth">
+    Learn about voice allocation
+  </Card>
+  <Card title="IGraphics Guide" icon="palette" href="/guide/igraphics">
+    Master UI construction
+  </Card>
+</CardGroup>

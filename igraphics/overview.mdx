@@ -1,0 +1,241 @@
+---
+title: 'IGraphics Overview'
+description: 'Cross-platform GPU-accelerated graphics framework for iPlug2 audio plugins'
+---
+
+## What is IGraphics?
+
+IGraphics is iPlug2's graphics framework that provides a cross-platform abstraction layer for building plugin user interfaces. It offers GPU-accelerated rendering with two backend options: **NanoVG** (lightweight) and **Skia** (feature-rich).
+
+<CardGroup cols={2}>
+  <Card title="NanoVG Backend" icon="bolt">
+    Lightweight, OpenGL/Metal-based rendering ideal for most plugins
+  </Card>
+  <Card title="Skia Backend" icon="paintbrush">
+    Google's 2D graphics library with advanced rendering capabilities
+  </Card>
+</CardGroup>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="GPU Accelerated" icon="rocket">
+    Hardware-accelerated rendering using OpenGL, Metal, or Skia
+  </Card>
+  <Card title="Cross-Platform" icon="window">
+    Works on macOS, Windows, iOS, and Web (WASM)
+  </Card>
+  <Card title="High DPI Support" icon="display">
+    Automatic scaling for retina/4K displays
+  </Card>
+  <Card title="Rich Control Library" icon="sliders">
+    Extensive collection of knobs, sliders, switches, and visualizations
+  </Card>
+</CardGroup>
+
+## Architecture
+
+IGraphics follows a control-based architecture where your UI is composed of `IControl` objects:
+
+```cpp
+class IGraphics {
+  // Main drawing context
+  // Owns all controls
+  // Handles mouse/keyboard events
+  // Manages drawing backends
+};
+
+class IControl {
+  // Base class for all UI widgets
+  // Handles user interaction
+  // Links to plugin parameters
+};
+```
+
+## Drawing Backends Comparison
+
+| Feature | NanoVG | Skia |
+|---------|--------|------|
+| Size | Lightweight (~200KB) | Heavyweight (~2-3MB) |
+| Quality | Good | Excellent |
+| Text Rendering | Basic | Advanced (multi-line, paragraph layout) |
+| Dependencies | Minimal | Requires Skia library |
+| Performance | Fast | Slower but more features |
+| Best For | Most plugins | High-end graphics needs |
+
+<Info>
+NanoVG is the recommended starting point - it's fast, lightweight, and sufficient for most plugin UIs.
+</Info>
+
+## Backend Selection
+
+Backends are selected at compile time using preprocessor definitions:
+
+**NanoVG:**
+```cpp
+#define IGRAPHICS_NANOVG 1
+#define IGRAPHICS_GL2 1  // or IGRAPHICS_GL3, IGRAPHICS_METAL
+```
+
+**Skia:**
+```cpp
+#define IGRAPHICS_SKIA 1
+```
+
+## Basic Graphics Context
+
+The main IGraphics context provides drawing primitives:
+
+<CodeGroup>
+```cpp Drawing Shapes
+void IGraphics::DrawRect(const IColor& color, const IRECT& bounds, 
+                          const IBlend* pBlend, float thickness);
+
+void IGraphics::FillCircle(const IColor& color, float cx, float cy, float r, 
+                           const IBlend* pBlend);
+
+void IGraphics::DrawLine(const IColor& color, float x1, float y1, 
+                         float x2, float y2, const IBlend* pBlend, float thickness);
+```
+
+```cpp Drawing Images
+void IGraphics::DrawBitmap(const IBitmap& bitmap, const IRECT& bounds, 
+                           int srcX, int srcY, const IBlend* pBlend);
+
+void IGraphics::DrawSVG(const ISVG& svg, const IRECT& bounds, 
+                        const IBlend* pBlend);
+
+void IGraphics::DrawRotatedBitmap(const IBitmap& bitmap, 
+                                   float destCentreX, float destCentreY, 
+                                   double angle, const IBlend* pBlend);
+```
+
+```cpp Drawing Text
+void IGraphics::DrawText(const IText& text, const char* str, 
+                         const IRECT& bounds, const IBlend* pBlend);
+
+float IGraphics::MeasureText(const IText& text, const char* str, 
+                             IRECT& bounds) const;
+
+// NanoVG only - multi-line text support
+void IGraphics::DrawMultiLineText(const IText& text, const char* str, 
+                                   const IRECT& bounds, const IBlend* pBlend);
+```
+</CodeGroup>
+
+## Advanced Path Drawing
+
+IGraphics provides a path-based drawing API for complex shapes:
+
+```cpp
+pGraphics->PathClear();
+pGraphics->PathMoveTo(x1, y1);
+pGraphics->PathLineTo(x2, y2);
+pGraphics->PathArc(cx, cy, radius, startAngle, endAngle);
+pGraphics->PathClose();
+pGraphics->PathStroke(IColor(255, 0, 0), 2.0f);
+// or
+pGraphics->PathFill(IPattern(COLOR_BLUE));
+```
+
+## Platform Integration
+
+IGraphics handles platform-specific differences automatically:
+
+```cpp
+// Mouse cursor management
+void HideMouseCursor(bool hide = true, bool lock = true);
+ECursor SetMouseCursor(ECursor cursorType = ECursor::ARROW);
+
+// Clipboard operations
+bool GetTextFromClipboard(WDL_String& str);
+bool SetTextInClipboard(const char* str);
+
+// File dialogs
+void PromptForFile(WDL_String& fileName, WDL_String& path, 
+                   EFileAction action, const char* ext);
+void PromptForColor(IColor& color, const char* str);
+
+// Platform views (native UI embedding)
+void AttachPlatformView(const IRECT& r, void* pView);
+void RemovePlatformView(void* pView);
+```
+
+## Resource Management
+
+IGraphics manages bitmaps, SVGs, and fonts:
+
+```cpp
+// Load resources
+const IBitmap knobBitmap = pGraphics->LoadBitmap("knob.png", 60); // 60 frames
+const ISVG logo = pGraphics->LoadSVG("logo.svg");
+pGraphics->LoadFont("Roboto-Regular", "Roboto-Regular.ttf");
+
+// Scale for high-DPI
+IBitmap scaledBitmap = pGraphics->GetScaledBitmap(knobBitmap);
+
+// Manual bitmap caching
+pGraphics->RetainBitmap(bitmap, "cache_name");
+pGraphics->ReleaseBitmap(bitmap);
+```
+
+## Coordinate System
+
+IGraphics uses a top-left origin coordinate system:
+
+- **Origin:** Top-left corner (0, 0)
+- **X-axis:** Increases to the right
+- **Y-axis:** Increases downward
+- **Rectangles:** IRECT(left, top, right, bottom)
+
+```cpp
+IRECT bounds(0, 0, 100, 100); // 100x100 square at origin
+float width = bounds.W();      // 100
+float height = bounds.H();     // 100
+float centerX = bounds.MW();   // 50
+float centerY = bounds.MH();   // 50
+```
+
+## Drawing Context Access
+
+Access the underlying backend context for advanced operations:
+
+<CodeGroup>
+```cpp NanoVG Context
+NVGcontext* ctx = static_cast<NVGcontext*>(pGraphics->GetDrawContext());
+// Use NanoVG API directly
+nvgBeginPath(ctx);
+nvgCircle(ctx, x, y, radius);
+nvgFillColor(ctx, nvgRGBA(255, 0, 0, 255));
+nvgFill(ctx);
+```
+
+```cpp Skia Context  
+SkCanvas* canvas = static_cast<SkCanvas*>(pGraphics->GetDrawContext());
+// Use Skia API directly
+SkPaint paint;
+paint.setColor(SK_ColorRED);
+canvas->drawCircle(x, y, radius, paint);
+```
+</CodeGroup>
+
+<Warning>
+Direct backend access breaks cross-platform compatibility. Use sparingly and document backend requirements.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Getting Started" icon="rocket" href="./getting-started">
+    Set up your first IGraphics UI
+  </Card>
+  <Card title="Drawing Backends" icon="palette" href="./drawing-backends">
+    Learn about NanoVG vs Skia
+  </Card>
+  <Card title="Controls" icon="sliders" href="./controls">
+    Explore the control library
+  </Card>
+  <Card title="Custom Controls" icon="code" href="./custom-controls">
+    Build your own widgets
+  </Card>
+</CardGroup>

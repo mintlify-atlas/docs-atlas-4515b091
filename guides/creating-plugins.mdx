@@ -1,0 +1,311 @@
+---
+title: Creating iPlug2 Plugins
+description: Learn how to create new iPlug2 audio plugins using the duplicate.py script
+---
+
+## Overview
+
+iPlug2 provides a Python script that duplicates example projects to create new plugins. This is the recommended way to start a new plugin project.
+
+## Prerequisites
+
+- Python 2 or 3 installed
+- iPlug2 repository cloned
+- Python accessible from command line (Windows users need to add Python to PATH)
+
+## Using duplicate.py
+
+The `duplicate.py` script is located in `Examples/` and creates a new plugin by copying an existing example.
+
+### Basic Usage
+
+```bash
+cd /path/to/iPlug2/Examples
+python duplicate.py [input_project] [output_project] [manufacturer]
+```
+
+<Steps>
+
+### Choose a Template
+
+Select an example project as your starting point:
+
+- **IPlugEffect** - Audio effect (gain, EQ, compressor, etc.)
+- **IPlugInstrument** - MIDI synthesizer with DSP
+- **IPlugMidiEffect** - MIDI processor (arpeggiator, transpose, etc.)
+- **IPlugSideChain** - Effect with sidechain input
+- **IPlugSurroundEffect** - Surround/spatial audio processor
+- **IPlugReaperExtension** - REAPER extension (not a plugin)
+
+### Run the Script
+
+```bash
+python duplicate.py IPlugEffect MyDelay MyCompany
+```
+
+This creates a new project:
+- **Input**: `IPlugEffect` (source template)
+- **Output**: `MyDelay` (new project name)
+- **Manufacturer**: `MyCompany` (your company/brand name)
+
+### Specify Output Path (Optional)
+
+```bash
+python duplicate.py IPlugEffect MyDelay MyCompany ~/Desktop/MyPlugins
+```
+
+Creates the project at `~/Desktop/MyPlugins/MyDelay/`
+
+</Steps>
+
+<Note>
+**Naming Rules:**
+- No spaces in project or manufacturer names
+- Use CamelCase (e.g., `MyAwesomePlugin`)
+- Avoid numbers, dots, or special characters at the start
+</Note>
+
+## What Gets Duplicated
+
+The script performs these operations:
+
+<CardGroup cols={2}>
+
+<Card title="Files Copied" icon="copy">
+- Source code (.h, .cpp)
+- Project files (.sln, .xcodeproj)
+- Build configurations
+- Resource files
+- Scripts
+</Card>
+
+<Card title="Strings Replaced" icon="pen">
+- Project name
+- CAPITALIZED names
+- Manufacturer name
+- iPlug2 root path (if needed)
+</Card>
+
+</CardGroup>
+
+### Files Created
+
+```
+MyDelay/
+├── MyDelay.h              # Plugin header
+├── MyDelay.cpp            # Plugin implementation  
+├── config.h               # Plugin configuration
+├── config/                # Build configs (.xcconfig, .props)
+├── projects/              # IDE projects
+│   ├── MyDelay.sln       # Visual Studio
+│   └── MyDelay.xcworkspace # Xcode
+├── resources/            # Assets (fonts, images)
+└── scripts/              # Build scripts
+```
+
+## Configuration
+
+After duplication, edit `config.h` to customize your plugin:
+
+```cpp config.h
+#define PLUG_NAME "MyDelay"
+#define PLUG_MFR "MyCompany"
+#define PLUG_VERSION_HEX 0x00010000
+#define PLUG_VERSION_STR "1.0.0"
+#define PLUG_UNIQUE_ID 'Xyz1'  // ⚠️ CHANGE THIS
+#define PLUG_MFR_ID 'MyCP'      // ⚠️ CHANGE THIS
+
+#define PLUG_CHANNEL_IO "2-2"   // Stereo in/out
+#define PLUG_TYPE 0              // 0=Effect, 1=Instrument, 2=MIDI Effect
+#define PLUG_DOES_MIDI_IN 0
+#define PLUG_DOES_MIDI_OUT 0
+```
+
+<Warning>
+**Critical:** Change `PLUG_UNIQUE_ID` and `PLUG_MFR_ID` immediately. The script assigns a random `PLUG_UNIQUE_ID`, but you should verify it's unique and update `PLUG_MFR_ID` to your registered manufacturer code.
+</Warning>
+
+### Plugin IDs
+
+<Info>
+**PLUG_UNIQUE_ID** must be unique across all plugins. Use 4 alphanumeric characters (e.g., `'MdL1'`).
+
+**PLUG_MFR_ID** identifies your company. Register a code or use your initials (e.g., `'ACME'`).
+</Info>
+
+## Project Structure
+
+### Main Files
+
+Every iPlug2 plugin has three core files:
+
+<Tabs>
+<Tab title="Header (.h)">
+```cpp MyDelay.h
+#pragma once
+#include "IPlug_include_in_plug_hdr.h"
+
+const int kNumPresets = 1;
+
+enum EParams
+{
+  kGain = 0,
+  kNumParams
+};
+
+using namespace iplug;
+using namespace igraphics;
+
+class MyDelay final : public Plugin
+{
+public:
+  MyDelay(const InstanceInfo& info);
+  
+#if IPLUG_DSP
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+#endif
+};
+```
+</Tab>
+
+<Tab title="Source (.cpp)">
+```cpp MyDelay.cpp
+#include "MyDelay.h"
+#include "IPlug_include_in_plug_src.h"
+#include "IControls.h"
+
+MyDelay::MyDelay(const InstanceInfo& info)
+: Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kGain)->InitDouble("Gain", 0., 0., 100.0, 0.01, "%");
+  
+#if IPLUG_EDITOR
+  mMakeGraphicsFunc = [&]() {
+    return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS, 
+                        GetScaleForScreen(PLUG_WIDTH, PLUG_HEIGHT));
+  };
+  
+  mLayoutFunc = [&](IGraphics* pGraphics) {
+    pGraphics->AttachPanelBackground(COLOR_GRAY);
+    const IRECT bounds = pGraphics->GetBounds();
+    pGraphics->AttachControl(new IVKnobControl(bounds.GetCentredInside(100), kGain));
+  };
+#endif
+}
+
+#if IPLUG_DSP
+void MyDelay::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kGain)->Value() / 100.;
+  const int nChans = NOutChansConnected();
+  
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+}
+#endif
+```
+</Tab>
+
+<Tab title="Config (config.h)">
+```cpp config.h
+#define PLUG_NAME "MyDelay"
+#define PLUG_MFR "MyCompany"
+#define PLUG_VERSION_HEX 0x00010000
+#define PLUG_VERSION_STR "1.0.0"
+#define PLUG_UNIQUE_ID 'MdL1'
+#define PLUG_MFR_ID 'MyCo'
+
+#define PLUG_CHANNEL_IO "2-2"
+#define PLUG_TYPE 0
+#define PLUG_HAS_UI 1
+#define PLUG_WIDTH 600
+#define PLUG_HEIGHT 600
+```
+</Tab>
+</Tabs>
+
+## Build System
+
+iPlug2 supports multiple build systems:
+
+<CardGroup cols={3}>
+
+<Card title="Visual Studio" icon="windows">
+`.sln` files for Windows
+
+AAX, VST3, CLAP, Standalone
+</Card>
+
+<Card title="Xcode" icon="apple">
+`.xcworkspace` for macOS/iOS
+
+AU, VST3, CLAP, AAX, Standalone, AUv3
+</Card>
+
+<Card title="CMake" icon="gear">
+Cross-platform
+
+All formats, Web Audio (WASM)
+</Card>
+
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="Audio Effects" href="/guides/audio-effect">
+Build audio processors with parameters and DSP
+</Card>
+
+<Card title="Instruments" href="/guides/instrument">
+Create MIDI synthesizers with polyphony
+</Card>
+
+<Card title="MIDI Effects" href="/guides/midi-effect">
+Process MIDI messages and generate notes
+</Card>
+
+<Card title="Parameters" href="/reference/parameters">
+Learn about parameter types and configuration
+</Card>
+
+</CardGroup>
+
+## Troubleshooting
+
+<Accordion title="Error: input project doesn't exist">
+Check the spelling and case of the template name. Template must exist in the `Examples/` directory.
+
+```bash
+ls Examples/
+# Look for: IPlugEffect, IPlugInstrument, etc.
+```
+</Accordion>
+
+<Accordion title="Error: output project already exists">
+The destination directory already exists. Choose a different name or delete the existing directory.
+
+```bash
+rm -rf MyDelay  # Delete existing project
+```
+</Accordion>
+
+<Accordion title="Error: name has spaces">
+Project, manufacturer, and path names cannot contain spaces. Use CamelCase instead.
+
+```bash
+# ❌ Wrong
+python duplicate.py IPlugEffect "My Delay" "My Company"
+
+# ✅ Correct  
+python duplicate.py IPlugEffect MyDelay MyCompany
+```
+</Accordion>
+
+<Accordion title="Can't parse plugin config (REAPER extensions)">
+This is expected for REAPER extensions. They don't use the standard plugin config format.
+</Accordion>

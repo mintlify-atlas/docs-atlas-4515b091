@@ -1,0 +1,781 @@
+---
+title: 'IPlugProcessor'
+description: 'Base class for audio processing in iPlug2 plugins'
+---
+
+## Overview
+
+The `IPlugProcessor` class is the base class for audio processing in iPlug2. It handles audio buffers, MIDI messages, channel I/O configurations, sample rate, block size, and transport information. This class knows nothing about parameters, presets, or user interface.
+
+**Header:** `IPlug/IPlugProcessor.h`
+
+<Warning>
+  Methods marked as "realtime-safe" must not perform allocations, file I/O, or blocking operations. They are called on the high-priority audio thread.
+</Warning>
+
+## Constructor & Destructor
+
+### IPlugProcessor
+
+```cpp
+IPlugProcessor(const Config& config, EAPI plugAPI);
+```
+
+Constructs the processor with plugin configuration.
+
+<ParamField path="config" type="const Config&" required>
+  Plugin configuration struct from config.h
+</ParamField>
+
+<ParamField path="plugAPI" type="EAPI" required>
+  Plugin API type (VST2, VST3, AU, etc.)
+</ParamField>
+
+### ~IPlugProcessor
+
+```cpp
+virtual ~IPlugProcessor();
+```
+
+Virtual destructor for cleanup.
+
+## Core Processing Methods
+
+<Note>
+  Override these methods in your plugin class. Do NOT call them directly.
+</Note>
+
+### ProcessBlock
+
+```cpp
+virtual void ProcessBlock(sample** inputs, sample** outputs, int nFrames);
+```
+
+Main audio processing method. Override this to implement your DSP.
+
+<ParamField path="inputs" type="sample**" required>
+  Two-dimensional array of non-interleaved input buffers. All channels are guaranteed valid pointers (unconnected channels contain zeros).
+</ParamField>
+
+<ParamField path="outputs" type="sample**" required>
+  Two-dimensional array of non-interleaved output buffers for writing processed audio.
+</ParamField>
+
+<ParamField path="nFrames" type="int" required>
+  Block size: number of samples per channel in this processing block.
+</ParamField>
+
+<Warning>
+  **REALTIME-SAFE CONTEXT**: Do not allocate memory, perform file I/O, or use blocking operations in ProcessBlock.
+</Warning>
+
+```cpp
+// Example: Simple gain plugin
+void MyPlugin::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const int nChans = NOutChansConnected();
+  const double gain = GetParam(kGain)->DBToAmp();
+  
+  for (int s = 0; s < nFrames; s++)
+  {
+    for (int c = 0; c < nChans; c++)
+    {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+}
+```
+
+### ProcessMidiMsg
+
+```cpp
+virtual void ProcessMidiMsg(const IMidiMsg& msg);
+```
+
+Handle incoming MIDI messages. Called before `ProcessBlock()`.
+
+<ParamField path="msg" type="const IMidiMsg&" required>
+  MIDI message with timestamp (mOffset) indicating sample offset in the upcoming block
+</ParamField>
+
+<Warning>
+  **REALTIME-SAFE CONTEXT**: Use IMidiQueue to queue messages for processing at the correct sample offset.
+</Warning>
+
+```cpp
+// Example: Queue MIDI messages
+void MyPlugin::ProcessMidiMsg(const IMidiMsg& msg)
+{
+  mMidiQueue.Add(msg);
+}
+
+void MyPlugin::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  for (int s = 0; s < nFrames; s++)
+  {
+    // Process queued MIDI at the correct sample offset
+    while (!mMidiQueue.Empty())
+    {
+      IMidiMsg& msg = mMidiQueue.Peek();
+      if (msg.mOffset > s) break;
+      
+      // Handle the MIDI message
+      if (msg.StatusMsg() == IMidiMsg::kNoteOn)
+      {
+        int note = msg.NoteNumber();
+        int velocity = msg.Velocity();
+        mSynth.NoteOn(note, velocity);
+      }
+      
+      mMidiQueue.Remove();
+    }
+    
+    // Process audio...
+  }
+  
+  mMidiQueue.Flush(nFrames);
+}
+```
+
+### ProcessSysEx
+
+```cpp
+virtual void ProcessSysEx(const ISysEx& msg);
+```
+
+Handle incoming MIDI System Exclusive messages. Called before `ProcessBlock()`.
+
+<ParamField path="msg" type="const ISysEx&" required>
+  SysEx message containing offset, size, and data pointer
+</ParamField>
+
+<Warning>
+  **REALTIME-SAFE CONTEXT**: Default implementation does nothing.
+</Warning>
+
+### OnReset
+
+```cpp
+virtual void OnReset();
+```
+
+Called when sample rate changes or transport resets. Use this to clear buffers, update DSP coefficients, etc.
+
+```cpp
+void MyPlugin::OnReset()
+{
+  mFilter.SetSampleRate(GetSampleRate());
+  mDelay.Clear();
+  mMidiQueue.Resize(GetBlockSize());
+}
+```
+
+### OnActivate
+
+```cpp
+virtual void OnActivate(bool active);
+```
+
+Called when the plugin is activated/deactivated by the host.
+
+<ParamField path="active" type="bool" required>
+  `true` if plugin is being activated, `false` if deactivated
+</ParamField>
+
+<Info>
+  Unlike OnReset(), OnActivate() is called when I/O connections change. Different hosts have different interpretations of "activate".
+</Info>
+
+## MIDI Output Methods
+
+### SendMidiMsg
+
+```cpp
+virtual bool SendMidiMsg(const IMidiMsg& msg) = 0;
+```
+
+Send a single MIDI message to the host.
+
+<ParamField path="msg" type="const IMidiMsg&" required>
+  MIDI message to send
+</ParamField>
+
+<ResponseField name="return" type="bool">
+  `true` if successful
+</ResponseField>
+
+```cpp
+// Example: Send a note on message
+IMidiMsg msg;
+msg.MakeNoteOnMsg(60, 100, 0); // Middle C, velocity 100, offset 0
+SendMidiMsg(msg);
+```
+
+### SendMidiMsgs
+
+```cpp
+virtual bool SendMidiMsgs(WDL_TypedBuf<IMidiMsg>& msgs);
+```
+
+Send multiple MIDI messages.
+
+<ParamField path="msgs" type="WDL_TypedBuf<IMidiMsg>&" required>
+  Buffer of MIDI messages to send
+</ParamField>
+
+### SendSysEx
+
+```cpp
+virtual bool SendSysEx(const ISysEx& msg);
+```
+
+Send a MIDI System Exclusive message.
+
+<ParamField path="msg" type="const ISysEx&" required>
+  SysEx message to send
+</ParamField>
+
+<ResponseField name="return" type="bool">
+  `true` if successful (default implementation returns `false`)
+</ResponseField>
+
+## Audio Context Information
+
+### GetSampleRate
+
+```cpp
+double GetSampleRate() const;
+```
+
+Returns the current sample rate in Hz.
+
+### GetBlockSize
+
+```cpp
+int GetBlockSize() const;
+```
+
+Returns the maximum block size in samples. Actual block size may vary per `ProcessBlock()` call.
+
+### GetLatency
+
+```cpp
+int GetLatency() const;
+```
+
+Returns the plugin latency in samples.
+
+### SetLatency
+
+```cpp
+virtual void SetLatency(int latency);
+```
+
+Call this to update plugin latency at runtime.
+
+<ParamField path="latency" type="int" required>
+  New latency in samples
+</ParamField>
+
+<Info>
+  Not all hosts support dynamic latency changes. Call from OnReset() if latency depends on sample rate.
+</Info>
+
+### GetTailSize
+
+```cpp
+int GetTailSize() const;
+```
+
+Returns the tail size in samples (for reverb, delay, etc.).
+
+### GetTailIsInfinite
+
+```cpp
+bool GetTailIsInfinite() const;
+```
+
+Returns `true` if the tail size is infinite.
+
+### SetTailSize
+
+```cpp
+virtual void SetTailSize(int tailSize);
+```
+
+Update the tail size at runtime.
+
+<ParamField path="tailSize" type="int" required>
+  New tail size in samples, or `kTailInfinite` for infinite tail
+</ParamField>
+
+```cpp
+// Example: Update tail based on reverb decay time
+void MyPlugin::OnParamChange(int paramIdx)
+{
+  if (paramIdx == kDecayTime)
+  {
+    double decaySeconds = GetParam(kDecayTime)->Value();
+    int tailSamples = static_cast<int>(decaySeconds * GetSampleRate());
+    SetTailSize(tailSamples);
+  }
+}
+```
+
+### TailSize Enum
+
+```cpp
+enum TailSize
+{
+  kTailNone = 0,
+  kTailInfinite = std::numeric_limits<int>::max()
+};
+```
+
+### GetBypassed
+
+```cpp
+bool GetBypassed() const;
+```
+
+Returns `true` if the plugin is currently bypassed.
+
+### GetRenderingOffline
+
+```cpp
+bool GetRenderingOffline() const;
+```
+
+Returns `true` if rendering offline (e.g., bouncing/freezing).
+
+## Transport Information
+
+### GetSamplePos
+
+```cpp
+double GetSamplePos() const;
+```
+
+Returns the number of samples elapsed since the start of the project timeline.
+
+### GetTempo
+
+```cpp
+double GetTempo() const;
+```
+
+Returns the current tempo in beats per minute (BPM).
+
+### GetPPQPos
+
+```cpp
+double GetPPQPos() const;
+```
+
+Returns the number of beats elapsed since the start of the project (Pulse Per Quarter note position).
+
+### GetTransportIsRunning
+
+```cpp
+bool GetTransportIsRunning() const;
+```
+
+Returns `true` if the transport is currently playing.
+
+### GetSamplesPerBeat
+
+```cpp
+double GetSamplesPerBeat() const;
+```
+
+Calculates the number of samples in one beat at the current tempo and sample rate.
+
+### GetTimeSig
+
+```cpp
+void GetTimeSig(int& numerator, int& denominator) const;
+```
+
+Get the current time signature.
+
+<ParamField path="numerator" type="int&" required>
+  Output: numerator (e.g., 6 in 6/8)
+</ParamField>
+
+<ParamField path="denominator" type="int&" required>
+  Output: denominator (e.g., 8 in 6/8)
+</ParamField>
+
+```cpp
+// Example: Tempo-synced LFO
+void MyPlugin::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double samplesPerBeat = GetSamplesPerBeat();
+  const double lfoFreqHz = (1.0 / samplesPerBeat) * 4.0; // 1/4 note rate
+  
+  mLFO.SetFrequency(lfoFreqHz, GetSampleRate());
+  
+  // Process audio...
+}
+```
+
+## Channel I/O Configuration
+
+### MaxNChannels
+
+```cpp
+int MaxNChannels(ERoute direction) const;
+```
+
+Returns the total number of channel buffers (input or output).
+
+<ParamField path="direction" type="ERoute" required>
+  `ERoute::kInput` or `ERoute::kOutput`
+</ParamField>
+
+### NChannelsConnected
+
+```cpp
+int NChannelsConnected(ERoute direction) const;
+```
+
+Returns the number of connected channels.
+
+<ParamField path="direction" type="ERoute" required>
+  `ERoute::kInput` or `ERoute::kOutput`
+</ParamField>
+
+<Warning>
+  Assumes consecutive channel connections. Not all hosts guarantee this.
+</Warning>
+
+### NInChansConnected
+
+```cpp
+inline int NInChansConnected() const;
+```
+
+Convenience method: returns the number of connected input channels.
+
+### NOutChansConnected
+
+```cpp
+inline int NOutChansConnected() const;
+```
+
+Convenience method: returns the number of connected output channels.
+
+### IsChannelConnected
+
+```cpp
+bool IsChannelConnected(ERoute direction, int chIdx) const;
+```
+
+Check if a specific channel is connected.
+
+<ParamField path="direction" type="ERoute" required>
+  Input or output direction
+</ParamField>
+
+<ParamField path="chIdx" type="int" required>
+  Channel index to check
+</ParamField>
+
+### LegalIO
+
+```cpp
+bool LegalIO(int NInputChans, int NOutputChans) const;
+```
+
+Check if a channel configuration is valid based on the I/O config string.
+
+<ParamField path="NInputChans" type="int" required>
+  Number of input channels (-1 to check outputs only)
+</ParamField>
+
+<ParamField path="NOutputChans" type="int" required>
+  Number of output channels (-1 to check inputs only)
+</ParamField>
+
+### SetChannelLabel
+
+```cpp
+void SetChannelLabel(ERoute direction, int idx, const char* formatStr, bool zeroBased = false);
+```
+
+Label input/output channels (VST2 only).
+
+<ParamField path="direction" type="ERoute" required>
+  Input or output direction
+</ParamField>
+
+<ParamField path="idx" type="int" required>
+  Channel index
+</ParamField>
+
+<ParamField path="formatStr" type="const char*" required>
+  Printf-style format string where %i is the channel index
+</ParamField>
+
+<ParamField path="zeroBased" type="bool">
+  If `true`, index in format string is zero-based
+</ParamField>
+
+```cpp
+// Example: Label ambisonic channels
+SetChannelLabel(ERoute::kInput, 0, "W");
+SetChannelLabel(ERoute::kInput, 1, "X");
+SetChannelLabel(ERoute::kInput, 2, "Y");
+SetChannelLabel(ERoute::kInput, 3, "Z");
+```
+
+### Bus Configuration
+
+<CardGroup cols={2}>
+  <Card title="MaxNBuses" icon="layer-group">
+    Get maximum number of buses
+    ```cpp
+    int MaxNBuses(ERoute direction, int* pConfigIdxWithTheMostBuses = nullptr) const;
+    ```
+  </Card>
+  
+  <Card title="MaxNChannelsForBus" icon="sliders">
+    Get max channels for a specific bus
+    ```cpp
+    int MaxNChannelsForBus(ERoute direction, int busIdx) const;
+    ```
+  </Card>
+  
+  <Card title="HasWildcardBus" icon="asterisk">
+    Check if config has wildcard buses
+    ```cpp
+    bool HasWildcardBus(ERoute direction) const;
+    ```
+  </Card>
+  
+  <Card title="GetBusName" icon="tag">
+    Get name for a bus
+    ```cpp
+    virtual void GetBusName(ERoute direction, int busIdx, int nBuses, WDL_String& str) const;
+    ```
+  </Card>
+</CardGroup>
+
+### NIOConfigs
+
+```cpp
+int NIOConfigs() const;
+```
+
+Returns the number of I/O configurations parsed from the channel I/O string.
+
+### GetIOConfig
+
+```cpp
+const IOConfig* GetIOConfig(int idx) const;
+```
+
+Get a pointer to an IOConfig at a specific index.
+
+<ResponseField name="return" type="const IOConfig*">
+  Pointer to IOConfig, or `nullptr` if index is invalid
+</ResponseField>
+
+### HasSidechainInput
+
+```cpp
+bool HasSidechainInput() const;
+```
+
+Returns `true` if the plugin has a sidechain input (more than 1 input bus).
+
+## Plugin Type Information
+
+### IsInstrument
+
+```cpp
+bool IsInstrument() const;
+```
+
+Returns `true` if configured as an instrument.
+
+### IsMidiEffect
+
+```cpp
+bool IsMidiEffect() const;
+```
+
+Returns `true` if configured as a MIDI effect.
+
+### DoesMIDIIn
+
+```cpp
+bool DoesMIDIIn() const;
+```
+
+Returns `true` if the plugin receives MIDI input.
+
+### DoesMIDIOut
+
+```cpp
+bool DoesMIDIOut() const;
+```
+
+Returns `true` if the plugin produces MIDI output.
+
+### DoesMPE
+
+```cpp
+bool DoesMPE() const;
+```
+
+Returns `true` if the plugin supports MIDI Polyphonic Expression.
+
+### GetAUPluginType
+
+```cpp
+int GetAUPluginType() const;
+```
+
+Returns the 4-char identifier for AudioUnit type (e.g., 'aufx' for effect).
+
+## Static Utilities
+
+### ParseChannelIOStr
+
+```cpp
+static int ParseChannelIOStr(const char* IOStr,
+                              WDL_PtrList<IOConfig>& channelIOList,
+                              int& totalNInChans,
+                              int& totalNOutChans,
+                              int& totalNInBuses,
+                              int& totalNOutBuses);
+```
+
+Parse the channel I/O configuration string from config.h.
+
+<ParamField path="IOStr" type="const char*" required>
+  Space-separated I/O configs in format "ninchans-noutchans". Use `.` for multiple buses (e.g., "1.1-1" for mono in + mono sidechain → mono out)
+</ParamField>
+
+<ParamField path="channelIOList" type="WDL_PtrList<IOConfig>&" required>
+  Output: list of parsed IOConfig structs
+</ParamField>
+
+<ParamField path="totalNInChans" type="int&" required>
+  Output: total input channels across all buses
+</ParamField>
+
+<ParamField path="totalNOutChans" type="int&" required>
+  Output: total output channels across all buses
+</ParamField>
+
+<ParamField path="totalNInBuses" type="int&" required>
+  Output: total number of input buses
+</ParamField>
+
+<ParamField path="totalNOutBuses" type="int&" required>
+  Output: total number of output buses
+</ParamField>
+
+<ResponseField name="return" type="int">
+  Number of configurations detected
+</ResponseField>
+
+## Example: Complete Processor Implementation
+
+```cpp
+class MySynth : public iplug::Plugin
+{
+public:
+  MySynth(const iplug::InstanceInfo& info)
+  : Plugin(info, MakeConfig(kNumParams, kNumPresets))
+  {
+    // Initialize parameters...
+  }
+  
+  void OnReset() override
+  {
+    // Update DSP for new sample rate
+    mOscillator.SetSampleRate(GetSampleRate());
+    mFilter.SetSampleRate(GetSampleRate());
+    
+    // Resize MIDI queue for new block size
+    mMidiQueue.Resize(GetBlockSize());
+    
+    // Clear delay lines
+    mEnvelope.Reset();
+  }
+  
+  void ProcessMidiMsg(const IMidiMsg& msg) override
+  {
+    // Queue all MIDI messages
+    mMidiQueue.Add(msg);
+  }
+  
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+  {
+    const int nChans = NOutChansConnected();
+    
+    for (int s = 0; s < nFrames; s++)
+    {
+      // Process MIDI at correct sample offset
+      while (!mMidiQueue.Empty())
+      {
+        IMidiMsg& msg = mMidiQueue.Peek();
+        if (msg.mOffset > s) break;
+        
+        switch (msg.StatusMsg())
+        {
+          case IMidiMsg::kNoteOn:
+            if (msg.Velocity() > 0)
+            {
+              mOscillator.SetFrequency(440.0 * pow(2.0, (msg.NoteNumber() - 69) / 12.0));
+              mEnvelope.Trigger();
+            }
+            else
+            {
+              mEnvelope.Release();
+            }
+            break;
+            
+          case IMidiMsg::kNoteOff:
+            mEnvelope.Release();
+            break;
+            
+          case IMidiMsg::kPitchWheel:
+            mOscillator.SetPitchBend(msg.PitchWheel());
+            break;
+        }
+        
+        mMidiQueue.Remove();
+      }
+      
+      // Generate audio
+      sample output = mOscillator.Process();
+      output = mFilter.Process(output);
+      output *= mEnvelope.Process();
+      
+      // Write to all output channels
+      for (int c = 0; c < nChans; c++)
+      {
+        outputs[c][s] = output;
+      }
+    }
+    
+    mMidiQueue.Flush(nFrames);
+  }
+  
+private:
+  IMidiQueue mMidiQueue;
+  Oscillator mOscillator;
+  Filter mFilter;
+  Envelope mEnvelope;
+};
+```
+
+## See Also
+
+- [IPluginBase](/api/iplug-plugin-base) - Plugin base class
+- [IMidiMsg](/api/iplug-midi) - MIDI message handling
+- [Processing Guide](/guides/audio-processing) - Audio processing best practices

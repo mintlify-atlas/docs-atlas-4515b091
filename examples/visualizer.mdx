@@ -1,0 +1,482 @@
+---
+title: "Visualizer Example"
+description: "Build audio visualizations with FFT spectrum analysis and real-time metering"
+---
+
+## Overview
+
+The **IPlugVisualizer** example demonstrates how to create audio visualization plugins with real-time spectrum analysis. This example shows:
+- FFT-based spectrum analysis with configurable parameters
+- Audio thread to UI thread data transmission
+- State serialization for analysis settings
+- Bidirectional messaging between UI and DSP
+- Passthrough processing with visualization
+
+<Info>
+This plugin passes audio through unchanged while visualizing it in real-time using FFT analysis.
+</Info>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Spectrum Analysis" icon="chart-line">
+    Real-time FFT visualization of audio frequencies
+  </Card>
+  <Card title="Configurable FFT" icon="gear">
+    Adjustable FFT size, overlap, and window type
+  </Card>
+  <Card title="State Persistence" icon="floppy-disk">
+    Save and restore analyzer settings
+  </Card>
+  <Card title="UI-DSP Messaging" icon="message">
+    Two-way communication for parameter updates
+  </Card>
+</CardGroup>
+
+## Plugin Configuration
+
+```cpp
+#define PLUG_NAME "IPlugVisualizer"
+#define PLUG_CHANNEL_IO "1-1 2-2"  // Mono or stereo
+#define PLUG_TYPE 0                 // Effect
+```
+
+## Implementation
+
+### Plugin Class
+
+```cpp
+class IPlugVisualizer final : public Plugin
+{
+public:
+  IPlugVisualizer(const InstanceInfo& info);
+
+#if IPLUG_DSP
+  void OnReset() override;
+  void OnIdle() override;
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  bool OnMessage(int msgTag, int ctrlTag, int dataSize, const void* pData) override;
+  bool SerializeState(IByteChunk &chunk) const override;
+  int UnserializeState(const IByteChunk &chunk, int startPos) override;
+  
+  ISpectrumSender<2> mSender;  // 2 channels
+  
+private:
+  void SyncUIControl();
+#endif
+
+#if IPLUG_EDITOR
+  void OnParamChangeUI(int paramIdx, EParamSource source) override;
+  void OnUIOpen() override;
+#endif
+};
+```
+
+### Initialization
+
+```cpp
+IPlugVisualizer::IPlugVisualizer(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kOctaveGain)->InitDouble("OctaveGain", 0.0, 0., 12.0, 0.1, "dB");
+}
+```
+
+## Spectrum Analysis Setup
+
+### Creating the Spectrum Analyzer Control
+
+```cpp
+mLayoutFunc = [&](IGraphics* pGraphics) {
+  const IRECT b = pGraphics->GetBounds();
+
+  pGraphics->AttachPanelBackground(COLOR_GRAY);
+  pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
+  pGraphics->EnableMouseOver(true);
+  pGraphics->SetLayoutOnResize(true);
+
+  IVStyle style = DEFAULT_STYLE
+    .WithColor(kBG, COLOR_BLACK)
+    .WithColor(kFG, {255, 128, 128, 128})
+    .WithLabelText(DEFAULT_LABEL_TEXT.WithFGColor(COLOR_WHITE))
+    .WithValueText(DEFAULT_VALUE_TEXT.WithFGColor(COLOR_WHITE));
+    
+  pGraphics->AttachControl(
+    new IVSpectrumAnalyzerControl<2>(b, "Spectrum", style), 
+    kCtrlTagSpectrumAnalyzer
+  );
+};
+```
+
+<Note>
+`IVSpectrumAnalyzerControl<2>` is a built-in control that displays a frequency spectrum for up to 2 channels.
+</Note>
+
+### Alternative: Bar Graph Analyzer
+
+The example includes commented code for a bar graph style analyzer:
+
+```cpp
+auto* pControl = new IVBarGraphSpectrumAnalyzerControl<2>(
+  b, "Spectrum", DEFAULT_STYLE, 
+  32,   // numBands
+  16,   // numSegments
+  IVBarGraphSpectrumAnalyzerControl<2>::EFrequencyScale::Log,
+  IVBarGraphSpectrumAnalyzerControl<2>::EColorMode::Smooth,
+  IVBarGraphSpectrumAnalyzerControl<2>::EChannelMode::Sum,
+  IPattern::CreateLinearGradient(b, EDirection::Vertical,
+    {{IColor(255, 0, 200, 0), 0.0f},      // Green at bottom
+     {IColor(255, 0, 200, 0), 0.85f},     // Green until near 0dB
+     {IColor(255, 200, 200, 0), 0.90f}}), // Yellow just before clip
+  {},      // ledRanges
+  0.2f,    // gapRatio
+  0.1f,    // segGapRatio
+  5.0f,    // attackTimeMs
+  50.0f,   // decayTimeMs
+  -60.f,   // lowRangeDB
+  6.f      // highRangeDB
+);
+
+// Enable clip indicator at 0dB with red color
+pControl->SetClipIndicator(0.f, COLOR_RED);
+```
+
+## Audio Processing
+
+### Passthrough with Analysis
+
+```cpp
+void IPlugVisualizer::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const int nInChans = NInChansConnected();
+  const int nOutChans = NOutChansConnected();
+
+  // Send to spectrum analyzer
+  mSender.ProcessBlock(inputs, nFrames, kCtrlTagSpectrumAnalyzer, nInChans);
+
+  // Pass audio through
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nOutChans; c++) {
+      outputs[c][s] = inputs[c % nInChans][s];
+    }
+  }
+}
+```
+
+<Steps>
+  <Step title="Send to analyzer">
+    Call `mSender.ProcessBlock()` to queue FFT analysis
+  </Step>
+  <Step title="Pass audio through">
+    Copy input to output without modification
+  </Step>
+  <Step title="Handle channel mismatch">
+    Use modulo to handle mono input to stereo output
+  </Step>
+</Steps>
+
+### Transmitting Data to UI
+
+```cpp
+void IPlugVisualizer::OnIdle()
+{
+  mSender.TransmitData(*this);
+}
+```
+
+`TransmitData()` sends accumulated FFT data from the audio thread to the UI thread.
+
+## Bidirectional Messaging
+
+### Messages from UI to DSP
+
+The UI can send configuration changes to the DSP:
+
+```cpp
+bool IPlugVisualizer::OnMessage(int msgTag, int ctrlTag, int dataSize, const void* pData)
+{
+  if (msgTag == IVSpectrumAnalyzerControl<>::kMsgTagFFTSize)
+  {
+    int fftSize = *reinterpret_cast<const int*>(pData);
+    mSender.SetFFTSize(fftSize);
+    return true;
+  }
+  else if (msgTag == IVSpectrumAnalyzerControl<>::kMsgTagOverlap)
+  {
+    int overlap = *reinterpret_cast<const int*>(pData);
+    mSender.SetFFTSizeAndOverlap(mSender.GetFFTSize(), overlap);
+    return true;
+  }
+  else if (msgTag == IVSpectrumAnalyzerControl<>::kMsgTagWindowType)
+  {
+    int idx = *reinterpret_cast<const int*>(pData);
+    mSender.SetWindowType(static_cast<ISpectrumSender<2>::EWindowType>(idx));
+    return true;
+  }
+
+  return false;
+}
+```
+
+<Warning>
+`OnMessage()` is called from the audio thread. Keep processing minimal and realtime-safe.
+</Warning>
+
+### Messages from DSP to UI
+
+Parameters can trigger UI updates:
+
+```cpp
+#if IPLUG_EDITOR
+void IPlugVisualizer::OnParamChangeUI(int paramIdx, EParamSource source)
+{
+  if (paramIdx == kOctaveGain)
+  {
+    double octaveGain = GetParam(kOctaveGain)->Value();
+    SendControlMsgFromDelegate(
+      kCtrlTagSpectrumAnalyzer, 
+      IVSpectrumAnalyzerControl<>::kMsgTagOctaveGain, 
+      sizeof(double), 
+      &octaveGain
+    );
+  }
+}
+#endif
+```
+
+## State Serialization
+
+### Saving Analyzer Settings
+
+```cpp
+bool IPlugVisualizer::SerializeState(IByteChunk &chunk) const
+{
+  int fftSize = mSender.GetFFTSize();
+  int overlap = mSender.GetOverlap();
+  int windowType = static_cast<int>(mSender.GetWindowType());
+  
+  chunk.Put(&fftSize);
+  chunk.Put(&overlap);
+  chunk.Put(&windowType);
+
+  return SerializeParams(chunk);  // Always call at the end
+}
+```
+
+### Restoring Settings
+
+```cpp
+int IPlugVisualizer::UnserializeState(const IByteChunk &chunk, int startPos)
+{
+  int fftSize, overlap, windowType;
+
+  startPos = chunk.Get(&fftSize, startPos);
+  startPos = chunk.Get(&overlap, startPos);
+  startPos = chunk.Get(&windowType, startPos);
+
+  return UnserializeParams(chunk, startPos);
+}
+```
+
+<Tip>
+Always call `SerializeParams()` at the end of `SerializeState()` and `UnserializeParams()` at the end of `UnserializeState()` to handle standard parameter serialization.
+</Tip>
+
+### Syncing UI on Open
+
+```cpp
+void IPlugVisualizer::SyncUIControl()
+{
+  auto sr = GetSampleRate();
+  auto fftSize = mSender.GetFFTSize();
+  auto overlap = mSender.GetOverlap();
+  auto windowType = static_cast<int>(mSender.GetWindowType());
+  
+  SendControlMsgFromDelegate(
+    kCtrlTagSpectrumAnalyzer, 
+    IVSpectrumAnalyzerControl<>::kMsgTagSampleRate, 
+    sizeof(double), &sr
+  );
+  SendControlMsgFromDelegate(
+    kCtrlTagSpectrumAnalyzer, 
+    IVSpectrumAnalyzerControl<>::kMsgTagFFTSize, 
+    sizeof(int), &fftSize
+  );
+  SendControlMsgFromDelegate(
+    kCtrlTagSpectrumAnalyzer, 
+    IVSpectrumAnalyzerControl<>::kMsgTagOverlap, 
+    sizeof(int), &overlap
+  );
+  SendControlMsgFromDelegate(
+    kCtrlTagSpectrumAnalyzer, 
+    IVSpectrumAnalyzerControl<>::kMsgTagWindowType, 
+    sizeof(int), &windowType
+  );
+}
+```
+
+Call this on reset and when UI opens:
+
+```cpp
+void IPlugVisualizer::OnReset()
+{
+  SyncUIControl();
+}
+
+void IPlugVisualizer::OnUIOpen()
+{
+#if IPLUG_DSP
+  SyncUIControl();
+#endif
+}
+```
+
+## FFT Configuration
+
+### FFT Size
+
+Larger FFT = better frequency resolution, more latency:
+
+```cpp
+mSender.SetFFTSize(2048);  // Common: 512, 1024, 2048, 4096, 8192
+```
+
+### Overlap
+
+Higher overlap = smoother display, more CPU:
+
+```cpp
+mSender.SetFFTSizeAndOverlap(2048, 4);  // 75% overlap
+```
+
+### Window Type
+
+```cpp
+enum class EWindowType
+{
+  Rectangular,
+  Hann,
+  Hamming,
+  Blackman,
+  BlackmanHarris
+};
+
+mSender.SetWindowType(ISpectrumSender<2>::EWindowType::Hann);
+```
+
+<Note>
+Hann window is a good default. Blackman-Harris provides better frequency resolution but lower time resolution.
+</Note>
+
+## Building a Visualizer
+
+<Steps>
+  <Step title="Add ISpectrumSender">
+    Create a sender for each channel you want to visualize
+  </Step>
+  <Step title="Create analyzer control">
+    Use `IVSpectrumAnalyzerControl` or `IVBarGraphSpectrumAnalyzerControl`
+  </Step>
+  <Step title="Process in audio thread">
+    Call `mSender.ProcessBlock()` in `ProcessBlock()`
+  </Step>
+  <Step title="Transmit in idle">
+    Call `mSender.TransmitData()` in `OnIdle()`
+  </Step>
+  <Step title="Handle messages">
+    Implement `OnMessage()` to receive UI configuration changes
+  </Step>
+  <Step title="Serialize state">
+    Save/restore analyzer settings in state chunks
+  </Step>
+</Steps>
+
+## Visualization Styles
+
+### Line Graph (Default)
+
+```cpp
+new IVSpectrumAnalyzerControl<2>(bounds, "Spectrum", style)
+```
+
+Smooth line showing frequency response.
+
+### Bar Graph
+
+```cpp
+new IVBarGraphSpectrumAnalyzerControl<2>(
+  bounds, "Spectrum", style,
+  32,  // numBands - number of frequency bands
+  16,  // numSegments - LED segments per band
+  // ... more options
+)
+```
+
+Classic LED meter style.
+
+### Color Modes
+
+```cpp
+EColorMode::Solid     // Single color
+EColorMode::Smooth    // Gradient across entire range  
+EColorMode::Segments  // Different color per segment
+```
+
+### Channel Modes
+
+```cpp
+EChannelMode::Sum     // Sum both channels
+EChannelMode::Peak    // Peak of both channels
+EChannelMode::Split   // Side-by-side display
+```
+
+## Performance Tips
+
+### Choose Appropriate FFT Size
+
+```cpp
+// For real-time visualization
+mSender.SetFFTSize(1024);  // Fast, decent resolution
+
+// For detailed analysis
+mSender.SetFFTSize(4096);  // Slower, great resolution
+```
+
+### Limit Update Rate
+
+```cpp
+// Don't transmit every block
+if (mFrameCount++ % 4 == 0)  // Every 4 blocks
+  mSender.ProcessBlock(inputs, nFrames, kCtrlTag, nChans);
+```
+
+## Related Examples
+
+<CardGroup cols={2}>
+  <Card title="Sidechain" icon="arrow-right-to-bracket" href="/examples/sidechain">
+    Peak metering with IPeakAvgSender
+  </Card>
+  <Card title="Surround" icon="surround-sound" href="/examples/surround">
+    Multi-channel metering
+  </Card>
+  <Card title="Convo Engine" icon="bolt" href="/examples/convo-engine">
+    FFT-based audio processing
+  </Card>
+</CardGroup>
+
+## Common Message Tags
+
+| Message Tag | Type | Description |
+|-------------|------|-------------|
+| `kMsgTagSampleRate` | `double` | Update sample rate |
+| `kMsgTagFFTSize` | `int` | Set FFT size |
+| `kMsgTagOverlap` | `int` | Set overlap factor |
+| `kMsgTagWindowType` | `int` | Set window function |
+| `kMsgTagOctaveGain` | `double` | Per-octave gain boost |
+
+## Source Files
+
+- `Examples/IPlugVisualizer/IPlugVisualizer.h`
+- `Examples/IPlugVisualizer/IPlugVisualizer.cpp`
+- `Examples/IPlugVisualizer/config.h`
+- `IGraphics/Controls/IVBarGraphSpectrumAnalyzerControl.h`

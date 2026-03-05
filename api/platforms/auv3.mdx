@@ -1,0 +1,473 @@
+---
+title: Audio Unit v3 Platform API
+description: AUv3 API implementation for iPlug2 plugins on macOS and iOS
+---
+
+# Audio Unit v3 Platform API
+
+The Audio Unit v3 (AUv3) implementation provides full integration with Apple's modern Audio Unit architecture, supporting both macOS and iOS platforms.
+
+## Overview
+
+The `IPlugAUv3` class implements the AUv3 API using Apple's `AUAudioUnit` framework. AUv3 plugins are app extensions that can be loaded in compatible hosts on both desktop and mobile platforms.
+
+<Info>
+AUv3 is Apple's modern Audio Unit format, introduced in iOS 9 and macOS 10.11. It offers better sandboxing, app extension architecture, and improved iOS support compared to AUv2.
+</Info>
+
+## Core Class
+
+### IPlugAUv3
+
+Defined in: `IPlug/AUv3/IPlugAUv3.h`
+
+```cpp
+class IPlugAUv3 : public IPlugAPIBase
+                , public IPlugProcessor
+```
+
+The main AUv3 implementation class for iOS and macOS, handling:
+- Audio rendering with `AURenderEvent` processing
+- Parameter observation and notification
+- Buffer attachment and management
+- Sample rate and block size adaptation
+
+## Key Methods
+
+### Host Communication
+
+#### BeginInformHostOfParamChange
+```cpp
+void BeginInformHostOfParamChange(int idx) override;
+```
+Notifies the host that a parameter gesture is beginning.
+
+**Parameters:**
+- `idx` - Parameter index
+
+#### InformHostOfParamChange
+```cpp
+void InformHostOfParamChange(int idx, double normalizedValue) override;
+```
+Informs the host of a parameter value change.
+
+**Parameters:**
+- `idx` - Parameter index
+- `normalizedValue` - Normalized parameter value (0.0 to 1.0)
+
+#### EndInformHostOfParamChange
+```cpp
+void EndInformHostOfParamChange(int idx) override;
+```
+Notifies the host that a parameter gesture has ended.
+
+**Parameters:**
+- `idx` - Parameter index
+
+### MIDI
+
+#### SendMidiMsg
+```cpp
+bool SendMidiMsg(const IMidiMsg& msg) override;
+```
+Sends a MIDI message from the plugin to the host.
+
+**Parameters:**
+- `msg` - MIDI message to send
+
+**Returns:** `true` if message was sent successfully
+
+#### SendSysEx
+```cpp
+bool SendSysEx(const ISysEx& msg) override;
+```
+Sends a System Exclusive MIDI message.
+
+**Parameters:**
+- `msg` - SysEx message to send
+
+**Returns:** `true` if message was sent successfully
+
+### Editor
+
+#### EditorResize
+```cpp
+bool EditorResize(int viewWidth, int viewHeight) override;
+```
+Requests an editor size change.
+
+**Parameters:**
+- `viewWidth` - New width in points (not pixels)
+- `viewHeight` - New height in points (not pixels)
+
+**Returns:** `true` if resize was accepted
+
+<Note>
+iOS uses points rather than pixels. The actual pixel dimensions depend on the device's scale factor (Retina displays have scale factors of 2x or 3x).
+</Note>
+
+## AUv3-Specific Methods
+
+### ProcessWithEvents
+```cpp
+void ProcessWithEvents(
+    AudioTimeStamp const* timestamp,
+    uint32_t frameCount,
+    AURenderEvent const* events,
+    ITimeInfo& timeInfo);
+```
+Main processing method that handles audio and events.
+
+**Parameters:**
+- `timestamp` - Audio timestamp for this render
+- `frameCount` - Number of frames to process
+- `events` - Linked list of render events (parameters, MIDI, etc.)
+- `timeInfo` - Transport and timing information
+
+**Usage:**
+```cpp
+// Called from AUv3 render block
+ProcessWithEvents(timestamp, frameCount, events, timeInfo);
+```
+
+### Parameter Management
+
+#### SetParameterFromValueObserver
+```cpp
+void SetParameterFromValueObserver(uint64_t address, float value);
+```
+Sets a parameter value from the host's value observer.
+
+**Parameters:**
+- `address` - AUv3 parameter address
+- `value` - Parameter value (in parameter's native range)
+
+#### SendParameterValueFromObserver
+```cpp
+void SendParameterValueFromObserver(uint64_t address, float value);
+```
+Sends a parameter value to the audio processing thread.
+
+**Parameters:**
+- `address` - AUv3 parameter address
+- `value` - Parameter value
+
+#### GetParameter
+```cpp
+float GetParameter(uint64_t address);
+```
+Retrieves the current value of a parameter by address.
+
+**Parameters:**
+- `address` - AUv3 parameter address
+
+**Returns:** Parameter value in native range
+
+#### GetParamDisplay
+```cpp
+const char* GetParamDisplay(uint64_t address, float value);
+```
+Gets the display string for a parameter value.
+
+**Parameters:**
+- `address` - AUv3 parameter address
+- `value` - Parameter value
+
+**Returns:** Formatted display string
+
+#### GetParamStringToValue
+```cpp
+float GetParamStringToValue(uint64_t address, const char* str);
+```
+Converts a display string to a parameter value.
+
+**Parameters:**
+- `address` - AUv3 parameter address
+- `str` - Display string
+
+**Returns:** Parameter value
+
+### Parameter Address Mapping
+
+#### AddParamAddress
+```cpp
+void AddParamAddress(int paramIdx, uint64_t paramAddress);
+```
+Maps an iPlug parameter index to an AUv3 parameter address.
+
+**Parameters:**
+- `paramIdx` - iPlug parameter index
+- `paramAddress` - AUv3 parameter address (typically derived from parameter tree)
+
+**Example:**
+```cpp
+// Usually called during initialization
+for (int i = 0; i < NParams(); i++)
+{
+  AddParamAddress(i, parameterTree.parameterWithID(i).address);
+}
+```
+
+#### GetParamAddress
+```cpp
+uint64_t GetParamAddress(int paramIdx);
+```
+Retrieves the AUv3 address for an iPlug parameter index.
+
+**Parameters:**
+- `paramIdx` - iPlug parameter index
+
+**Returns:** AUv3 parameter address
+
+#### GetParamIdx
+```cpp
+int GetParamIdx(uint64_t paramAddress);
+```
+Retrieves the iPlug parameter index for an AUv3 address.
+
+**Parameters:**
+- `paramAddress` - AUv3 parameter address
+
+**Returns:** iPlug parameter index
+
+### Buffer Management
+
+#### AttachInputBuffers
+```cpp
+void AttachInputBuffers(AudioBufferList* pInBufferList);
+```
+Attaches input audio buffers for processing.
+
+**Parameters:**
+- `pInBufferList` - Audio buffer list containing input buffers
+
+#### AttachOutputBuffers
+```cpp
+void AttachOutputBuffers(AudioBufferList* pOutBufferList, uint32_t busNumber);
+```
+Attaches output audio buffers for processing.
+
+**Parameters:**
+- `pOutBufferList` - Audio buffer list containing output buffers
+- `busNumber` - Output bus number
+
+### Initialization
+
+#### Prepare
+```cpp
+void Prepare(double sampleRate, uint32_t blockSize);
+```
+Prepares the plugin for processing.
+
+**Parameters:**
+- `sampleRate` - Sample rate in Hz
+- `blockSize` - Maximum block size in frames
+
+**Example:**
+```cpp
+// Called from AUAudioUnit allocateRenderResourcesAndReturnError:
+Prepare(44100.0, 512);
+```
+
+#### SetAUAudioUnit
+```cpp
+void SetAUAudioUnit(void* pAUAudioUnit);
+```
+Sets the reference to the AUAudioUnit instance.
+
+**Parameters:**
+- `pAUAudioUnit` - Pointer to AUAudioUnit Objective-C object
+
+### Offline Rendering
+
+#### SetOffline
+```cpp
+void SetOffline(bool renderingOffline);
+```
+Sets whether the plugin is rendering offline (non-realtime).
+
+**Parameters:**
+- `renderingOffline` - `true` for offline rendering
+
+<Info>
+Offline rendering allows plugins to use more CPU-intensive algorithms or disable real-time constraints.
+</Info>
+
+## Specialized Methods
+
+### GetNamedMessageChannel
+```cpp
+virtual void* GetNamedMessageChannel(const char* name);
+```
+Retrieves a named message channel for communication between audio and UI.
+
+**Parameters:**
+- `name` - Channel name
+
+**Returns:** Pointer to message channel, or `nullptr` if not supported
+
+<Note>
+Override this method to provide custom message channels for advanced UI-to-audio communication.
+</Note>
+
+### GetLastAudioTimeStamp
+```cpp
+const AudioTimeStamp& GetLastAudioTimeStamp() const;
+```
+Retrieves the most recent audio timestamp.
+
+**Returns:** Reference to the last AudioTimeStamp
+
+<Note>
+**Specialist Use**: For hosting Audio Units within Audio Units. Thread safety: returns a snapshot that may be stale if called off the audio thread.
+</Note>
+
+## Configuration
+
+### AUv3 App Extension
+
+AUv3 plugins are built as app extensions. Your Xcode project needs:
+
+1. **App Extension Target**
+   - Type: Audio Unit Extension
+   - Embedded in a container app
+
+2. **Info.plist Configuration**
+```xml
+<key>NSExtension</key>
+<dict>
+    <key>NSExtensionAttributes</key>
+    <dict>
+        <key>AudioComponents</key>
+        <array>
+            <dict>
+                <key>manufacturer</key>
+                <string>Acme</string>
+                <key>type</key>
+                <string>aufx</string>
+                <key>subtype</key>
+                <string>plug</string>
+                <key>name</key>
+                <string>MyPlugin</string>
+                <key>version</key>
+                <integer>1</integer>
+                <key>tags</key>
+                <array>
+                    <string>Effects</string>
+                </array>
+            </dict>
+        </array>
+    </dict>
+    <key>NSExtensionPrincipalClass</key>
+    <string>IPlugAUAudioUnit</string>
+</dict>
+```
+
+3. **Embedded Resources**
+   - App icon
+   - Any required asset bundles
+
+<CardGroup cols={2}>
+  <Card title="Effect Types" icon="sliders">
+    **Type Codes:**
+    - `aufx` - Audio Effect
+    - `aumu` - Music Device (Instrument)
+    - `aumf` - Music Effect (MIDI Effect)
+    - `auol` - Offline Effect
+    - `aupn` - Panner
+  </Card>
+  
+  <Card title="Tag Categories" icon="tags">
+    **Common Tags:**
+    - Effects, Reverb, Delay
+    - EQ, Dynamics, Distortion
+    - Synth, Sampler, Drum
+    - Analyzer, Utility
+  </Card>
+</CardGroup>
+
+## Factory Function
+
+### MakePlug
+```cpp
+IPlugAUv3* MakePlug(const InstanceInfo& info);
+```
+Factory function to create plugin instances.
+
+**Parameters:**
+- `info` - Instance information (currently empty struct for AUv3)
+
+**Returns:** Pointer to new plugin instance
+
+**Example:**
+```cpp
+IPlugAUv3* MakePlug(const InstanceInfo& info)
+{
+  return new MyPlugin(info, MakeConfig(kNumParams, kNumPresets));
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Parameter Trees" icon="tree">
+    Organize parameters into logical groups using AUv3 parameter trees for better host integration and UI.
+  </Card>
+  
+  <Card title="View Configuration" icon="mobile">
+    Support multiple view configurations for different iOS device sizes using `OnHostRequestingSupportedViewConfiguration()`.
+  </Card>
+  
+  <Card title="Background Audio" icon="headphones">
+    Configure audio session properly in your container app for background audio support on iOS.
+  </Card>
+  
+  <Card title="State Restoration" icon="clock-rotate-left">
+    Implement proper state save/restore for iOS app lifecycle events and host state management.
+  </Card>
+</CardGroup>
+
+## iOS Considerations
+
+<Info>
+**App Extensions**: AUv3 plugins must be packaged with a host app. The host app can be minimal but must be present on the App Store.
+</Info>
+
+<Warning>
+**Memory Limits**: iOS has strict memory limits for app extensions. Keep memory usage minimal and avoid large resource files.
+</Warning>
+
+<Tip>
+**Audio Session**: Configure the audio session in your container app's `Info.plist` to enable background audio:
+```xml
+<key>UIBackgroundModes</key>
+<array>
+    <string>audio</string>
+</array>
+```
+</Tip>
+
+## Common Issues
+
+<Warning>
+**Thread Affinity**: AUv3 render callbacks must complete quickly and never block. All UI updates must be dispatched to the main thread.
+</Warning>
+
+<Warning>
+**Sandboxing**: AUv3 extensions run in a strict sandbox. File access is limited to the extension's container directory.
+</Warning>
+
+<Tip>
+**Testing**: Use Apple's `auvaltool` to validate your AUv3 plugin:
+```bash
+auvaltool -v aufx plug Acme
+```
+</Tip>
+
+## Related Documentation
+
+- [AUv2 Platform API](/api/platforms/auv2) - Legacy Audio Unit format
+- [IPlugAPIBase](/api/core/iplugapibase) - Base API functionality
+- [IPlugProcessor](/api/core/iplugprocessor) - Audio processing interface
+- [iOS Configuration](/guides/ios-development) - iOS-specific setup
+- [AUv3 Developer Documentation](https://developer.apple.com/documentation/audiotoolbox/audio_unit_v3_plug-ins) - Apple's official documentation

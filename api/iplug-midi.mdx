@@ -1,0 +1,828 @@
+---
+title: 'MIDI & SysEx'
+description: 'MIDI message handling and utilities in iPlug2'
+---
+
+## Overview
+
+The iPlug2 MIDI system provides lightweight structs for handling MIDI messages (`IMidiMsg`), System Exclusive messages (`ISysEx`), and a fast queue implementation (`IMidiQueue`) for sample-accurate MIDI processing.
+
+**Header:** `IPlug/IPlugMidi.h`
+
+<Info>
+  MIDI messages include a sample offset (`mOffset`) for sample-accurate timing within audio blocks.
+</Info>
+
+## IMidiMsg
+
+Encapsulates a MIDI message with helper functions for creation and parsing.
+
+### Structure
+
+```cpp
+struct IMidiMsg
+{
+  int mOffset;        // Sample offset in block
+  uint8_t mStatus;    // Status byte
+  uint8_t mData1;     // Data byte 1
+  uint8_t mData2;     // Data byte 2
+};
+```
+
+<ParamField path="mOffset" type="int">
+  Sample offset within the audio block where this message occurs
+</ParamField>
+
+<ParamField path="mStatus" type="uint8_t">
+  MIDI status byte (includes message type and channel)
+</ParamField>
+
+<ParamField path="mData1" type="uint8_t">
+  First data byte (meaning depends on message type)
+</ParamField>
+
+<ParamField path="mData2" type="uint8_t">
+  Second data byte (meaning depends on message type)
+</ParamField>
+
+### Constructor
+
+```cpp
+IMidiMsg(int offset = 0, uint8_t status = 0, uint8_t data1 = 0, uint8_t data2 = 0);
+```
+
+<ParamField path="offset" type="int">
+  Sample offset in block (default: 0)
+</ParamField>
+
+<ParamField path="status" type="uint8_t">
+  Status byte (default: 0)
+</ParamField>
+
+<ParamField path="data1" type="uint8_t">
+  Data byte 1 (default: 0)
+</ParamField>
+
+<ParamField path="data2" type="uint8_t">
+  Data byte 2 (default: 0)
+</ParamField>
+
+## Enumerations
+
+### EStatusMsg
+
+Constants for MIDI message types.
+
+```cpp
+enum EStatusMsg
+{
+  kNone = 0,
+  kNoteOff = 8,
+  kNoteOn = 9,
+  kPolyAftertouch = 10,
+  kControlChange = 11,
+  kProgramChange = 12,
+  kChannelAftertouch = 13,
+  kPitchWheel = 14
+};
+```
+
+### EControlChangeMsg
+
+Constants for common MIDI CC messages.
+
+```cpp
+enum EControlChangeMsg
+{
+  kNoCC = -1,
+  kModWheel = 1,
+  kBreathController = 2,
+  kFootController = 4,
+  kPortamentoTime = 5,
+  kChannelVolume = 7,
+  kBalance = 8,
+  kPan = 10,
+  kExpressionController = 11,
+  // ... (many more standard CCs)
+  kSustainOnOff = 64,
+  kPortamentoOnOff = 65,
+  kSustenutoOnOff = 66,
+  kSoftPedalOnOff = 67,
+  kLegatoOnOff = 68,
+  kResonance = 71,
+  kReleaseTime = 72,
+  kAttackTime = 73,
+  kCutoffFrequency = 74,
+  kDecayTime = 75,
+  kAllNotesOff = 123
+};
+```
+
+## Message Creation
+
+### MakeNoteOnMsg
+
+```cpp
+void MakeNoteOnMsg(int noteNumber, int velocity, int offset, int channel = 0);
+```
+
+Create a Note On message.
+
+<ParamField path="noteNumber" type="int" required>
+  MIDI note number [0-127] (60 = Middle C)
+</ParamField>
+
+<ParamField path="velocity" type="int" required>
+  Note velocity [0-127] (0 = note off in some contexts)
+</ParamField>
+
+<ParamField path="offset" type="int" required>
+  Sample offset in block
+</ParamField>
+
+<ParamField path="channel" type="int">
+  MIDI channel [0-15] (default: 0 = channel 1)
+</ParamField>
+
+```cpp
+// Example: Trigger note at start of block
+IMidiMsg msg;
+msg.MakeNoteOnMsg(60, 100, 0, 0); // Middle C, velocity 100
+SendMidiMsg(msg);
+```
+
+### MakeNoteOffMsg
+
+```cpp
+void MakeNoteOffMsg(int noteNumber, int offset, int channel = 0);
+```
+
+Create a Note Off message.
+
+<ParamField path="noteNumber" type="int" required>
+  MIDI note number [0-127]
+</ParamField>
+
+<ParamField path="offset" type="int" required>
+  Sample offset in block
+</ParamField>
+
+<ParamField path="channel" type="int">
+  MIDI channel [0-15]
+</ParamField>
+
+### MakePitchWheelMsg
+
+```cpp
+void MakePitchWheelMsg(double value, int channel = 0, int offset = 0);
+```
+
+Create a pitch wheel/bend message.
+
+<ParamField path="value" type="double" required>
+  Normalized pitch bend [-1.0, 1.0] where 0 = no bend
+</ParamField>
+
+<ParamField path="channel" type="int">
+  MIDI channel [0-15]
+</ParamField>
+
+<ParamField path="offset" type="int">
+  Sample offset in block
+</ParamField>
+
+```cpp
+// Example: Pitch bend up one semitone
+IMidiMsg msg;
+msg.MakePitchWheelMsg(0.5, 0, 0); // Half range up
+SendMidiMsg(msg);
+```
+
+### MakeControlChangeMsg
+
+```cpp
+void MakeControlChangeMsg(EControlChangeMsg idx, double value, int channel = 0, int offset = 0);
+```
+
+Create a CC (Control Change) message.
+
+<ParamField path="idx" type="EControlChangeMsg" required>
+  Controller index
+</ParamField>
+
+<ParamField path="value" type="double" required>
+  Normalized value [0.0, 1.0]
+</ParamField>
+
+<ParamField path="channel" type="int">
+  MIDI channel [0-15]
+</ParamField>
+
+<ParamField path="offset" type="int">
+  Sample offset in block
+</ParamField>
+
+```cpp
+// Example: Send mod wheel CC
+IMidiMsg msg;
+msg.MakeControlChangeMsg(IMidiMsg::kModWheel, 0.75, 0, 0);
+SendMidiMsg(msg);
+```
+
+### MakeProgramChange
+
+```cpp
+void MakeProgramChange(int program, int channel = 0, int offset = 0);
+```
+
+Create a Program Change message.
+
+<ParamField path="program" type="int" required>
+  Program number [0-127]
+</ParamField>
+
+<ParamField path="channel" type="int">
+  MIDI channel [0-15]
+</ParamField>
+
+<ParamField path="offset" type="int">
+  Sample offset in block
+</ParamField>
+
+### MakeChannelATMsg
+
+```cpp
+void MakeChannelATMsg(int pressure, int offset, int channel);
+```
+
+Create a Channel AfterTouch message.
+
+<ParamField path="pressure" type="int" required>
+  Pressure value [0-127]
+</ParamField>
+
+<ParamField path="offset" type="int" required>
+  Sample offset in block
+</ParamField>
+
+<ParamField path="channel" type="int" required>
+  MIDI channel [0-15]
+</ParamField>
+
+### MakePolyATMsg
+
+```cpp
+void MakePolyATMsg(int noteNumber, int pressure, int offset, int channel);
+```
+
+Create a Polyphonic AfterTouch message.
+
+<ParamField path="noteNumber" type="int" required>
+  Note number [0-127]
+</ParamField>
+
+<ParamField path="pressure" type="int" required>
+  Pressure value [0-127]
+</ParamField>
+
+<ParamField path="offset" type="int" required>
+  Sample offset in block
+</ParamField>
+
+<ParamField path="channel" type="int" required>
+  MIDI channel [0-15]
+</ParamField>
+
+## Message Parsing
+
+### Channel
+
+```cpp
+int Channel() const;
+```
+
+Get the MIDI channel from the status byte.
+
+<ResponseField name="return" type="int">
+  Channel [0-15] for MIDI channels 1-16
+</ResponseField>
+
+### StatusMsg
+
+```cpp
+EStatusMsg StatusMsg() const;
+```
+
+Get the MIDI message type.
+
+<ResponseField name="return" type="EStatusMsg">
+  Message type enum value (kNoteOn, kNoteOff, etc.)
+</ResponseField>
+
+### NoteNumber
+
+```cpp
+int NoteNumber() const;
+```
+
+Get the note number from Note On/Off or Poly AT messages.
+
+<ResponseField name="return" type="int">
+  Note number [0-127], or -1 if not applicable
+</ResponseField>
+
+### Velocity
+
+```cpp
+int Velocity() const;
+```
+
+Get the velocity from Note On/Off messages.
+
+<ResponseField name="return" type="int">
+  Velocity [0-127], or -1 if not applicable
+</ResponseField>
+
+### PolyAfterTouch
+
+```cpp
+int PolyAfterTouch() const;
+```
+
+Get pressure from Polyphonic AfterTouch message.
+
+<ResponseField name="return" type="int">
+  Pressure [0-127], or -1 if not applicable
+</ResponseField>
+
+### ChannelAfterTouch
+
+```cpp
+int ChannelAfterTouch() const;
+```
+
+Get pressure from Channel AfterTouch message.
+
+<ResponseField name="return" type="int">
+  Pressure [0-127], or -1 if not applicable
+</ResponseField>
+
+### Program
+
+```cpp
+int Program() const;
+```
+
+Get program number from Program Change message.
+
+<ResponseField name="return" type="int">
+  Program [0-127], or -1 if not applicable
+</ResponseField>
+
+### PitchWheel
+
+```cpp
+double PitchWheel() const;
+```
+
+Get pitch wheel value.
+
+<ResponseField name="return" type="double">
+  Normalized pitch wheel [-1.0, 1.0], or 0.0 if not applicable
+</ResponseField>
+
+### ControlChangeIdx
+
+```cpp
+EControlChangeMsg ControlChangeIdx() const;
+```
+
+Get the controller index from a CC message.
+
+<ResponseField name="return" type="EControlChangeMsg">
+  Controller index enum
+</ResponseField>
+
+### ControlChange
+
+```cpp
+double ControlChange(EControlChangeMsg idx) const;
+```
+
+Get the value of a specific CC message.
+
+<ParamField path="idx" type="EControlChangeMsg" required>
+  Controller index to check
+</ParamField>
+
+<ResponseField name="return" type="double">
+  Normalized value [0.0, 1.0], or -1.0 if message doesn't match
+</ResponseField>
+
+### ControlChangeOnOff
+
+```cpp
+static bool ControlChangeOnOff(double msgValue);
+```
+
+Helper to interpret CC as boolean.
+
+<ParamField path="msgValue" type="double" required>
+  Normalized CC value [0.0, 1.0]
+</ParamField>
+
+<ResponseField name="return" type="bool">
+  `true` if value >= 0.5 (on)
+</ResponseField>
+
+```cpp
+// Example: Parse sustain pedal
+if (msg.StatusMsg() == IMidiMsg::kControlChange)
+{
+  double sustainValue = msg.ControlChange(IMidiMsg::kSustainOnOff);
+  if (sustainValue >= 0.0)
+  {
+    bool sustainOn = IMidiMsg::ControlChangeOnOff(sustainValue);
+    mSynth.SetSustain(sustainOn);
+  }
+}
+```
+
+## Utility Methods
+
+### Clear
+
+```cpp
+void Clear();
+```
+
+Clear all message data (sets all fields to 0).
+
+### LogMsg
+
+```cpp
+void LogMsg();
+```
+
+Log the message to trace output (TRACER builds only).
+
+### PrintMsg
+
+```cpp
+void PrintMsg() const;
+```
+
+Print the message to debug output (DEBUG builds only).
+
+### StatusMsgStr
+
+```cpp
+static const char* StatusMsgStr(EStatusMsg msg);
+```
+
+Get a string description of a status message type.
+
+<ParamField path="msg" type="EStatusMsg" required>
+  Status message enum value
+</ParamField>
+
+<ResponseField name="return" type="const char*">
+  String like "noteon", "noteoff", "controlchange", etc.
+</ResponseField>
+
+### CCNameStr
+
+```cpp
+static const char* CCNameStr(int idx);
+```
+
+Get the name of a MIDI CC controller.
+
+<ParamField path="idx" type="int" required>
+  CC index [0-127]
+</ParamField>
+
+<ResponseField name="return" type="const char*">
+  Controller name like "Modulation", "Pan", "MainVolume", etc.
+</ResponseField>
+
+## ISysEx
+
+Handles MIDI System Exclusive messages. Does not own the data.
+
+### Structure
+
+```cpp
+struct ISysEx
+{
+  int mOffset;              // Sample offset in block
+  int mSize;                // Size in bytes
+  const uint8_t* mData;     // Pointer to data (not owned)
+};
+```
+
+### Constructor
+
+```cpp
+ISysEx(int offset = 0, const uint8_t* pData = nullptr, int size = 0);
+```
+
+<ParamField path="offset" type="int">
+  Sample offset in block
+</ParamField>
+
+<ParamField path="pData" type="const uint8_t*">
+  Pointer to SysEx data (must remain valid)
+</ParamField>
+
+<ParamField path="size" type="int">
+  Size of data in bytes
+</ParamField>
+
+<Warning>
+  ISysEx does not own the data. The data pointer must remain valid while the ISysEx object is in use.
+</Warning>
+
+### Clear
+
+```cpp
+void Clear();
+```
+
+Clear the data pointer and size (does not modify external data).
+
+### SysExStr
+
+```cpp
+char* SysExStr(char* str, int maxLen, const uint8_t* pData, int size);
+```
+
+Convert SysEx bytes to hex string representation.
+
+### LogMsg
+
+```cpp
+void LogMsg();
+```
+
+Log the SysEx message (TRACER builds only).
+
+## IMidiQueue
+
+Fast, sample-accurate MIDI queue implementation.
+
+```cpp
+template <class T>
+class IMidiQueueBase { /* ... */ };
+
+using IMidiQueue = IMidiQueueBase<IMidiMsg>;
+```
+
+### Constructor
+
+```cpp
+IMidiQueue(int size = DEFAULT_BLOCK_SIZE);
+```
+
+<ParamField path="size" type="int">
+  Initial queue size (default: 512)
+</ParamField>
+
+### Add
+
+```cpp
+void Add(const IMidiMsg& msg);
+```
+
+Add a MIDI message to the queue. Automatically sorted by offset.
+
+<ParamField path="msg" type="const IMidiMsg&" required>
+  MIDI message to add
+</ParamField>
+
+<Info>
+  Messages are automatically sorted by `mOffset` for sample-accurate playback.
+</Info>
+
+### Peek
+
+```cpp
+IMidiMsg& Peek() const;
+```
+
+Get the next message without removing it.
+
+<ResponseField name="return" type="IMidiMsg&">
+  Reference to the next message in the queue
+</ResponseField>
+
+### Remove
+
+```cpp
+inline void Remove();
+```
+
+Remove the front message from the queue.
+
+### Empty
+
+```cpp
+inline bool Empty() const;
+```
+
+Check if the queue is empty.
+
+<ResponseField name="return" type="bool">
+  `true` if queue is empty
+</ResponseField>
+
+### ToDo
+
+```cpp
+inline int ToDo() const;
+```
+
+Get the number of messages in the queue.
+
+<ResponseField name="return" type="int">
+  Number of queued messages
+</ResponseField>
+
+### Flush
+
+```cpp
+inline void Flush(int nFrames);
+```
+
+Flush the queue and update offsets for the next block.
+
+<ParamField path="nFrames" type="int" required>
+  Number of frames processed (subtracted from message offsets)
+</ParamField>
+
+<Info>
+  Call at the end of ProcessBlock() to prepare for the next block.
+</Info>
+
+### Clear
+
+```cpp
+inline void Clear();
+```
+
+Clear all messages from the queue.
+
+### Resize
+
+```cpp
+int Resize(int size);
+```
+
+Resize the queue.
+
+<ParamField path="size" type="int" required>
+  New size (will not shrink below current message count)
+</ParamField>
+
+<ResponseField name="return" type="int">
+  Actual new size
+</ResponseField>
+
+### GetSize
+
+```cpp
+inline int GetSize() const;
+```
+
+Get the allocated queue size.
+
+## Complete Example
+
+```cpp
+class MySynth : public iplug::Plugin
+{
+public:
+  MySynth(const iplug::InstanceInfo& info)
+  : Plugin(info, MakeConfig(kNumParams, 1))
+  {
+    // Initialize...
+  }
+  
+  void OnReset() override
+  {
+    mMidiQueue.Resize(GetBlockSize());
+  }
+  
+  void ProcessMidiMsg(const IMidiMsg& msg) override
+  {
+    mMidiQueue.Add(msg);
+  }
+  
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+  {
+    // Clear output
+    for (int c = 0; c < NOutChansConnected(); c++)
+      memset(outputs[c], 0, nFrames * sizeof(sample));
+    
+    for (int s = 0; s < nFrames; s++)
+    {
+      // Process MIDI at correct sample offset
+      while (!mMidiQueue.Empty())
+      {
+        IMidiMsg& msg = mMidiQueue.Peek();
+        if (msg.mOffset > s) break;
+        
+        // Parse MIDI message
+        switch (msg.StatusMsg())
+        {
+          case IMidiMsg::kNoteOn:
+          {
+            int note = msg.NoteNumber();
+            int velocity = msg.Velocity();
+            
+            if (velocity > 0)
+            {
+              // Note on
+              double freq = 440.0 * pow(2.0, (note - 69) / 12.0);
+              mVoiceManager.NoteOn(note, velocity, freq);
+            }
+            else
+            {
+              // Note on with velocity 0 = note off
+              mVoiceManager.NoteOff(note);
+            }
+            break;
+          }
+          
+          case IMidiMsg::kNoteOff:
+          {
+            mVoiceManager.NoteOff(msg.NoteNumber());
+            break;
+          }
+          
+          case IMidiMsg::kPitchWheel:
+          {
+            double bend = msg.PitchWheel();
+            mVoiceManager.SetPitchBend(bend);
+            break;
+          }
+          
+          case IMidiMsg::kControlChange:
+          {
+            // Check for sustain pedal
+            double sustainVal = msg.ControlChange(IMidiMsg::kSustainOnOff);
+            if (sustainVal >= 0.0)
+            {
+              bool sustain = IMidiMsg::ControlChangeOnOff(sustainVal);
+              mVoiceManager.SetSustain(sustain);
+            }
+            
+            // Check for mod wheel
+            double modVal = msg.ControlChange(IMidiMsg::kModWheel);
+            if (modVal >= 0.0)
+            {
+              mLFO.SetDepth(modVal);
+            }
+            break;
+          }
+          
+          case IMidiMsg::kChannelAftertouch:
+          {
+            int pressure = msg.ChannelAfterTouch();
+            mVoiceManager.SetAftertouch(pressure / 127.0);
+            break;
+          }
+        }
+        
+        mMidiQueue.Remove();
+      }
+      
+      // Generate audio for this sample
+      sample output = mVoiceManager.ProcessSample();
+      
+      // Write to all output channels
+      for (int c = 0; c < NOutChansConnected(); c++)
+        outputs[c][s] = output;
+    }
+    
+    // Prepare queue for next block
+    mMidiQueue.Flush(nFrames);
+  }
+  
+  void ProcessSysEx(const ISysEx& msg) override
+  {
+    // Handle SysEx if needed
+    DBGMSG("Received SysEx: %d bytes\n", msg.mSize);
+  }
+  
+private:
+  IMidiQueue mMidiQueue;
+  VoiceManager mVoiceManager;
+  LFO mLFO;
+};
+```
+
+## See Also
+
+- [IPlugProcessor](/api/iplug-processor) - Audio processing and MIDI handling
+- [MIDI Guide](/guides/midi-processing) - Sample-accurate MIDI processing patterns

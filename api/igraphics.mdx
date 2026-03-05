@@ -1,0 +1,677 @@
+---
+title: IGraphics
+description: Core graphics context class for rendering UI in iPlug2
+---
+
+# IGraphics
+
+The `IGraphics` class is the lowest level base class of an IGraphics context. It manages the drawing canvas, controls, and all UI interactions for audio plugins built with iPlug2.
+
+## Overview
+
+IGraphics provides:
+- Cross-platform drawing API (NanoVG, Skia)
+- Control management and rendering
+- Mouse and keyboard event handling
+- Layer and bitmap management
+- Platform-specific windowing integration
+
+## Constructor
+
+```cpp
+IGraphics(IGEditorDelegate& dlg, int w, int h, int fps = DEFAULT_FPS, float scale = 1.)
+```
+
+<ParamField path="dlg" type="IGEditorDelegate&" required>
+  The delegate that handles communication between IGraphics and the plugin
+</ParamField>
+
+<ParamField path="w" type="int" required>
+  Width of the graphics context in pixels (1:1 screen)
+</ParamField>
+
+<ParamField path="h" type="int" required>
+  Height of the graphics context in pixels (1:1 screen)
+</ParamField>
+
+<ParamField path="fps" type="int" default="DEFAULT_FPS">
+  Target frame rate for redrawing
+</ParamField>
+
+<ParamField path="scale" type="float" default="1.0">
+  Initial draw scale factor
+</ParamField>
+
+## Core Drawing Methods
+
+### BeginFrame
+
+```cpp
+virtual void BeginFrame()
+```
+
+Called at the beginning of drawing. Override to perform pre-frame setup. Always call the base implementation.
+
+### EndFrame
+
+```cpp
+virtual void EndFrame()
+```
+
+Called after drawing to blit the draw bitmap onto the screen or perform cleanup.
+
+## Shape Drawing
+
+### DrawLine
+
+```cpp
+virtual void DrawLine(const IColor& color, float x1, float y1, float x2, float y2, 
+                     const IBlend* pBlend = 0, float thickness = 1.f)
+```
+
+Draw a line to the graphics context.
+
+<ParamField path="color" type="const IColor&" required>
+  The color to draw the line with
+</ParamField>
+
+<ParamField path="x1" type="float" required>
+  X coordinate of the line start
+</ParamField>
+
+<ParamField path="y1" type="float" required>
+  Y coordinate of the line start
+</ParamField>
+
+<ParamField path="x2" type="float" required>
+  X coordinate of the line end
+</ParamField>
+
+<ParamField path="y2" type="float" required>
+  Y coordinate of the line end
+</ParamField>
+
+<ParamField path="pBlend" type="const IBlend*" default="nullptr">
+  Optional blend method
+</ParamField>
+
+<ParamField path="thickness" type="float" default="1.0">
+  Line thickness in pixels
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+g.DrawLine(COLOR_RED, 10, 10, 100, 100, nullptr, 2.f);
+```
+</CodeGroup>
+
+### DrawRect
+
+```cpp
+virtual void DrawRect(const IColor& color, const IRECT& bounds, 
+                     const IBlend* pBlend = 0, float thickness = 1.f)
+```
+
+Draw a rectangle outline.
+
+### FillRect
+
+```cpp
+virtual void FillRect(const IColor& color, const IRECT& bounds, const IBlend* pBlend = 0)
+```
+
+Fill a rectangular region with a color.
+
+<CodeGroup>
+```cpp Example
+IRECT rect(10, 10, 110, 60);
+g.FillRect(COLOR_BLUE, rect);
+```
+</CodeGroup>
+
+### DrawRoundRect
+
+```cpp
+virtual void DrawRoundRect(const IColor& color, const IRECT& bounds, float cornerRadius = 5.f,
+                          const IBlend* pBlend = 0, float thickness = 1.f)
+```
+
+Draw a rounded rectangle outline.
+
+### FillRoundRect
+
+```cpp
+virtual void FillRoundRect(const IColor& color, const IRECT& bounds, float cornerRadius = 5.f,
+                          const IBlend* pBlend = 0)
+```
+
+Fill a rounded rectangle with a color.
+
+### DrawCircle
+
+```cpp
+virtual void DrawCircle(const IColor& color, float cx, float cy, float r,
+                       const IBlend* pBlend = 0, float thickness = 1.f)
+```
+
+Draw a circle outline.
+
+<ParamField path="cx" type="float" required>
+  X coordinate of the circle center
+</ParamField>
+
+<ParamField path="cy" type="float" required>
+  Y coordinate of the circle center
+</ParamField>
+
+<ParamField path="r" type="float" required>
+  Radius of the circle in pixels
+</ParamField>
+
+### FillCircle
+
+```cpp
+virtual void FillCircle(const IColor& color, float cx, float cy, float r, const IBlend* pBlend = 0)
+```
+
+Fill a circle with a color.
+
+### DrawArc
+
+```cpp
+virtual void DrawArc(const IColor& color, float cx, float cy, float r, float a1, float a2,
+                    const IBlend* pBlend = 0, float thickness = 1.f)
+```
+
+Draw an arc.
+
+<ParamField path="a1" type="float" required>
+  Start angle in degrees clockwise (0 = up)
+</ParamField>
+
+<ParamField path="a2" type="float" required>
+  End angle in degrees clockwise (0 = up)
+</ParamField>
+
+### FillArc
+
+```cpp
+virtual void FillArc(const IColor& color, float cx, float cy, float r, float a1, float a2,
+                    const IBlend* pBlend = 0)
+```
+
+Fill an arc segment.
+
+### DrawTriangle
+
+```cpp
+virtual void DrawTriangle(const IColor& color, float x1, float y1, float x2, float y2,
+                         float x3, float y3, const IBlend* pBlend = 0, float thickness = 1.f)
+```
+
+Draw a triangle outline.
+
+### FillTriangle
+
+```cpp
+virtual void FillTriangle(const IColor& color, float x1, float y1, float x2, float y2,
+                         float x3, float y3, const IBlend* pBlend = 0)
+```
+
+Fill a triangle with a color.
+
+### DrawEllipse
+
+```cpp
+virtual void DrawEllipse(const IColor& color, const IRECT& bounds,
+                        const IBlend* pBlend = 0, float thickness = 1.f)
+```
+
+Draw an ellipse within a rectangular region.
+
+### FillEllipse
+
+```cpp
+virtual void FillEllipse(const IColor& color, const IRECT& bounds, const IBlend* pBlend = 0)
+```
+
+Fill an ellipse.
+
+## Text Drawing
+
+### DrawText
+
+```cpp
+void DrawText(const IText& text, const char* str, const IRECT& bounds, const IBlend* pBlend = 0)
+```
+
+Draw text to the graphics context in a specific rectangle.
+
+<ParamField path="text" type="const IText&" required>
+  IText struct containing font and text properties
+</ParamField>
+
+<ParamField path="str" type="const char*" required>
+  The text string to draw
+</ParamField>
+
+<ParamField path="bounds" type="const IRECT&" required>
+  The rectangular region to draw the text in
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+IText text(16, COLOR_BLACK, "Roboto-Regular", EAlign::Center, EVAlign::Middle);
+g.DrawText(text, "Hello iPlug2", mRECT);
+```
+</CodeGroup>
+
+### MeasureText
+
+```cpp
+virtual float MeasureText(const IText& text, const char* str, IRECT& bounds) const
+```
+
+Measure the rectangular region that text will occupy.
+
+<ResponseField name="return" type="float">
+  The width of the measured text
+</ResponseField>
+
+## Bitmap Drawing
+
+### DrawBitmap
+
+```cpp
+virtual void DrawBitmap(const IBitmap& bitmap, const IRECT& bounds, int srcX, int srcY,
+                       const IBlend* pBlend = 0) = 0
+```
+
+Draw a bitmap image to the graphics context.
+
+<ParamField path="bitmap" type="const IBitmap&" required>
+  The bitmap image to draw
+</ParamField>
+
+<ParamField path="bounds" type="const IRECT&" required>
+  The rectangular region to draw the image in
+</ParamField>
+
+<ParamField path="srcX" type="int" required>
+  X offset in the source image
+</ParamField>
+
+<ParamField path="srcY" type="int" required>
+  Y offset in the source image
+</ParamField>
+
+### LoadBitmap
+
+```cpp
+virtual IBitmap LoadBitmap(const char* fileNameOrResID, int nStates = 1,
+                          bool framesAreHorizontal = false, int targetScale = 0)
+```
+
+Load a bitmap from disk or Windows resource.
+
+<ParamField path="fileNameOrResID" type="const char*" required>
+  File name or resource ID
+</ParamField>
+
+<ParamField path="nStates" type="int" default="1">
+  Number of frames in a multi-frame bitmap
+</ParamField>
+
+<ParamField path="framesAreHorizontal" type="bool" default="false">
+  True if frames are stacked horizontally
+</ParamField>
+
+<ParamField path="targetScale" type="int" default="0">
+  Explicit scale (e.g., 2 for @2x.png). 0 = auto-detect
+</ParamField>
+
+<ResponseField name="return" type="IBitmap">
+  An IBitmap representing the loaded image
+</ResponseField>
+
+### DrawSVG
+
+```cpp
+virtual void DrawSVG(const ISVG& svg, const IRECT& bounds, const IBlend* pBlend = 0,
+                    const IColor* pStrokeColor = nullptr, const IColor* pFillColor = nullptr)
+```
+
+Draw an SVG image to the graphics context.
+
+<ParamField path="pStrokeColor" type="const IColor*" default="nullptr">
+  Optional color to override all SVG stroke commands
+</ParamField>
+
+<ParamField path="pFillColor" type="const IColor*" default="nullptr">
+  Optional color to override all SVG fill commands
+</ParamField>
+
+### LoadSVG
+
+```cpp
+virtual ISVG LoadSVG(const char* fileNameOrResID, const char* units = "px", float dpi = 72.f)
+```
+
+Load an SVG from disk or Windows resource.
+
+## Layer Management
+
+### StartLayer
+
+```cpp
+void StartLayer(IControl* pOwner, const IRECT& r, bool cacheable = false)
+```
+
+Create an IGraphics layer for offscreen drawing.
+
+<ParamField path="pOwner" type="IControl*" required>
+  The control that owns the layer
+</ParamField>
+
+<ParamField path="r" type="const IRECT&" required>
+  The bounds of the layer
+</ParamField>
+
+<ParamField path="cacheable" type="bool" default="false">
+  Make bitmap shareable between plugin instances
+</ParamField>
+
+### EndLayer
+
+```cpp
+ILayerPtr EndLayer()
+```
+
+End drawing to a layer and return a pointer to it.
+
+<ResponseField name="return" type="ILayerPtr">
+  Pointer to the layer that should be kept to draw it later
+</ResponseField>
+
+### DrawLayer
+
+```cpp
+void DrawLayer(const ILayerPtr& layer, const IBlend* pBlend = nullptr)
+```
+
+Draw a layer to the main IGraphics context.
+
+## Control Management
+
+### AttachControl
+
+```cpp
+IControl* AttachControl(IControl* pControl, int ctrlTag = kNoTag, const char* group = "")
+```
+
+Attach an IControl to the graphics context.
+
+<ParamField path="pControl" type="IControl*" required>
+  Pointer to the control to attach
+</ParamField>
+
+<ParamField path="ctrlTag" type="int" default="kNoTag">
+  Integer tag to identify the control
+</ParamField>
+
+<ParamField path="group" type="const char*" default="empty string">
+  Group name for batch operations
+</ParamField>
+
+<ResponseField name="return" type="IControl*">
+  Pointer to the attached control
+</ResponseField>
+
+<CodeGroup>
+```cpp Example
+auto* knob = new IVKnobControl(bounds, kGain);
+knob = g.AttachControl(knob, kCtrlTagGainKnob, "mainControls");
+```
+</CodeGroup>
+
+### GetControl
+
+```cpp
+IControl* GetControl(int idx)
+```
+
+Get the control at a specific index.
+
+### GetControlWithTag
+
+```cpp
+IControl* GetControlWithTag(int ctrlTag) const
+```
+
+Get a control by its tag.
+
+### RemoveControl
+
+```cpp
+void RemoveControl(IControl* pControl)
+```
+
+Remove a control and free its memory.
+
+### NControls
+
+```cpp
+int NControls() const
+```
+
+Get the number of controls in the context.
+
+<ResponseField name="return" type="int">
+  Number of controls
+</ResponseField>
+
+## Context Properties
+
+### Width / Height
+
+```cpp
+int Width() const
+int Height() const
+```
+
+Get the dimensions of the graphics context in 1:1 pixels.
+
+### GetDrawScale
+
+```cpp
+float GetDrawScale() const
+```
+
+Get the current draw scale factor.
+
+<ResponseField name="return" type="float">
+  The scale applied to the graphics context
+</ResponseField>
+
+### GetScreenScale
+
+```cpp
+float GetScreenScale() const
+```
+
+Get the screen/display scaling factor (e.g., 2 for Retina).
+
+### FPS
+
+```cpp
+int FPS() const
+```
+
+Get the target frame rate.
+
+### Resize
+
+```cpp
+void Resize(int w, int h, float scale, bool needsPlatformResize = true)
+```
+
+Resize the graphics context.
+
+<ParamField path="w" type="int" required>
+  New width in pixels
+</ParamField>
+
+<ParamField path="h" type="int" required>
+  New height in pixels
+</ParamField>
+
+<ParamField path="scale" type="float" required>
+  New scale ratio
+</ParamField>
+
+<ParamField path="needsPlatformResize" type="bool" default="true">
+  Set false when called from OnParentWindowResize to avoid feedback
+</ParamField>
+
+## Font Management
+
+### LoadFont
+
+```cpp
+virtual bool LoadFont(const char* fontID, const char* fileNameOrResID)
+```
+
+Load a font to be used by the graphics context.
+
+<ParamField path="fontID" type="const char*" required>
+  String identifier for the font
+</ParamField>
+
+<ParamField path="fileNameOrResID" type="const char*" required>
+  Absolute path or resource ID
+</ParamField>
+
+<ResponseField name="return" type="bool">
+  True on success
+</ResponseField>
+
+## Path Drawing
+
+### PathClear
+
+```cpp
+virtual void PathClear() = 0
+```
+
+Clear the stack of path drawing commands.
+
+### PathMoveTo
+
+```cpp
+virtual void PathMoveTo(float x, float y) = 0
+```
+
+Move the current point in the path.
+
+### PathLineTo
+
+```cpp
+virtual void PathLineTo(float x, float y) = 0
+```
+
+Add a line to the current path from the current point.
+
+### PathArc
+
+```cpp
+virtual void PathArc(float cx, float cy, float r, float a1, float a2,
+                    EWinding winding = EWinding::CW) = 0
+```
+
+Add an arc to the current path.
+
+### PathStroke
+
+```cpp
+virtual void PathStroke(const IPattern& pattern, float thickness,
+                       const IStrokeOptions& options = IStrokeOptions(),
+                       const IBlend* pBlend = 0) = 0
+```
+
+Stroke the current path.
+
+<ParamField path="pattern" type="const IPattern&" required>
+  Pattern for color or gradient
+</ParamField>
+
+<ParamField path="thickness" type="float" required>
+  Line thickness
+</ParamField>
+
+<ParamField path="options" type="const IStrokeOptions&" default="IStrokeOptions()">
+  Dash, join, and preserve options
+</ParamField>
+
+### PathFill
+
+```cpp
+virtual void PathFill(const IPattern& pattern,
+                     const IFillOptions& options = IFillOptions(),
+                     const IBlend* pBlend = 0) = 0
+```
+
+Fill the current path.
+
+## Example Usage
+
+<CodeGroup>
+```cpp Complete Example
+class MyPlugin : public Plugin {
+public:
+  MyPlugin(const InstanceInfo& info) : Plugin(info, MakeConfig(kNumParams, kNumPrograms)) {
+    auto* pGraphics = MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS);
+    
+    pGraphics->AttachPanelBackground(COLOR_GRAY);
+    pGraphics->LoadFont("Roboto-Regular", "Roboto-Regular.ttf");
+    
+    const IRECT bounds = pGraphics->GetBounds().GetPadded(-20);
+    
+    // Attach controls
+    pGraphics->AttachControl(new IVKnobControl(bounds.GetGridCell(0, 2, 1), kGain));
+    pGraphics->AttachControl(new IVSliderControl(bounds.GetGridCell(1, 2, 1), kCutoff));
+    
+    SetUI(pGraphics);
+  }
+};
+```
+
+```cpp Custom Drawing
+void MyControl::Draw(IGraphics& g) {
+  g.FillRect(COLOR_WHITE, mRECT);
+  
+  // Draw a gradient circle
+  g.FillCircle(COLOR_BLUE, mRECT.MW(), mRECT.MH(), 50.f);
+  
+  // Draw text
+  IText text(14, COLOR_BLACK);
+  g.DrawText(text, "Volume", mRECT);
+  
+  // Draw custom path
+  g.PathClear();
+  g.PathMoveTo(mRECT.L, mRECT.MH());
+  g.PathLineTo(mRECT.R, mRECT.MH());
+  g.PathStroke(IPattern(COLOR_RED), 2.f);
+}
+```
+</CodeGroup>
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="IControl" icon="cube" href="/api/icontrol">
+    Base class for all UI controls
+  </Card>
+  <Card title="IGraphics Structs" icon="shapes" href="/api/igraphics-structs">
+    Supporting data structures
+  </Card>
+</CardGroup>

@@ -1,0 +1,701 @@
+---
+title: Svelte Interface  
+description: Building reactive plugin UIs with Svelte and TypeScript
+---
+
+iPlug2 supports building plugin UIs with Svelte, a modern reactive framework that compiles to efficient vanilla JavaScript.
+
+<Info>
+Svelte UIs use the same webview technology as WebView plugins, but with a modern reactive framework and TypeScript support.
+</Info>
+
+## Getting Started
+
+<Steps>
+  <Step title="Copy the example project">
+    Start by duplicating the Svelte example:
+    ```bash
+    ./duplicate.py IPlugSvelteUI MyPlugin
+    ```
+  </Step>
+  
+  <Step title="Project structure">
+    Your project will have:
+    ```
+    MyPlugin/
+    ├── MyPlugin.h              # Plugin header (C++)
+    ├── MyPlugin.cpp            # Plugin implementation (C++)
+    ├── config.h                # Plugin configuration  
+    ├── web-ui/                 # Svelte project
+    │   ├── src/
+    │   │   ├── App.svelte
+    │   │   ├── main.ts
+    │   │   └── lib/
+    │   │       ├── iplug.ts     # iPlug2 communication
+    │   │       ├── Knob.svelte
+    │   │       └── VUMeter.svelte
+    │   ├── vite.config.js
+    │   └── package.json
+    └── resources/
+        └── web/                # Built output
+            ├── index.html
+            └── assets/
+    ```
+  </Step>
+  
+  <Step title="Install dependencies">
+    ```bash
+    cd MyPlugin/web-ui
+    npm install
+    ```
+  </Step>
+  
+  <Step title="Development workflow">
+    ```bash
+    # Development mode with hot reload
+    npm run dev
+    
+    # Build for production
+    npm run build
+    ```
+  </Step>
+</Steps>
+
+## Plugin Implementation
+
+### Plugin Header (C++)
+
+Identical to WebView plugins:
+
+```cpp
+#pragma once
+
+#include "IPlug_include_in_plug_hdr.h"
+#include "Oscillator.h"
+#include "Smoothers.h"
+#include "ISender.h"
+
+using namespace iplug;
+
+const int kNumPresets = 3;
+
+enum EParams
+{
+  kGain = 0,
+  kNumParams
+};
+
+enum EControlTags
+{
+  kCtrlTagMeter = 0,
+};
+
+class MyPlugin final : public Plugin
+{
+public:
+  MyPlugin(const InstanceInfo& info);
+  
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  void OnReset() override;
+  void OnIdle() override;
+
+private:
+  iplug::IPeakSender<2> mSender;  // 2 channels
+  FastSinOscillator<sample> mOscillator {0., 440.};
+  LogParamSmooth<sample, 1> mGainSmoother;
+};
+```
+
+### Plugin Implementation (C++)
+
+```cpp
+#include "MyPlugin.h"
+#include "IPlug_include_in_plug_src.h"
+#include "IPlugPaths.h"
+
+MyPlugin::MyPlugin(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kGain)->InitGain("Gain", -70., -70, 0.);
+  
+  SetCustomUrlScheme("iplug2");
+  
+#ifdef DEBUG
+  SetEnableDevTools(true);
+#endif
+  
+  mEditorInitFunc = [&]() {
+    LoadIndexHtml(__FILE__, GetBundleID());
+    // For live development:
+    // LoadURL("http://localhost:5173/");
+    EnableScroll(false);
+  };
+  
+  MakePreset("One", -70.);
+  MakePreset("Two", -30.);
+  MakePreset("Three", 0.);
+}
+
+void MyPlugin::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kGain)->DBToAmp();
+    
+  mOscillator.ProcessBlock(inputs[0], nFrames);
+
+  for (int s = 0; s < nFrames; s++)
+  {
+    outputs[0][s] = inputs[0][s] * mGainSmoother.Process(gain);
+    outputs[1][s] = outputs[0][s];
+  }
+  
+  // Send peak level to meter
+  mSender.ProcessBlock(outputs, nFrames, kCtrlTagMeter);
+}
+
+void MyPlugin::OnReset()
+{
+  auto sr = GetSampleRate();
+  mOscillator.SetSampleRate(sr);
+  mGainSmoother.SetSmoothTime(20., sr);
+}
+
+void MyPlugin::OnIdle()
+{
+  // Send meter data to UI on main thread
+  mSender.TransmitData(*this);
+}
+```
+
+## Svelte Application
+
+### Main App Component
+
+```svelte
+<!-- App.svelte -->
+<script lang="ts">
+  import Knob from './lib/Knob.svelte'
+  import VUMeter from './lib/VUMeter.svelte'
+
+  let gainKnob: any;
+  let vuMeter: any;
+
+  // Receive parameter value changes from the plugin
+  globalThis.SPVFD = (paramIdx: number, val: number) => {
+    if (paramIdx === 0) {
+      gainKnob?.setValueFromPlugin(val);
+    }
+  };
+
+  // Receive control messages (meter data)
+  globalThis.SCMFD = (ctrlTag: number, msgTag: number, dataSize: number, msg: string) => {
+    if (ctrlTag === 0) {
+      // Decode base64 to binary
+      const msgData = atob(msg);
+      const bytes = new Uint8Array(msgData.length);
+      for (let i = 0; i < msgData.length; i++) {
+        bytes[i] = msgData.charCodeAt(i);
+      }
+      
+      // Parse header (3 Int32s) and float data
+      const intView = new Int32Array(bytes.buffer, 0, 3);
+      const [controlTag, nChans, chanOffset] = intView;
+      const data = new Float32Array(bytes.buffer, 12);
+
+      vuMeter?.setLevel(data[0]);
+    }
+  };
+</script>
+
+<main>
+  <div class="header">
+    <h1>My Audio Plugin</h1>
+    <p>Built with iPlug2 + Svelte</p>
+  </div>
+
+  <div class="controls">
+    <Knob 
+      bind:this={gainKnob}
+      paramId={0}
+      label="Volume"
+      minValue={-70}
+      maxValue={0}
+      units="dB"
+      defaultValue={-70}
+    />
+    <VUMeter
+      bind:this={vuMeter}
+      label="Level"
+    />
+  </div>
+</main>
+
+<style>
+  main {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  
+  .header {
+    text-align: center;
+    margin-bottom: 40px;
+  }
+  
+  h1 {
+    margin: 0;
+    font-size: 2rem;
+    font-weight: 600;
+  }
+  
+  p {
+    margin: 8px 0 0 0;
+    opacity: 0.9;
+  }
+
+  .controls {
+    display: flex;
+    gap: 40px;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  /* Disable text selection */
+  :global(*) {
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+  }
+</style>
+```
+
+### iPlug2 Communication Module
+
+```typescript
+// lib/iplug.ts
+
+// FROM UI TO PLUGIN
+
+export function SPVFUI(paramIdx: number, value: number) {
+  if (paramIdx < 0) {
+    console.log("SPVFUI paramIdx must be >= 0")
+    return;
+  }
+  
+  const message = {
+    msg: "SPVFUI",
+    paramIdx: parseInt(String(paramIdx)),
+    value: value
+  };
+
+  IPlugSendMsg(message);
+}
+
+export function BPCFUI(paramIdx: number) {
+  if (paramIdx < 0) {
+    console.log("BPCFUI paramIdx must be >= 0")
+    return;
+  }
+  
+  const message = {
+    msg: "BPCFUI",
+    paramIdx: parseInt(String(paramIdx)),
+  };
+
+  IPlugSendMsg(message);
+}
+
+export function EPCFUI(paramIdx: number) {
+  if (paramIdx < 0) {
+    console.log("EPCFUI paramIdx must be >= 0")
+    return;
+  }
+  
+  const message = {
+    msg: "EPCFUI",
+    paramIdx: parseInt(String(paramIdx)),
+  };
+
+  IPlugSendMsg(message);
+}
+
+// FROM PLUGIN TO UI
+export function SPVFD(paramIdx: number, val: number) {
+  OnParamChange(paramIdx, val);
+}
+
+export function SCMFD(ctrlTag: number, msgTag: number, dataSize: number, msg: string) {
+  console.log("SCMFD ctrlTag: " + ctrlTag + " msgTag:" + msgTag);
+}
+
+export function OnParamChange(paramIdx: number, value: number) {
+  // Override this in your app
+}
+
+// Make functions globally available
+globalThis.SPVFUI = SPVFUI;
+globalThis.BPCFUI = BPCFUI;
+globalThis.EPCFUI = EPCFUI;
+globalThis.SPVFD = SPVFD;
+globalThis.SCMFD = SCMFD;
+globalThis.OnParamChange = OnParamChange;
+```
+
+### Knob Component
+
+```svelte
+<!-- lib/Knob.svelte -->
+<script lang="ts">
+  import { SPVFUI, BPCFUI, EPCFUI } from './iplug';
+
+  export let paramId = 0;
+  export let defaultValue = 0.0;
+  export let value = defaultValue;
+  export let label = '';
+  export let minValue = 0;
+  export let maxValue = 100;
+  export let units = '';
+  export let minAngle = -135;
+  export let maxAngle = 135;
+
+  let currentValue = defaultValue;
+
+  export function setValueFromPlugin(newValue: number) {
+    // Convert normalized (0-1) to real value
+    currentValue = minValue + newValue * (maxValue - minValue);
+  }
+
+  function updateValue(newValue: number) {
+    currentValue = newValue;
+    const normValue = (newValue - minValue) / (maxValue - minValue);
+    value = newValue;
+    SPVFUI(paramId, normValue);
+  }
+
+  function startDrag(e: MouseEvent | TouchEvent) {
+    if ('button' in e && e.button === 2) return;
+
+    BPCFUI(paramId);
+    e.preventDefault();
+    
+    const initialY = ('touches' in e) ? e.touches[0].clientY : e.clientY;
+    const initialValue = currentValue;
+
+    function onMove(e: MouseEvent | TouchEvent) {
+      const clientY = ('touches' in e) ? e.touches[0].clientY : e.clientY;
+      const deltaY = initialY - clientY;
+      const valueChange = deltaY * (maxValue - minValue) / 100;
+      const newValue = Math.min(Math.max(initialValue + valueChange, minValue), maxValue);
+      updateValue(newValue);
+    }
+
+    function onEnd() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onEnd);
+      document.removeEventListener('touchmove', onMove);
+      document.removeEventListener('touchend', onEnd);
+      document.body.style.cursor = '';
+      EPCFUI(paramId);
+    }
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onEnd);
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('touchend', onEnd);
+    document.body.style.cursor = 'none';
+  }
+
+  $: angle = minAngle + ((currentValue - minValue) / (maxValue - minValue)) * (maxAngle - minAngle);
+</script>
+
+<div class="container">
+  <div class="label">{label}</div>
+  <svg viewBox="0 0 100 100" width="80" height="80">
+    <circle 
+      cx="50" 
+      cy="50" 
+      r="42" 
+      fill="#1a1a1a"
+      stroke="#fff"
+      stroke-width="2"
+      on:mousedown={startDrag}
+      on:touchstart={startDrag}
+      role="slider"
+      tabindex="0"
+      aria-valuemin={minValue}
+      aria-valuemax={maxValue}
+      aria-valuenow={currentValue}
+      aria-label={label}
+    />
+    <line 
+      class="pointer"
+      x1="50"
+      y1="10"
+      x2="50"
+      y2="50"
+      stroke="#fff"
+      stroke-width="4"
+      transform="rotate({angle}, 50, 50)"
+    />
+  </svg>
+  <div class="value">{currentValue.toFixed(1)} {units}</div>
+</div>
+
+<style>
+  .container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .label {
+    margin-bottom: 8px;
+    color: white;
+    font-size: 14px;
+    pointer-events: none;
+  }
+
+  .value {
+    margin-top: 8px;
+    color: white;
+    font-size: 12px;
+    pointer-events: none;
+  }
+  
+  circle {
+    cursor: ns-resize;
+  }
+</style>
+```
+
+### VU Meter Component
+
+```svelte
+<!-- lib/VUMeter.svelte -->
+<script lang="ts">
+  export let label = 'Level';
+  
+  let level = 0;
+  let displayLevel = 0;
+  
+  export function setLevel(newLevel: number) {
+    level = newLevel;
+    // Convert to dB and scale for display
+    const db = 20 * Math.log10(Math.max(newLevel, 0.0001));
+    displayLevel = Math.max(0, Math.min(100, (db + 80) / 80 * 100));
+  }
+</script>
+
+<div class="meter">
+  <div class="label">{label}</div>
+  <div class="bar-container">
+    <div class="bar" style="height: {displayLevel}%"></div>
+  </div>
+</div>
+
+<style>
+  .meter {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  
+  .label {
+    margin-bottom: 8px;
+    color: white;
+    font-size: 14px;
+  }
+  
+  .bar-container {
+    width: 20px;
+    height: 150px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    align-items: flex-end;
+  }
+  
+  .bar {
+    width: 100%;
+    background: linear-gradient(to top, #4ade80, #facc15, #ef4444);
+    transition: height 0.05s ease-out;
+  }
+</style>
+```
+
+## Build Configuration
+
+### Vite Config
+
+```javascript
+// vite.config.js
+import { defineConfig } from 'vite'
+import { svelte } from '@sveltejs/vite-plugin-svelte'
+import path from 'path'
+
+export default defineConfig({
+  plugins: [svelte()],
+  build: {
+    outDir: '../resources/web',
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        entryFileNames: 'assets/[name]-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash][extname]'
+      }
+    }
+  },
+  server: {
+    port: 5173
+  }
+})
+```
+
+### Package.json
+
+```json
+{
+  "name": "myplugin-ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^3.0.0",
+    "svelte": "^4.2.0",
+    "typescript": "^5.0.0",
+    "vite": "^5.0.0"
+  }
+}
+```
+
+## Development Workflow
+
+<Steps>
+  <Step title="Start development server">
+    ```bash
+    cd web-ui
+    npm run dev
+    ```
+    This starts Vite dev server at `http://localhost:5173`
+  </Step>
+  
+  <Step title="Load dev URL in plugin">
+    ```cpp
+    mEditorInitFunc = [&]() {
+      LoadURL("http://localhost:5173/");
+    };
+    ```
+  </Step>
+  
+  <Step title="Edit and see changes">
+    Changes to `.svelte` files hot-reload automatically in the plugin.
+  </Step>
+  
+  <Step title="Build for production">
+    ```bash
+    npm run build
+    ```
+    This builds to `resources/web/` which is bundled with the plugin.
+  </Step>
+</Steps>
+
+## TypeScript Support
+
+Define iPlug2 globals:
+
+```typescript
+// types/iplug.d.ts
+declare global {
+  interface Window {
+    IPlugSendMsg: (message: any) => void;
+  }
+  
+  const IPlugSendMsg: (message: any) => void;
+  
+  var SPVFUI: (paramIdx: number, value: number) => void;
+  var BPCFUI: (paramIdx: number) => void;
+  var EPCFUI: (paramIdx: number) => void;
+  var SPVFD: (paramIdx: number, val: number) => void;
+  var SCMFD: (ctrlTag: number, msgTag: number, dataSize: number, msg: string) => void;
+  var OnParamChange: (paramIdx: number, value: number) => void;
+}
+
+export {};
+```
+
+## Reactive State Management
+
+Svelte's reactivity makes state management simple:
+
+```svelte
+<script>
+  // Reactive declaration - automatically updates when currentValue changes
+  $: displayValue = currentValue.toFixed(2) + ' dB';
+  
+  // Reactive statement - runs when dependency changes  
+  $: if (currentValue > 0) {
+    console.warn('Clipping!');
+  }
+  
+  // Derived value
+  $: normalizedValue = (currentValue - minValue) / (maxValue - minValue);
+</script>
+```
+
+## Best Practices
+
+<Tip>
+**Use bind:this for component references**
+
+```svelte
+<Knob bind:this={gainKnob} />
+```
+
+This allows you to call methods like `gainKnob.setValueFromPlugin()` from parent components.
+</Tip>
+
+<Warning>
+**Build before releasing**
+
+Always run `npm run build` before creating a release build of your plugin. The plugin loads from `resources/web/` in release mode.
+</Warning>
+
+<Note>
+**Svelte compiles away**
+
+Unlike React or Vue, Svelte compiles to vanilla JavaScript with no runtime framework overhead. This results in smaller bundle sizes.
+</Note>
+
+## Advantages of Svelte
+
+- **Reactive by default**: No need for setState or hooks
+- **Less boilerplate**: Simpler syntax than React/Vue
+- **Smaller bundles**: Compiles to efficient vanilla JS
+- **Great TypeScript support**: Full type safety
+- **Scoped styles**: CSS automatically scoped to components
+- **Vite integration**: Fast HMR and builds
+
+## Example Project
+
+See the complete example in `Examples/IPlugSvelteUI/` which demonstrates:
+
+- Reactive knob controls with parameter binding
+- Real-time VU meter visualization
+- TypeScript integration
+- Hot module replacement during development
+- Binary data parsing from C++
+- Vite build configuration

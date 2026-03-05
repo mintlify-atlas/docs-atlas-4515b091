@@ -1,0 +1,208 @@
+---
+title: 'iPlug2 Core Overview'
+description: 'Introduction to the iPlug2 audio plugin framework architecture'
+---
+
+iPlug2 is a cross-platform C++ audio plugin framework that provides a powerful abstraction layer for creating audio plugins across multiple formats and platforms.
+
+## Architecture
+
+The framework consists of two main components:
+
+<CardGroup cols={2}>
+  <Card title="IPlug" icon="puzzle-piece" href="/iplug/plugin-base">
+    Core plugin abstraction layer for DSP, parameters, and state management
+  </Card>
+  <Card title="IGraphics" icon="paint-brush">
+    Optional GUI toolkit with multiple backends (NanoVG, Skia)
+  </Card>
+</CardGroup>
+
+## Supported Formats
+
+iPlug2 generates plugins for all major formats:
+
+- **CLAP** - Modern cross-platform format
+- **VST3** - Steinberg's VST3 standard
+- **AUv2/AUv3** - Apple Audio Units (macOS/iOS)
+- **AAX** - Avid Pro Tools format
+- **Standalone App** - Desktop application
+- **WAM** - WebAssembly audio modules
+- **VST2** - Legacy format (deprecated)
+
+## Platform Support
+
+<Tabs>
+  <Tab title="Desktop">
+    - macOS (x86-64, ARM64)
+    - Windows (x86-32, x86-64, ARM64)
+    - Linux (via CLAP/VST3)
+  </Tab>
+  <Tab title="Mobile & Web">
+    - iOS (AUv3)
+    - Web browsers (WAM/WASM)
+  </Tab>
+</Tabs>
+
+## Core Classes
+
+### Plugin Base Classes
+
+```cpp
+// Main plugin classes you'll interact with
+class IPluginBase      // Parameters, presets, state serialization
+class IPlugProcessor   // Audio processing, MIDI, channel I/O
+class Plugin           // Combined base class (IPluginBase + IPlugProcessor)
+```
+
+### Key Components
+
+<CardGroup cols={2}>
+  <Card title="Parameters" href="/iplug/parameters">
+    `IParam` - Type-safe parameters with ranges, shapes, and display functions
+  </Card>
+  <Card title="Presets" href="/iplug/presets">
+    `IPreset` - Factory presets and state management
+  </Card>
+  <Card title="Processor" href="/iplug/processor">
+    Audio processing and channel configuration
+  </Card>
+  <Card title="MIDI" href="/iplug/midi">
+    `IMidiMsg` and `ISysEx` for MIDI handling
+  </Card>
+</CardGroup>
+
+## Plugin Structure
+
+Every iPlug2 plugin consists of three main files:
+
+<Steps>
+  <Step title="config.h">
+    Compile-time configuration defining plugin properties:
+    
+    ```cpp
+    #define PLUG_NAME "MyPlugin"
+    #define PLUG_MFR "MyCompany"
+    #define PLUG_CHANNEL_IO "1-1 2-2"  // Mono and stereo
+    #define PLUG_TYPE 0                 // 0=Effect, 1=Instrument, 2=MIDI Effect
+    #define PLUG_DOES_MIDI_IN 0
+    #define PLUG_LATENCY 0
+    ```
+  </Step>
+  
+  <Step title="Plugin.h">
+    Plugin class declaration with parameter enums:
+    
+    ```cpp
+    enum EParams {
+      kGain = 0,
+      kFrequency,
+      kNumParams
+    };
+    
+    class MyPlugin : public iplug::Plugin {
+    public:
+      MyPlugin(const InstanceInfo& info);
+      void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+    };
+    ```
+  </Step>
+  
+  <Step title="Plugin.cpp">
+    Implementation with parameter initialization and DSP:
+    
+    ```cpp
+    MyPlugin::MyPlugin(const InstanceInfo& info)
+    : Plugin(info, MakeConfig(kNumParams, kNumPresets))
+    {
+      GetParam(kGain)->InitDouble("Gain", 0., -70., 12., 0.1, "dB");
+      GetParam(kFrequency)->InitFrequency("Frequency", 1000., 20., 20000.);
+    }
+    ```
+  </Step>
+</Steps>
+
+## Basic Example
+
+Here's a simple gain plugin from the IPlugEffect example:
+
+```cpp IPlugEffect.cpp
+#include "IPlugEffect.h"
+
+IPlugEffect::IPlugEffect(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  // Initialize parameter: name, default, min, max, step, label
+  GetParam(kGain)->InitDouble("Gain", 0., 0., 100.0, 0.01, "%");
+}
+
+void IPlugEffect::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kGain)->Value() / 100.;
+  const int nChans = NOutChansConnected();
+  
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+}
+```
+
+## Realtime Safety
+
+<Warning>
+  `ProcessBlock()` runs on the high-priority audio thread. Never perform blocking operations:
+  
+  - ❌ File I/O
+  - ❌ Memory allocation
+  - ❌ Lock acquisition (use lock-free structures)
+  - ❌ System calls
+  - ✅ Only realtime-safe DSP operations
+</Warning>
+
+## Code Style
+
+iPlug2 follows these conventions:
+
+```cpp
+// Member variables
+mSampleRate     // m prefix
+pData           // p prefix for pointers
+
+// Methods
+ProcessBlock()  // Public methods: PascalCase
+_HelperMethod() // Internal methods: underscore prefix
+
+// Formatting
+2-space indentation (no tabs)
+Unix line endings
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Plugin Base" icon="cube" href="/iplug/plugin-base">
+    Learn about plugin properties, state management, and presets
+  </Card>
+  <Card title="Audio Processing" icon="waveform" href="/iplug/processor">
+    Understand ProcessBlock and channel I/O configuration
+  </Card>
+  <Card title="Parameters" icon="sliders" href="/iplug/parameters">
+    Deep dive into the IParam system
+  </Card>
+  <Card title="MIDI" icon="music" href="/iplug/midi">
+    Handle MIDI messages and SysEx
+  </Card>
+</CardGroup>
+
+## Resources
+
+<CardGroup cols={2}>
+  <Card title="API Documentation" icon="book" href="https://iplug2.github.io/docs">
+    Complete API reference
+  </Card>
+  <Card title="GitHub Wiki" icon="github" href="https://github.com/iPlug2/iPlug2/wiki">
+    Guides and tutorials
+  </Card>
+</CardGroup>

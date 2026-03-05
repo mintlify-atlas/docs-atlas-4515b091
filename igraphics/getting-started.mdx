@@ -1,0 +1,386 @@
+---
+title: 'Getting Started with IGraphics'
+description: 'Learn how to set up and build your first IGraphics user interface'
+---
+
+## Prerequisites
+
+Before building an IGraphics UI, ensure you have:
+
+<Steps>
+  <Step title="Compile-time backend definition">
+    Choose either `IGRAPHICS_NANOVG` or `IGRAPHICS_SKIA` in your project configuration
+  </Step>
+  <Step title="Graphics API definition">
+    For NanoVG: define `IGRAPHICS_GL2`, `IGRAPHICS_GL3`, `IGRAPHICS_METAL`, etc.
+  </Step>
+  <Step title="Enable IPLUG_EDITOR">
+    Ensure `IPLUG_EDITOR` is defined in your config.h
+  </Step>
+</Steps>
+
+<Info>
+For NanoVG, no additional dependencies are required. For Skia, you must download and build the Skia library.
+</Info>
+
+## The MakeGraphics Pattern
+
+IGraphics UIs are created using the **MakeGraphics** pattern in your plugin constructor:
+
+```cpp
+#include "IPlug_include_in_plug_src.h"
+#include "IControls.h"
+
+MyPlugin::MyPlugin(const InstanceInfo& info)
+: Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  // Define parameters first
+  GetParam(kGain)->InitDouble("Gain", 0., 0., 100., 0.01, "%");
+
+#if IPLUG_EDITOR
+  // Step 1: Define how to create the graphics context
+  mMakeGraphicsFunc = [&]() {
+    return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS, 
+                        GetScaleForScreen(PLUG_WIDTH, PLUG_HEIGHT));
+  };
+  
+  // Step 2: Define how to layout controls
+  mLayoutFunc = [&](IGraphics* pGraphics) {
+    // Handle resize case
+    if(pGraphics->NControls()) {
+      // Re-layout existing controls if needed
+      return;
+    }
+    
+    // Initial setup - load resources and attach controls
+    pGraphics->AttachPanelBackground(COLOR_GRAY);
+    pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
+    
+    const IRECT bounds = pGraphics->GetBounds();
+    pGraphics->AttachControl(new IVKnobControl(bounds.GetCentredInside(100), 
+                                                kGain, "Gain"));
+  };
+#endif
+}
+```
+
+## Understanding mMakeGraphicsFunc
+
+The `mMakeGraphicsFunc` lambda is called to create the IGraphics instance:
+
+<CodeGroup>
+```cpp Basic Setup
+mMakeGraphicsFunc = [&]() {
+  return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS);
+};
+```
+
+```cpp With Auto-Scaling
+mMakeGraphicsFunc = [&]() {
+  return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS, 
+                      GetScaleForScreen(PLUG_WIDTH, PLUG_HEIGHT));
+};
+```
+
+```cpp Web-Specific
+mMakeGraphicsFunc = [&]() {
+#ifdef OS_WEB
+  int w, h;
+  GetScreenDimensions(w, h);
+  return MakeGraphics(*this, w, h, PLUG_FPS, 1.f);
+#else
+  return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS);
+#endif
+};
+```
+</CodeGroup>
+
+**Parameters:**
+- `*this` - Reference to your plugin instance
+- `PLUG_WIDTH` - Width in pixels (defined in config.h)
+- `PLUG_HEIGHT` - Height in pixels (defined in config.h)  
+- `PLUG_FPS` - Refresh rate (typically 60)
+- `scale` - Display scale factor (1.0 = 100%, 2.0 = 200%)
+
+## Understanding mLayoutFunc
+
+The `mLayoutFunc` lambda is called to create and layout controls:
+
+```cpp
+mLayoutFunc = [&](IGraphics* pGraphics) {
+  // 1. Check if this is a resize (controls already exist)
+  if(pGraphics->NControls()) {
+    // Handle resize - reposition existing controls
+    return;
+  }
+  
+  // 2. Enable features
+  pGraphics->EnableMouseOver(true);    // Hover effects
+  pGraphics->EnableTooltips(true);     // Tooltip support
+  pGraphics->EnableMultiTouch(true);   // Multi-touch gestures
+  
+  // 3. Load resources
+  pGraphics->LoadFont("MyFont", "path/to/font.ttf");
+  const IBitmap knob = pGraphics->LoadBitmap("knob.png", 60);
+  
+  // 4. Attach utility controls
+  pGraphics->AttachPanelBackground(COLOR_GRAY);
+  pGraphics->AttachCornerResizer(EUIResizerMode::Scale, false);
+  pGraphics->AttachTextEntryControl();
+  pGraphics->AttachPopupMenuControl();
+  
+  // 5. Attach your custom controls
+  const IRECT b = pGraphics->GetBounds();
+  pGraphics->AttachControl(new IVKnobControl(b.GetGridCell(0, 0, 4, 4), 
+                                              kParam1, "Label"));
+};
+```
+
+## Attaching Controls
+
+Controls are attached to IGraphics and can be tagged and grouped:
+
+<CodeGroup>
+```cpp Basic Attachment
+// Simple attachment
+pGraphics->AttachControl(new IVKnobControl(bounds, kGain, "Gain"));
+
+// With control tag (for later retrieval)
+pGraphics->AttachControl(new IVSliderControl(bounds, kCutoff, "Cutoff"), 
+                          kCtrlTagCutoff);
+
+// With group name (for batch operations)
+pGraphics->AttachControl(new IVButtonControl(bounds, action, "Button"), 
+                          kNoTag, "buttongroup");
+```
+
+```cpp Retrieving Controls
+// By tag
+IControl* pControl = pGraphics->GetControlWithTag(kCtrlTagCutoff);
+pControl->As<IVSliderControl>()->SetValue(0.5);
+
+// By index
+IControl* pControl = pGraphics->GetControl(3);
+
+// Iterate all controls
+for(int i = 0; i < pGraphics->NControls(); i++) {
+  IControl* pControl = pGraphics->GetControl(i);
+  // ...
+}
+```
+
+```cpp Group Operations
+// Operate on all controls in a group
+pGraphics->ForControlInGroup("buttongroup", [](IControl* pControl) {
+  pControl->Hide(true);
+});
+
+// Hide/show entire group
+pGraphics->HideControlsForGroup("buttongroup", true);
+```
+</CodeGroup>
+
+<Note>
+Control tags are user-defined integer constants. Define them as enums in your plugin header:
+```cpp
+enum EControlTags {
+  kCtrlTagMeter = 0,
+  kCtrlTagScope,
+  kCtrlTagKeyboard
+};
+```
+</Note>
+
+## Linking Controls to Parameters
+
+Controls automatically synchronize with plugin parameters:
+
+```cpp
+// Link control to parameter by index
+pGraphics->AttachControl(new IVKnobControl(bounds, kGain, "Gain"));
+//                                                  ^^^^^ parameter index
+
+// Control automatically:
+// - Displays current parameter value
+// - Sends parameter changes when user interacts
+// - Updates when parameter changes from host/automation
+
+// Multiple parameters (e.g., XY pad)
+pGraphics->AttachControl(
+  new IVXYPadControl(bounds, {kParamX, kParamY}, "XY Pad")
+);
+```
+
+## Complete Example
+
+Here's a full working example:
+
+```cpp MyPlugin.cpp
+#include "MyPlugin.h"
+#include "IPlug_include_in_plug_src.h"
+#include "IControls.h"
+
+// Parameter indices
+enum EParams {
+  kParamGain = 0,
+  kParamFreq,
+  kParamResonance,
+  kNumParams
+};
+
+// Control tags
+enum EControlTags {
+  kCtrlTagMeter = 0,
+  kCtrlTagScope
+};
+
+MyPlugin::MyPlugin(const InstanceInfo& info)
+: Plugin(info, MakeConfig(kNumParams, 1))
+{
+  // Initialize parameters
+  GetParam(kParamGain)->InitDouble("Gain", 0., -70., 12., 0.01, "dB");
+  GetParam(kParamFreq)->InitDouble("Frequency", 1000., 20., 20000., 0.01, "Hz");
+  GetParam(kParamResonance)->InitDouble("Resonance", 0.5, 0., 1., 0.01);
+
+#if IPLUG_EDITOR
+  mMakeGraphicsFunc = [&]() {
+    return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS, 
+                        GetScaleForScreen(PLUG_WIDTH, PLUG_HEIGHT));
+  };
+  
+  mLayoutFunc = [&](IGraphics* pGraphics) {
+    if(pGraphics->NControls())
+      return; // Already laid out
+    
+    // Setup
+    pGraphics->EnableMouseOver(true);
+    pGraphics->EnableTooltips(true);
+    pGraphics->AttachPanelBackground(COLOR_DARK_GRAY);
+    pGraphics->AttachCornerResizer(EUIResizerMode::Scale, false);
+    pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
+    
+    // Define style
+    const IVStyle style = DEFAULT_STYLE
+      .WithColor(kBG, COLOR_BLACK)
+      .WithColor(kFG, COLOR_WHITE)
+      .WithRoundness(0.5f);
+    
+    // Layout controls in a grid
+    const IRECT b = pGraphics->GetBounds().GetPadded(-20);
+    
+    // Row 1: Knobs
+    pGraphics->AttachControl(new IVKnobControl(
+      b.GetGridCell(0, 0, 2, 3).GetCentredInside(80), 
+      kParamGain, "Gain", style
+    ));
+    
+    pGraphics->AttachControl(new IVKnobControl(
+      b.GetGridCell(0, 1, 2, 3).GetCentredInside(80), 
+      kParamFreq, "Frequency", style
+    ));
+    
+    pGraphics->AttachControl(new IVKnobControl(
+      b.GetGridCell(0, 2, 2, 3).GetCentredInside(80), 
+      kParamResonance, "Resonance", style
+    ));
+    
+    // Row 2: Meter
+    pGraphics->AttachControl(new IVMeterControl<1>(
+      b.GetGridCell(1, 0, 2, 3), "Meter", style
+    ), kCtrlTagMeter);
+  };
+#endif
+}
+```
+
+## Enabling Features
+
+Common features to enable in your layout function:
+
+```cpp
+// Mouse interaction
+pGraphics->EnableMouseOver(true);        // Hover effects
+pGraphics->EnableMultiTouch(true);       // Multi-touch gestures
+pGraphics->EnableTooltips(true);         // Tooltip support
+
+// Live editing (debug only)
+pGraphics->EnableLiveEdit(true);         // Edit mode for development
+
+// Layout
+pGraphics->SetLayoutOnResize(true);      // Call mLayoutFunc on resize
+
+// Utility controls
+pGraphics->AttachCornerResizer(EUIResizerMode::Scale, false);
+pGraphics->AttachPanelBackground(IColor(50, 50, 50));
+pGraphics->AttachTextEntryControl();     // Text input popup
+pGraphics->AttachPopupMenuControl();     // Context menu support
+pGraphics->AttachBubbleControl();        // Value bubble tooltip
+```
+
+## Common Patterns
+
+<Tabs>
+  <Tab title="Grid Layout">
+```cpp
+const IRECT b = pGraphics->GetBounds().GetPadded(-10);
+
+// 4x3 grid of controls
+for(int row = 0; row < 4; row++) {
+  for(int col = 0; col < 3; col++) {
+    IRECT cell = b.GetGridCell(row, col, 4, 3).GetPadded(-5);
+    pGraphics->AttachControl(new IVButtonControl(cell, nullptr, "Button"));
+  }
+}
+```
+  </Tab>
+  <Tab title="Fractional Layout">
+```cpp
+const IRECT b = pGraphics->GetBounds();
+
+// Top 25% - keyboard
+IRECT keyboard = b.FracRectVertical(0.25, true);
+pGraphics->AttachControl(new IVKeyboardControl(keyboard));
+
+// Bottom 75% - scope
+IRECT scope = b.FracRectVertical(0.75, false);
+pGraphics->AttachControl(new IVScopeControl<>(scope));
+```
+  </Tab>
+  <Tab title="Dynamic Resize">
+```cpp
+mLayoutFunc = [&](IGraphics* pGraphics) {
+  const IRECT b = pGraphics->GetBounds();
+  
+  // Handle resize
+  if(pGraphics->NControls()) {
+    for(int i = 0; i < pGraphics->NControls(); i++) {
+      IControl* pControl = pGraphics->GetControl(i);
+      // Reposition based on new bounds
+      IRECT newBounds = CalculateNewBounds(i, b);
+      pControl->SetTargetAndDrawRECTs(newBounds);
+    }
+    return;
+  }
+  
+  // Initial layout...
+};
+```
+  </Tab>
+</Tabs>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Controls Library" icon="sliders" href="./controls">
+    Explore built-in controls
+  </Card>
+  <Card title="Custom Controls" icon="code" href="./custom-controls">
+    Create your own widgets
+  </Card>
+  <Card title="Responsive UI" icon="mobile" href="./responsive-ui">
+    Handle resizing and scaling
+  </Card>
+  <Card title="Drawing Backends" icon="palette" href="./drawing-backends">
+    Learn backend differences
+  </Card>
+</CardGroup>

@@ -1,0 +1,494 @@
+---
+title: "Drum Synthesizer Example"
+description: "Build a MIDI-triggered drum synthesizer with custom DSP and multi-output routing"
+---
+
+## Overview
+
+The **IPlugDrumSynth** example demonstrates how to build a complete MIDI synthesizer with:
+- Four independent drum voices with pitch and amplitude envelopes
+- Interactive drum pad UI with visual feedback
+- MIDI note mapping and custom note naming
+- Optional multi-output routing (separate output per drum)
+- Real-time peak metering
+
+<Info>
+This example shows a complete synthesis architecture with MIDI queue handling, DSP separation, and bidirectional UI/DSP communication.
+</Info>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="MIDI Synthesis" icon="wave-square">
+    Respond to MIDI note-on/off with synthesized drum sounds
+  </Card>
+  <Card title="Custom DSP" icon="microchip">
+    Separate DSP class with oscillators and envelopes
+  </Card>
+  <Card title="Interactive Pads" icon="hand-pointer">
+    Click or touch drum pads to trigger sounds
+  </Card>
+  <Card title="Multi-Output" icon="diagram-project">
+    Route each drum to its own output pair
+  </Card>
+</CardGroup>
+
+## Plugin Configuration
+
+### Channel I/O Setup
+
+Supports multiple output configurations:
+
+```cpp
+#define PLUG_CHANNEL_IO " \
+0-2 \         // Stereo mix output
+0-2.2 \       // Stereo mix + Drum 2 separate
+0-2.2.2 \     // Stereo mix + Drums 2-3 separate  
+0-2.2.2.2"    // Stereo mix + Drums 2-4 separate
+
+#define PLUG_TYPE 1              // Instrument
+#define PLUG_DOES_MIDI_IN 1
+#define PLUG_DOES_MIDI_OUT 1
+```
+
+<Note>
+The first output bus (2 channels) is always the main mix. Additional buses provide individual drum outputs when multi-out is enabled.
+</Note>
+
+## Architecture
+
+### Plugin Class Structure
+
+```cpp
+class IPlugDrumSynth : public Plugin
+{
+public:
+  IPlugDrumSynth(const InstanceInfo& info);
+
+#if IPLUG_EDITOR
+  void OnMidiMsgUI(const IMidiMsg& msg) override;
+#endif
+  
+#if IPLUG_DSP
+  void GetBusName(ERoute direction, int busIdx, int nBuses, WDL_String& str) const override;
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  void ProcessMidiMsg(const IMidiMsg& msg) override;
+  void OnReset() override;
+  void OnParamChange(int paramIdx) override;
+  bool GetMidiNoteText(int noteNumber, char* text) const override;
+  void OnIdle() override;
+  
+private:
+  DrumSynthDSP mDSP;
+  IPeakSender<8> mSender;
+#endif
+};
+```
+
+### Separate DSP Class
+
+The synthesis is encapsulated in a separate class:
+
+```cpp
+class DrumSynthDSP
+{
+public:
+  struct DrumVoice
+  {
+    ADSREnvelope<sample> mPitchEnv;
+    ADSREnvelope<sample> mAmpEnv;
+    FastSinOscillator<sample> mOsc;
+    double mBaseFreq;
+    
+    DrumVoice(double baseFreq) : mBaseFreq(baseFreq)
+    {
+      mAmpEnv.SetStageTime(ADSREnvelope<sample>::kAttack, 0.);
+      mAmpEnv.SetStageTime(ADSREnvelope<sample>::kDecay, kAmpDecayTime);
+      
+      mPitchEnv.SetStageTime(ADSREnvelope<sample>::kAttack, 0.);
+      mPitchEnv.SetStageTime(ADSREnvelope<sample>::kDecay, kPitchDecayTime);
+    }
+    
+    inline sample Process()
+    {
+      return mOsc.Process(mBaseFreq + mPitchEnv.Process()) * mAmpEnv.Process();
+    }
+    
+    void Trigger(double amp)
+    {
+      mOsc.Reset();
+      mPitchEnv.Start(amp * kPitchEnvRange);
+      mAmpEnv.Start(amp);
+    }
+  };
+  
+  void ProcessBlock(sample** outputs, int nFrames);
+  void ProcessMidiMsg(const IMidiMsg& msg);
+  void SetMultiOut(bool multiOut);
+  
+private:
+  bool mMultiOut = false;
+  std::vector<DrumVoice> mDrums;
+  IMidiQueue mMidiQueue;
+};
+```
+
+<Tip>
+Separating DSP into its own class makes the code more reusable and testable. It also clarifies the separation between plugin infrastructure and audio processing.
+</Tip>
+
+## DSP Implementation
+
+### Drum Voice Constants
+
+```cpp
+static constexpr int kNumDrums = 4;
+static constexpr double kStartFreq = 300.;    // Hz
+static constexpr double kFreqDiff = 100.;     // Hz between drums
+static constexpr double kPitchEnvRange = 100.; // Hz pitch sweep
+static constexpr double kAmpDecayTime = 300;   // Ms
+static constexpr double kPitchDecayTime = 50.; // Ms
+```
+
+### MIDI Queue Processing
+
+Handle MIDI messages at precise sample positions:
+
+```cpp
+void DrumSynthDSP::ProcessBlock(sample** outputs, int nFrames)
+{
+  for(int s=0; s<nFrames; s++)
+  {
+    // Process MIDI messages at this sample position
+    while (!mMidiQueue.Empty())
+    {
+      IMidiMsg& msg = mMidiQueue.Peek();
+      if (msg.mOffset > s) break;  // Message is later in the block
+      
+      if(msg.StatusMsg() == IMidiMsg::kNoteOn && msg.Velocity())
+      {
+        int pitchClass = msg.NoteNumber() % 12;
+        
+        if(pitchClass < kNumDrums)
+          mDrums[pitchClass].Trigger(msg.Velocity() / 127.f);
+      }
+      
+      mMidiQueue.Remove();
+    }
+
+    // Generate audio for this sample
+    // ...
+  }
+  mMidiQueue.Flush(nFrames);
+}
+```
+
+<Steps>
+  <Step title="Check MIDI queue">
+    At each sample, check if any MIDI messages occur at this position
+  </Step>
+  <Step title="Process message">
+    Handle note-on by triggering the appropriate drum voice
+  </Step>
+  <Step title="Remove from queue">
+    Remove processed message and continue
+  </Step>
+  <Step title="Flush after block">
+    Clear any remaining messages and advance the queue
+  </Step>
+</Steps>
+
+### Multi-Output Routing
+
+Route drums to separate output buses:
+
+```cpp
+if(mMultiOut)
+{
+  int channel=0;
+  for(int d=0; d<kNumDrums; d++)
+  {
+    outputs[channel][s] = 0.;
+
+    if(mDrums[d].IsActive())
+      outputs[channel][s] = mDrums[d].Process();
+    
+    outputs[channel + 1][s] = outputs[channel][s];  // Duplicate to R
+
+    channel += 2;  // Next stereo pair
+  }
+}
+else
+{
+  // Mix all drums to stereo output
+  outputs[0][s] = 0.;
+  
+  for(int d=0; d<kNumDrums; d++)
+  {
+    if(mDrums[d].IsActive())
+      outputs[0][s] += mDrums[d].Process();
+  }
+  
+  outputs[1][s] = outputs[0][s];
+}
+```
+
+### Naming Output Buses
+
+```cpp
+void IPlugDrumSynth::GetBusName(ERoute direction, int busIdx, int nBuses, WDL_String& str) const
+{
+  if (direction == ERoute::kOutput)
+  {
+    if(busIdx == 0)
+      str.Set("Drum1");
+    else if(busIdx == 1)
+      str.Set("Drum2");
+    else if(busIdx == 2)
+      str.Set("Drum3");
+    else if(busIdx == 3)
+      str.Set("Drum4");
+    
+    return;
+  }
+  
+  str.Set("");
+}
+```
+
+## User Interface
+
+### Custom Drum Pad Control
+
+Create an interactive pad that triggers MIDI:
+
+```cpp
+class DrumPadControl : public IControl, public IVectorBase
+{
+public:
+  DrumPadControl(const IRECT& bounds, const IVStyle& style, int midiNoteNumber)
+  : IControl(bounds)
+  , IVectorBase(style)
+  , mMidiNoteNumber(midiNoteNumber)
+  {
+    mDblAsSingleClick = true;
+    AttachIControl(this, "");
+  }
+  
+  void Draw(IGraphics& g) override
+  {
+    DrawPressableShape(g, EVShape::AllRounded, mRECT, mFlash, mMouseIsOver, false);
+    mFlash = false;
+  }
+  
+  void OnMouseDown(float x, float y, const IMouseMod& mod) override
+  {
+    TriggerAnimation();
+    IMidiMsg msg;
+    msg.MakeNoteOnMsg(mMidiNoteNumber, 127, 0);
+    GetDelegate()->SendMidiMsgFromUI(msg);
+  }
+  
+  void OnMouseUp(float x, float y, const IMouseMod& mod) override
+  {
+    IMidiMsg msg;
+    msg.MakeNoteOffMsg(mMidiNoteNumber, 0);
+    GetDelegate()->SendMidiMsgFromUI(msg);
+  }
+  
+  void TriggerAnimation()
+  {
+    mFlash = true;
+    SetAnimation(SplashAnimationFunc, DEFAULT_ANIMATION_DURATION);
+  }
+
+private:
+  bool mFlash = false;
+  int mMidiNoteNumber;
+};
+```
+
+### Creating the Pad Grid
+
+```cpp
+IVStyle style = DEFAULT_STYLE.WithRoundness(0.1f).WithFrameThickness(3.f);
+
+for (int i=0; i<kNumDrums; i++) {
+  IRECT cell = pads.GetGridCell(i, 2, 2);  // 2x2 grid
+  pGraphics->AttachControl(
+    new DrumPadControl(cell, style, 60 + i),  // MIDI notes 60-63
+    i  // Control tag matches drum index
+  );
+}
+```
+
+### Visual Feedback from MIDI
+
+Animate pads when MIDI notes are received:
+
+```cpp
+void IPlugDrumSynth::OnMidiMsgUI(const IMidiMsg& msg)
+{
+  if(GetUI() && msg.StatusMsg() == IMidiMsg::kNoteOn)
+  {
+    int pitchClass = msg.NoteNumber() % 12;
+
+    if(pitchClass < kNumDrums)
+    {
+      DrumPadControl* pPad = GetUI()->GetControlWithTag(pitchClass)->As<DrumPadControl>();
+      pPad->SetSplashPoint(pPad->GetRECT().MW(), pPad->GetRECT().MH());
+      pPad->TriggerAnimation();
+    }
+  }
+}
+```
+
+<Note>
+`OnMidiMsgUI()` is called on the UI thread when MIDI messages are received, allowing you to update the interface in response to incoming MIDI.
+</Note>
+
+### Adding Meters
+
+Display output levels for all channels:
+
+```cpp
+pGraphics->AttachControl(
+  new IVMeterControl<8>(bounds, ""),
+  kCtrlTagMeter
+);
+```
+
+Send data to meters in ProcessBlock:
+
+```cpp
+mSender.ProcessBlock(outputs, nFrames, kCtrlTagMeter);
+```
+
+Transmit in OnIdle:
+
+```cpp
+void IPlugDrumSynth::OnIdle()
+{
+  mSender.TransmitData(*this);
+}
+```
+
+## MIDI Note Naming
+
+Provide custom names for MIDI notes:
+
+```cpp
+bool IPlugDrumSynth::GetMidiNoteText(int noteNumber, char* name) const
+{
+  int pitch = noteNumber % 12;
+  
+  WDL_String str;
+  str.SetFormatted(32, "Drum %i", pitch);
+  
+  strcpy(name, str.Get());
+  return true;
+}
+```
+
+This helps hosts display meaningful names instead of generic note numbers.
+
+## Parameter Changes
+
+Respond to parameter changes that affect DSP:
+
+```cpp
+void IPlugDrumSynth::OnParamChange(int paramIdx)
+{
+  switch (paramIdx)
+  {
+    case kParamMultiOuts:
+      mDSP.SetMultiOut(GetParam(paramIdx)->Bool());
+      break;
+    default:
+      break;
+  }
+}
+```
+
+<Warning>
+`OnParamChange()` is called from the audio thread. Don't allocate memory or do any non-realtime-safe operations here.
+</Warning>
+
+## Building a Synthesizer
+
+<Steps>
+  <Step title="Configure as instrument">
+    Set `PLUG_TYPE 1` and enable MIDI input in config.h
+  </Step>
+  <Step title="Set up channel I/O">
+    Use `0-X` format for instrument (no audio input)
+  </Step>
+  <Step title="Create DSP class">
+    Encapsulate synthesis in a separate class with voice management
+  </Step>
+  <Step title="Use MIDI queue">
+    Handle MIDI with sample-accurate timing using `IMidiQueue`
+  </Step>
+  <Step title="Implement voices">
+    Create voice structures with oscillators and envelopes
+  </Step>
+  <Step title="Build UI">
+    Create interactive controls that send MIDI to trigger sounds
+  </Step>
+  <Step title="Add visual feedback">
+    Use `OnMidiMsgUI()` to animate controls when notes are received
+  </Step>
+</Steps>
+
+## Voice Management Tips
+
+### Voice Stealing
+
+```cpp
+int FindFreeVoice()
+{
+  // First, look for inactive voice
+  for (int i = 0; i < mVoices.size(); i++)
+    if (!mVoices[i].IsActive())
+      return i;
+  
+  // No free voice, steal oldest
+  return mOldestVoice++;
+}
+```
+
+### Velocity Response
+
+```cpp
+void Trigger(int velocity)
+{
+  // Scale velocity 0-127 to amplitude
+  float amp = velocity / 127.0f;
+  
+  // Apply velocity curve (square for more dynamic range)
+  amp = amp * amp;
+  
+  mAmpEnv.Start(amp);
+}
+```
+
+## Related Examples
+
+<CardGroup cols={2}>
+  <Card title="MIDI Effect" icon="sliders" href="/examples/midi-effect">
+    MIDI processing and generation
+  </Card>
+  <Card title="Sidechain" icon="arrow-right-to-bracket" href="/examples/sidechain">
+    Multi-bus routing concepts
+  </Card>
+  <Card title="Visualizer" icon="chart-line" href="/examples/visualizer">
+    Metering and data transmission
+  </Card>
+</CardGroup>
+
+## Source Files
+
+- `Examples/IPlugDrumSynth/IPlugDrumSynth.h`
+- `Examples/IPlugDrumSynth/IPlugDrumSynth.cpp`
+- `Examples/IPlugDrumSynth/IPlugDrumSynth_DSP.h`
+- `Examples/IPlugDrumSynth/config.h`

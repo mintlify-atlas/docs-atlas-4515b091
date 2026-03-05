@@ -1,0 +1,464 @@
+---
+title: Cocoa Interface
+description: Building native macOS and iOS plugin UIs with AppKit/UIKit and Interface Builder
+---
+
+iPlug2 supports building plugin UIs with Apple's AppKit (macOS) and UIKit (iOS) frameworks, using Xcode's Interface Builder for visual layout.
+
+## Getting Started
+
+<Steps>
+  <Step title="Copy the example project">
+    Start by duplicating the Cocoa example:
+    ```bash
+    ./duplicate.py IPlugCocoaUI MyPlugin
+    ```
+  </Step>
+  
+  <Step title="Project structure">
+    Your project will have:
+    ```
+    MyPlugin/
+    ├── MyPlugin.h                  # Plugin header (C++)
+    ├── MyPlugin.mm                 # Plugin implementation (Objective-C++)
+    ├── config.h                    # Plugin configuration
+    └── UI/
+        ├── MyPlugin-macOS-MainInterface.storyboard
+        ├── MyPlugin-iOS-MainInterface.storyboard
+        ├── MyPluginViewController.swift
+        └── TypeAliases.swift
+    ```
+  </Step>
+  
+  <Step title="Open in Xcode">
+    Open the `.xcworkspace` file and navigate to the storyboard files to design your interface visually.
+  </Step>
+</Steps>
+
+## Plugin Implementation
+
+### Plugin Header (C++)
+
+Your plugin inherits from `Plugin` and uses `CocoaEditorDelegate`:
+
+```cpp
+#pragma once
+
+#include "IPlug_include_in_plug_hdr.h"
+#include "ISender.h"
+
+using namespace iplug;
+
+class MyPlugin final : public Plugin
+{
+public:
+  MyPlugin(const InstanceInfo& info);
+  ~MyPlugin();
+  
+  void* OpenWindow(void* pParent) override;
+  void OnParentWindowResize(int width, int height) override;
+  bool OnHostRequestingSupportedViewConfiguration(int width, int height) override;
+  
+  bool OnMessage(int msgTag, int ctrlTag, int dataSize, const void* pData) override;
+  void OnParamChange(int paramIdx) override;
+  void OnIdle() override;
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  
+private:
+  IPeakSender<> mSender;
+};
+```
+
+### Plugin Implementation (Objective-C++)
+
+Load the view controller from the storyboard:
+
+```objc
+#include "MyPlugin.h"
+#include "IPlug_include_in_plug_src.h"
+
+#ifdef FRAMEWORK_BUILD
+#import <AUv3Framework/MyPlugin-Swift.h>
+#import <AUv3Framework/MyPlugin-Shared.h>
+#else
+#import <MyPlugin-Swift.h>
+#endif
+
+MyPlugin::MyPlugin(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kParamGain)->InitGain("Volume", -70.0);
+
+  MakePreset("Gain = -70dB", -70.);
+  MakePreset("Gain = -10dB", -10.);
+  MakePreset("Gain = 0dB", 0.);
+  
+#ifdef OS_MAC
+  // Load storyboard
+  NSStoryboard* pStoryBoard = [NSStoryboard storyboardWithName:@"MyPlugin-macOS-MainInterface"
+                                                         bundle: [NSBundle bundleWithIdentifier:
+                                                                  [NSString stringWithUTF8String:
+                                                                   GetBundleID()]]];
+  auto* vc = (MyPluginViewController*) [pStoryBoard instantiateControllerWithIdentifier:@"main"];
+  
+  [vc retain];
+  [vc setEditorDelegate: this];
+  mViewController = vc;
+  vc.view.frame = MAKERECT(0.f, 0.f, (float) PLUG_WIDTH, (float) PLUG_HEIGHT);
+#endif
+}
+
+void* MyPlugin::OpenWindow(void* pParent)
+{
+  PLATFORM_VIEW* platformParent = (PLATFORM_VIEW*) pParent;
+
+#ifdef FRAMEWORK_BUILD
+  // AUv3: Get view controller from parent
+  auto* vc = [[(PLATFORM_VC*) [platformParent nextResponder] childViewControllers] objectAtIndex:0];
+  [vc setEditorDelegate: this];
+  mViewController = vc;
+#else
+  MyPluginViewController* vc = (MyPluginViewController*) mViewController;
+  [platformParent addSubview:vc.view];
+#endif
+  
+  OnUIOpen();
+  return vc.view;
+}
+
+MyPlugin::~MyPlugin()
+{
+#ifdef OS_MAC
+  auto* vc = (MyPluginViewController*) mViewController;
+  [vc release];
+#endif
+}
+
+void MyPlugin::OnIdle()
+{
+  // Send meter data to UI
+  mSender.TransmitData(*this);
+}
+
+void MyPlugin::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kParamGain)->DBToAmp();
+  const int nChans = NOutChansConnected();
+    
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+  
+  // Send peak level to meter
+  mSender.ProcessBlock(inputs, nFrames, kCtrlTagVUMeter);
+}
+
+bool MyPlugin::OnMessage(int msgTag, int ctrlTag, int dataSize, const void* pData)
+{
+  if(msgTag == kMsgTagHello)
+  {
+    DBGMSG("Message received from UI\n");
+    return true;
+  }
+  else if(msgTag == kMsgTagRestorePreset)
+  {
+    RestorePreset(ctrlTag);
+  }
+  
+  return CocoaEditorDelegate::OnMessage(msgTag, ctrlTag, dataSize, pData);
+}
+```
+
+## View Controller (Swift)
+
+Implement the view controller to handle UI events:
+
+```swift
+import Cocoa  // or UIKit for iOS
+
+func floatValue(data: Data) -> Float {
+  return Float(bitPattern: UInt32(littleEndian: 
+    data.withUnsafeBytes { $0.load(fromByteOffset: 12, as: UInt32.self) }))
+}
+
+class MyPluginViewController: IPlugCocoaViewController {
+  
+  @IBOutlet var Slider: PlatformSlider!
+  @IBOutlet weak var MeterView: PlatformProgressView!
+  
+  override init(nibName nibNameOrNil: String?, bundle nibBundleOrNil: Bundle?) {
+    super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
+  }
+  
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+  }
+  
+  override func viewDidLoad() {
+    super.viewDidLoad()
+  }
+  
+  // Receive control messages from C++ (e.g., meter data)
+  override func sendControlMsgFromDelegate(ctrlTag: Int, msgTag: Int, msg: Data!) {
+    if msgTag == kUpdateMessage {
+      let db = 20.0 * log10(floatValue(data: msg) + 0.0001);
+      let val = ((db + 80.0) / 80.0); // linear to log conversion
+      
+#if os(iOS)
+      MeterView.setProgress(val, animated: false)
+#else
+      MeterView.doubleValue = Double(val)
+#endif
+    }
+  }
+  
+  // Receive parameter changes from C++
+  override func onParamChangeUI(_ paramIdx: Int, _ value: Double) {
+    if(paramIdx == kParamGain) {
+      if let slider = self.view.viewWithTag(kCtrlTagVolumeSlider) as? PlatformSlider {
+#if os(iOS)
+        slider.value = Float(value)
+#else
+        slider.doubleValue = value
+#endif
+      }
+    }
+  }
+  
+  // IBActions for slider
+  @IBAction func editBegan(_ sender: PlatformControl) {
+    if(sender.tag == kCtrlTagVolumeSlider) {
+      beginInformHostOfParamChangeFromUI(paramIdx: kParamGain)
+    }
+  }
+  
+  @IBAction func sliderChanged(_ sender: PlatformSlider) {
+    if(sender.tag == kCtrlTagVolumeSlider) {
+#if os(iOS)
+      sendParameterValueFromUI(paramIdx: kParamGain, normalizedValue: Double(sender.value))
+#else
+      sendParameterValueFromUI(paramIdx: kParamGain, normalizedValue: sender.doubleValue)
+#endif
+    }
+  }
+  
+  @IBAction func editEnded(_ sender: PlatformControl) {
+    if(sender.tag == kCtrlTagVolumeSlider) {
+      endInformHostOfParamChangeFromUI(paramIdx: kParamGain)
+    }
+  }
+
+  @IBAction func buttonClicked(_ sender: PlatformButton) {
+    if(sender.tag == kCtrlTagButton) {
+      sendArbitraryMsgFromUI(msgTag: kMsgTagHello, ctrlTag: kCtrlTagButton, msg:nil);
+    }
+  }
+}
+```
+
+## Storyboard Setup
+
+### Creating the Interface
+
+<Steps>
+  <Step title="Open the storyboard">
+    Open `MyPlugin-macOS-MainInterface.storyboard` (or iOS version) in Xcode.
+  </Step>
+  
+  <Step title="Set the custom class">
+    Select the View Controller in the storyboard and set its class to `MyPluginViewController` in the Identity Inspector.
+  </Step>
+  
+  <Step title="Set the storyboard ID">
+    Set the Storyboard ID to `main` (this matches the instantiateControllerWithIdentifier call).
+  </Step>
+  
+  <Step title="Add UI controls">
+    Drag sliders, buttons, labels, and other controls from the Object Library onto your view.
+  </Step>
+  
+  <Step title="Set control tags">
+    For controls that need to communicate with C++, set their Tag property (in Attributes Inspector) to match your control tag constants.
+  </Step>
+  
+  <Step title="Connect IBOutlets">
+    Control-drag from the View Controller to your controls to create `@IBOutlet` connections.
+  </Step>
+  
+  <Step title="Connect IBActions">
+    Control-drag from controls to the View Controller to create `@IBAction` methods for events.
+  </Step>
+</Steps>
+
+### Control Tags
+
+Define control tags in your shared header:
+
+```cpp
+// In MyPlugin-Shared.h
+enum ECtrlTags
+{
+  kCtrlTagVolumeSlider = 0,
+  kCtrlTagVUMeter = 1,
+  kCtrlTagButton = 2
+};
+```
+
+Then set the Tag property in Interface Builder to match these values.
+
+## Platform Abstractions
+
+Use type aliases for cross-platform code:
+
+```swift
+// TypeAliases.swift
+#if os(iOS)
+import UIKit
+public typealias PlatformView = UIView
+public typealias PlatformViewController = UIViewController
+public typealias PlatformSlider = UISlider
+public typealias PlatformButton = UIButton
+public typealias PlatformProgressView = UIProgressView
+public typealias PlatformControl = UIControl
+public typealias PlatformColor = UIColor
+#else
+import Cocoa
+public typealias PlatformView = NSView
+public typealias PlatformViewController = NSViewController
+public typealias PlatformSlider = NSSlider
+public typealias PlatformButton = NSButton
+public typealias PlatformProgressView = NSProgressIndicator
+public typealias PlatformControl = NSControl
+public typealias PlatformColor = NSColor
+#endif
+```
+
+## Communication Patterns
+
+### Parameter Changes
+
+**From UI to DSP:**
+
+```swift
+// 1. Begin gesture
+beginInformHostOfParamChangeFromUI(paramIdx: kParamGain)
+
+// 2. Send value (normalized 0-1)
+sendParameterValueFromUI(paramIdx: kParamGain, normalizedValue: 0.5)
+
+// 3. End gesture
+endInformHostOfParamChangeFromUI(paramIdx: kParamGain)
+```
+
+**From DSP to UI:**
+
+```swift
+override func onParamChangeUI(_ paramIdx: Int, _ value: Double) {
+  // Update your controls with the new value
+  slider.doubleValue = value
+}
+```
+
+### Sending Meter Data
+
+**In C++:**
+
+```cpp
+// In ProcessBlock()
+mSender.ProcessBlock(inputs, nFrames, kCtrlTagVUMeter);
+
+// In OnIdle()
+mSender.TransmitData(*this);
+```
+
+**In Swift:**
+
+```swift
+override func sendControlMsgFromDelegate(ctrlTag: Int, msgTag: Int, msg: Data!) {
+  if ctrlTag == kCtrlTagVUMeter {
+    let level = floatValue(data: msg)
+    // Update meter display
+  }
+}
+```
+
+### Arbitrary Messages
+
+**From UI to C++:**
+
+```swift
+sendArbitraryMsgFromUI(msgTag: kMsgTagHello, ctrlTag: kCtrlTagButton, msg: nil)
+```
+
+**Handle in C++:**
+
+```cpp
+bool MyPlugin::OnMessage(int msgTag, int ctrlTag, int dataSize, const void* pData)
+{
+  if (msgTag == kMsgTagHello) {
+    // Handle message
+    return true;
+  }
+  return CocoaEditorDelegate::OnMessage(msgTag, ctrlTag, dataSize, pData);
+}
+```
+
+## Auto Layout
+
+Use Auto Layout constraints in Interface Builder for responsive layouts:
+
+```swift
+// Or set up constraints programmatically
+slider.translatesAutoresizingMaskIntoConstraints = false
+NSLayoutConstraint.activate([
+  slider.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+  slider.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+  slider.centerYAnchor.constraint(equalTo: view.centerYAnchor)
+])
+```
+
+## Best Practices
+
+<Tip>
+**Use separate storyboards for macOS and iOS**
+
+While some UI code can be shared, layouts often differ significantly. Maintain separate storyboards for better platform-specific design.
+</Tip>
+
+<Warning>
+**Always send parameter gestures**
+
+Call `beginInformHostOfParamChangeFromUI()` before parameter changes and `endInformHostOfParamChangeFromUI()` after. This notifies the host for automation and undo.
+</Warning>
+
+<Note>
+**Retain view controller on macOS**
+
+On macOS (but not iOS), you need to manually `retain` and `release` the view controller in your plugin constructor and destructor.
+</Note>
+
+## MIDI Support
+
+Handle MIDI messages from the UI:
+
+```swift
+override func onMidiMsgUI(_ status: UInt8, _ data1: UInt8, _ data2: UInt8, _ offset: Int) {
+  print("MIDI: status=\(status), data1=\(data1), data2=\(data2)")
+}
+
+override func onSysexMsgUI(_ msg: Data!, _ offset: Int) {
+  print("SysEx message received")
+}
+```
+
+## Example Project
+
+See the complete example in `Examples/IPlugCocoaUI/` which demonstrates:
+
+- Interface Builder storyboards for macOS and iOS
+- Parameter control with sliders
+- VU meter visualization
+- Button actions
+- Cross-platform type aliases

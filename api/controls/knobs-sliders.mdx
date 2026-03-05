@@ -1,0 +1,570 @@
+---
+title: "Knobs & Sliders"
+description: "Rotary knobs, linear sliders, range sliders, and XY pad controls"
+---
+
+## Vector Knob Control
+
+`IVKnobControl` is a rotary knob drawn with vector graphics.
+
+### Constructor
+
+```cpp
+IVKnobControl(
+  const IRECT& bounds,
+  int paramIdx,
+  const char* label = "",
+  const IVStyle& style = DEFAULT_STYLE,
+  bool valueIsEditable = false,
+  bool valueInWidget = false,
+  float a1 = -135.f,
+  float a2 = 135.f,
+  float aAnchor = -135.f,
+  EDirection direction = EDirection::Vertical,
+  double gearing = DEFAULT_GEARING,
+  float trackSize = 2.f
+);
+```
+
+<ParamField path="bounds" type="IRECT" required>
+  Position and size of the control
+</ParamField>
+
+<ParamField path="paramIdx" type="int" required>
+  Parameter index to link to (or `kNoParameter` with action function variant)
+</ParamField>
+
+<ParamField path="label" type="const char*" default="empty string">
+  Label text displayed near the control
+</ParamField>
+
+<ParamField path="style" type="IVStyle" default="DEFAULT_STYLE">
+  Visual styling properties
+</ParamField>
+
+<ParamField path="valueIsEditable" type="bool" default="false">
+  If true, double-click value to edit as text
+</ParamField>
+
+<ParamField path="valueInWidget" type="bool" default="false">
+  If true, draw value inside the knob widget
+</ParamField>
+
+<ParamField path="a1" type="float" default="-135.f">
+  Start angle in degrees (0° = right, counter-clockwise)
+</ParamField>
+
+<ParamField path="a2" type="float" default="135.f">
+  End angle in degrees
+</ParamField>
+
+<ParamField path="aAnchor" type="float" default="-135.f">
+  Anchor angle for bipolar parameters (center position)
+</ParamField>
+
+<ParamField path="direction" type="EDirection" default="EDirection::Vertical">
+  Mouse drag direction: `Vertical` or `Horizontal`
+</ParamField>
+
+<ParamField path="gearing" type="double" default="DEFAULT_GEARING">
+  Mouse sensitivity multiplier (higher = finer control, slower changes)
+</ParamField>
+
+<ParamField path="trackSize" type="float" default="2.f">
+  Width of the arc track in pixels
+</ParamField>
+
+### Example
+
+```cpp
+// Basic knob
+pGraphics->AttachControl(
+  new IVKnobControl(IRECT(10, 10, 110, 110), kGain, "Gain")
+);
+
+// Custom styled knob with editable value
+IVStyle blueKnob = DEFAULT_STYLE
+  .WithColor(kFG, COLOR_BLUE)
+  .WithColor(kPR, COLOR_LIGHT_BLUE)
+  .WithRoundness(1.f); // Circular
+
+pGraphics->AttachControl(
+  new IVKnobControl(
+    IRECT(10, 10, 110, 110),
+    kFreq,
+    "Frequency",
+    blueKnob,
+    true,  // valueIsEditable
+    false, // valueInWidget
+    -135.f, 135.f, -135.f,
+    EDirection::Vertical,
+    2.0    // 2x slower/finer control
+  )
+);
+
+// Bipolar knob (e.g., pan, centered at 50%)
+pGraphics->AttachControl(
+  new IVKnobControl(
+    bounds, kPan, "Pan",
+    DEFAULT_STYLE,
+    false, false,
+    -135.f, 135.f, 0.f  // Anchor at 0° (center)
+  )
+);
+```
+
+### Methods
+
+```cpp
+void SetInnerPointerFrac(float frac); // Set inner radius of pointer (0-1)
+void SetOuterPointerFrac(float frac); // Set outer radius of pointer (0-1)
+void SetPointerThickness(float thickness); // Set pointer line thickness
+float GetRadius() const; // Get knob radius
+IRECT GetTrackBounds() const; // Get track arc bounds
+```
+
+### Appearance Customization
+
+```cpp
+auto* knob = new IVKnobControl(bounds, kGain, "Gain");
+knob->SetInnerPointerFrac(0.3f);  // Pointer starts at 30% of radius
+knob->SetOuterPointerFrac(0.9f);  // Pointer ends at 90% of radius
+knob->SetPointerThickness(3.f);   // 3px wide pointer
+pGraphics->AttachControl(knob);
+```
+
+---
+
+## Vector Slider Control
+
+`IVSliderControl` is a linear slider (vertical or horizontal).
+
+### Constructor
+
+```cpp
+IVSliderControl(
+  const IRECT& bounds,
+  int paramIdx = kNoParameter,
+  const char* label = "",
+  const IVStyle& style = DEFAULT_STYLE,
+  bool valueIsEditable = false,
+  EDirection dir = EDirection::Vertical,
+  double gearing = DEFAULT_GEARING,
+  float handleSize = 8.f,
+  float trackSize = 2.f,
+  bool handleInsideTrack = false,
+  float handleXOffset = 0.f,
+  float handleYOffset = 0.f
+);
+```
+
+<ParamField path="bounds" type="IRECT" required>
+  Position and size of the control
+</ParamField>
+
+<ParamField path="paramIdx" type="int" default="kNoParameter">
+  Parameter index to link to
+</ParamField>
+
+<ParamField path="label" type="const char*" default="empty string">
+  Label text
+</ParamField>
+
+<ParamField path="style" type="IVStyle" default="DEFAULT_STYLE">
+  Visual styling
+</ParamField>
+
+<ParamField path="valueIsEditable" type="bool" default="false">
+  Enable double-click text editing
+</ParamField>
+
+<ParamField path="dir" type="EDirection" default="EDirection::Vertical">
+  Slider orientation: `Vertical` or `Horizontal`
+</ParamField>
+
+<ParamField path="gearing" type="double" default="DEFAULT_GEARING">
+  Mouse sensitivity
+</ParamField>
+
+<ParamField path="handleSize" type="float" default="8.f">
+  Size of the draggable handle in pixels
+</ParamField>
+
+<ParamField path="trackSize" type="float" default="2.f">
+  Width/height of the track line
+</ParamField>
+
+<ParamField path="handleInsideTrack" type="bool" default="false">
+  If true, handle stays within track bounds
+</ParamField>
+
+<ParamField path="handleXOffset" type="float" default="0.f">
+  Horizontal offset for handle positioning
+</ParamField>
+
+<ParamField path="handleYOffset" type="float" default="0.f">
+  Vertical offset for handle positioning
+</ParamField>
+
+### Example
+
+```cpp
+// Vertical slider
+pGraphics->AttachControl(
+  new IVSliderControl(
+    IRECT(10, 10, 40, 200),
+    kVolume,
+    "Volume",
+    DEFAULT_STYLE,
+    true, // editable
+    EDirection::Vertical
+  )
+);
+
+// Horizontal slider
+pGraphics->AttachControl(
+  new IVSliderControl(
+    IRECT(10, 10, 200, 40),
+    kPan,
+    "Pan",
+    DEFAULT_STYLE,
+    false,
+    EDirection::Horizontal
+  )
+);
+
+// Custom handle size
+pGraphics->AttachControl(
+  new IVSliderControl(
+    bounds, kParam, "Label", DEFAULT_STYLE,
+    false, EDirection::Vertical, DEFAULT_GEARING,
+    12.f, // Larger 12px handle
+    3.f   // Thicker 3px track
+  )
+);
+```
+
+### Methods
+
+```cpp
+IRECT GetTrackBounds() const; // Get the track area bounds
+```
+
+---
+
+## Range Slider Control
+
+`IVRangeSliderControl` has two handles for selecting a range.
+
+### Constructor
+
+```cpp
+IVRangeSliderControl(
+  const IRECT& bounds,
+  const std::initializer_list<int>& params,
+  const char* label = "",
+  const IVStyle& style = DEFAULT_STYLE,
+  EDirection dir = EDirection::Vertical,
+  bool onlyHandle = false,
+  float handleSize = 8.f,
+  float trackSize = 2.f
+);
+```
+
+<ParamField path="bounds" type="IRECT" required>
+  Position and size
+</ParamField>
+
+<ParamField path="params" type="std::initializer_list<int>" required>
+  Two parameter indices for min/max handles: `{kParamMin, kParamMax}`
+</ParamField>
+
+<ParamField path="label" type="const char*" default="empty string">
+  Label text
+</ParamField>
+
+<ParamField path="style" type="IVStyle" default="DEFAULT_STYLE">
+  Visual styling
+</ParamField>
+
+<ParamField path="dir" type="EDirection" default="EDirection::Vertical">
+  Slider orientation
+</ParamField>
+
+<ParamField path="onlyHandle" type="bool" default="false">
+  If true, only handles respond to mouse (not track)
+</ParamField>
+
+<ParamField path="handleSize" type="float" default="8.f">
+  Handle size in pixels
+</ParamField>
+
+<ParamField path="trackSize" type="float" default="2.f">
+  Track line thickness
+</ParamField>
+
+### Example
+
+```cpp
+enum { kFilterLowFreq, kFilterHighFreq, kNumParams };
+
+// Range slider for band-pass filter
+pGraphics->AttachControl(
+  new IVRangeSliderControl(
+    IRECT(10, 10, 40, 200),
+    {kFilterLowFreq, kFilterHighFreq},
+    "Filter Range",
+    DEFAULT_STYLE,
+    EDirection::Vertical
+  )
+);
+```
+
+---
+
+## XY Pad Control
+
+`IVXYPadControl` is a 2D pad for controlling two parameters simultaneously.
+
+### Constructor
+
+```cpp
+IVXYPadControl(
+  const IRECT& bounds,
+  const std::initializer_list<int>& params,
+  const char* label = "",
+  const IVStyle& style = DEFAULT_STYLE,
+  float handleRadius = 10.f,
+  bool trackClipsHandle = true,
+  bool drawCross = true
+);
+```
+
+<ParamField path="bounds" type="IRECT" required>
+  Position and size
+</ParamField>
+
+<ParamField path="params" type="std::initializer_list<int>" required>
+  Two parameter indices: `{kParamX, kParamY}`
+</ParamField>
+
+<ParamField path="label" type="const char*" default="empty string">
+  Label text
+</ParamField>
+
+<ParamField path="style" type="IVStyle" default="DEFAULT_STYLE">
+  Visual styling
+</ParamField>
+
+<ParamField path="handleRadius" type="float" default="10.f">
+  Radius of the circular handle
+</ParamField>
+
+<ParamField path="trackClipsHandle" type="bool" default="true">
+  If true, handle cannot exceed track bounds
+</ParamField>
+
+<ParamField path="drawCross" type="bool" default="true">
+  If true, draw crosshair lines through handle
+</ParamField>
+
+### Example
+
+```cpp
+enum { kDelayTime, kDelayFeedback, kNumParams };
+
+// XY pad for delay controls
+pGraphics->AttachControl(
+  new IVXYPadControl(
+    IRECT(10, 10, 210, 210),
+    {kDelayTime, kDelayFeedback},
+    "Delay",
+    DEFAULT_STYLE,
+    15.f  // 15px handle radius
+  )
+);
+```
+
+---
+
+## Bitmap Knob
+
+`IBKnobControl` uses a filmstrip bitmap with multiple frames.
+
+### Constructor
+
+```cpp
+IBKnobControl(
+  const IRECT& bounds,
+  const IBitmap& bitmap,
+  int paramIdx,
+  EDirection direction = EDirection::Vertical,
+  double gearing = DEFAULT_GEARING
+);
+```
+
+### Example
+
+```cpp
+// Load filmstrip: 60 frames stacked vertically
+const IBitmap knobBitmap = pGraphics->LoadBitmap("knob.png", 60);
+
+pGraphics->AttachControl(
+  new IBKnobControl(
+    IRECT(10, 10, 110, 110),
+    knobBitmap,
+    kGain,
+    EDirection::Vertical
+  )
+);
+```
+
+<Info>
+**Bitmap Requirements:**
+- Filmstrip: all frames stacked vertically or horizontally
+- All frames must be same size
+- Frame count specified in `LoadBitmap` second parameter
+</Info>
+
+---
+
+## Bitmap Knob Rotater
+
+`IBKnobRotaterControl` rotates a single bitmap image.
+
+### Constructor
+
+```cpp
+IBKnobRotaterControl(
+  const IRECT& bounds,
+  const IBitmap& bitmap,
+  int paramIdx
+);
+```
+
+### Example
+
+```cpp
+// Single image that gets rotated
+const IBitmap knobImg = pGraphics->LoadBitmap("knob-single.png");
+
+pGraphics->AttachControl(
+  new IBKnobRotaterControl(
+    IRECT(10, 10, 110, 110),
+    knobImg,
+    kGain
+  )
+);
+```
+
+---
+
+## Bitmap Slider
+
+`IBSliderControl` uses bitmap images for handle and track.
+
+### Constructor
+
+```cpp
+IBSliderControl(
+  const IRECT& bounds,
+  const IBitmap& handleBitmap,
+  const IBitmap& trackBitmap = IBitmap(),
+  int paramIdx = kNoParameter,
+  EDirection dir = EDirection::Vertical,
+  double gearing = DEFAULT_GEARING
+);
+```
+
+### Example
+
+```cpp
+const IBitmap handle = pGraphics->LoadBitmap("slider-handle.png");
+const IBitmap track = pGraphics->LoadBitmap("slider-track.png");
+
+pGraphics->AttachControl(
+  new IBSliderControl(
+    IRECT(10, 10, 40, 200),
+    handle,
+    track,
+    kVolume,
+    EDirection::Vertical
+  )
+);
+```
+
+---
+
+## SVG Knob
+
+`ISVGKnobControl` rotates an SVG image.
+
+### Constructor
+
+```cpp
+ISVGKnobControl(
+  const IRECT& bounds,
+  const ISVG& svg,
+  int paramIdx = kNoParameter
+);
+```
+
+### Example
+
+```cpp
+ISVG knobSVG = pGraphics->LoadSVG("knob.svg");
+
+pGraphics->AttachControl(
+  new ISVGKnobControl(
+    IRECT(10, 10, 110, 110),
+    knobSVG,
+    kGain
+  )
+);
+```
+
+---
+
+## SVG Slider
+
+`ISVGSliderControl` uses SVG graphics for handle and track.
+
+### Constructor
+
+```cpp
+ISVGSliderControl(
+  const IRECT& bounds,
+  const ISVG& handleSvg,
+  const ISVG& trackSVG,
+  int paramIdx = kNoParameter,
+  EDirection dir = EDirection::Vertical,
+  double gearing = DEFAULT_GEARING
+);
+```
+
+### Example
+
+```cpp
+ISVG handleSVG = pGraphics->LoadSVG("slider-handle.svg");
+ISVG trackSVG = pGraphics->LoadSVG("slider-track.svg");
+
+pGraphics->AttachControl(
+  new ISVGSliderControl(
+    IRECT(10, 10, 40, 200),
+    handleSVG,
+    trackSVG,
+    kVolume,
+    EDirection::Vertical
+  )
+);
+```
+
+---
+
+## Source Reference
+
+**File:** `IGraphics/Controls/IControls.h`
+
+Vector controls: Lines 257-377  
+Bitmap controls: Lines 738-789  
+SVG controls: Lines 570-696

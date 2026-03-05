@@ -1,0 +1,435 @@
+---
+title: Audio Unit v2 Platform API
+description: AUv2 API implementation for iPlug2 plugins on macOS
+---
+
+# Audio Unit v2 Platform API
+
+The Audio Unit v2 (AUv2) implementation provides complete integration with Apple's Audio Unit framework for macOS plugins.
+
+## Overview
+
+The `IPlugAU` class implements the AudioUnit v2 API, using Apple's Component Manager and Audio Component architecture. It provides full support for Audio Unit properties, parameters, and rendering.
+
+<Note>
+AUv2 is the legacy Audio Unit format for macOS. While still widely supported, Apple recommends AUv3 for new development. iPlug2 supports both formats.
+</Note>
+
+## Core Class
+
+### IPlugAU
+
+Defined in: `IPlug/AUv2/IPlugAU.h`
+
+```cpp
+class IPlugAU : public IPlugAPIBase
+              , public IPlugProcessor
+```
+
+The main AUv2 implementation class, handling:
+- Audio Unit component management
+- Property and parameter handling
+- Audio rendering and bus connections
+- MIDI input/output
+- State serialization
+
+## Key Methods
+
+### Host Communication
+
+#### BeginInformHostOfParamChange
+```cpp
+void BeginInformHostOfParamChange(int idx) override;
+```
+Notifies the host that a parameter gesture is beginning.
+
+**Parameters:**
+- `idx` - Parameter index
+
+#### InformHostOfParamChange
+```cpp
+void InformHostOfParamChange(int idx, double normalizedValue) override;
+```
+Informs the host of a parameter value change.
+
+**Parameters:**
+- `idx` - Parameter index
+- `normalizedValue` - Normalized parameter value (0.0 to 1.0)
+
+#### EndInformHostOfParamChange
+```cpp
+void EndInformHostOfParamChange(int idx) override;
+```
+Notifies the host that a parameter gesture has ended.
+
+**Parameters:**
+- `idx` - Parameter index
+
+#### InformHostOfPresetChange
+```cpp
+void InformHostOfPresetChange() override;
+```
+Notifies the host that the current preset has changed.
+
+### MIDI
+
+#### SendMidiMsg
+```cpp
+bool SendMidiMsg(const IMidiMsg& msg) override;
+```
+Sends a MIDI message from the plugin to the host.
+
+**Parameters:**
+- `msg` - MIDI message to send
+
+**Returns:** `true` if message was sent successfully
+
+#### SendMidiMsgs
+```cpp
+bool SendMidiMsgs(WDL_TypedBuf<IMidiMsg>& msgs) override;
+```
+Sends multiple MIDI messages at once.
+
+**Parameters:**
+- `msgs` - Buffer of MIDI messages
+
+**Returns:** `true` if messages were sent successfully
+
+#### SendSysEx
+```cpp
+bool SendSysEx(const ISysEx& msg) override;
+```
+Sends a System Exclusive MIDI message.
+
+**Parameters:**
+- `msg` - SysEx message to send
+
+**Returns:** `true` if message was sent successfully
+
+### Processing
+
+#### SetLatency
+```cpp
+void SetLatency(int samples) override;
+```
+Sets the plugin's processing latency and notifies the host.
+
+**Parameters:**
+- `samples` - Latency in samples
+
+<Warning>
+Changing latency during processing may cause audio glitches. Set latency during initialization or when processing is stopped.
+</Warning>
+
+#### PreProcess
+```cpp
+void PreProcess();
+```
+Prepares buffers and state before audio processing. Called internally before render.
+
+#### ResizeScratchBuffers
+```cpp
+void ResizeScratchBuffers();
+```
+Resizes internal scratch buffers based on current bus configuration.
+
+### Track Information
+
+#### GetTrackName
+```cpp
+void GetTrackName(WDL_String& str) override;
+```
+Retrieves the name of the track the plugin is inserted on.
+
+**Parameters:**
+- `str` - String to receive track name
+
+<Info>
+Track name support varies by host. Logic Pro and GarageBand provide this information.
+</Info>
+
+### Specialized Methods
+
+#### GetLastAudioTimeStamp
+```cpp
+const AudioTimeStamp& GetLastAudioTimeStamp() const;
+```
+Retrieves the most recent render timestamp.
+
+**Returns:** Reference to the last AudioTimeStamp from the render callback
+
+<Note>
+**Specialist Use**: This method is primarily for hosting Audio Units within Audio Units. Thread safety: returns a snapshot that may be stale if called off the audio thread.
+</Note>
+
+## Audio Unit Properties
+
+The IPlugAU class handles these key Audio Unit properties:
+
+### Property Methods
+
+#### GetPropertyInfo
+```cpp
+OSStatus GetPropertyInfo(
+    AudioUnitPropertyID propID,
+    AudioUnitScope scope,
+    AudioUnitElement element,
+    UInt32* pDataSize,
+    Boolean* pWriteable);
+```
+Returns information about a property.
+
+**Parameters:**
+- `propID` - Property identifier
+- `scope` - Property scope (global, input, output)
+- `element` - Element index (bus number)
+- `pDataSize` - Receives size of property data
+- `pWriteable` - Receives whether property is writable
+
+**Returns:** `noErr` on success, error code otherwise
+
+#### GetProperty
+```cpp
+OSStatus GetProperty(
+    AudioUnitPropertyID propID,
+    AudioUnitScope scope,
+    AudioUnitElement element,
+    UInt32* pDataSize,
+    Boolean* pWriteable,
+    void* pData);
+```
+Retrieves a property value.
+
+**Parameters:**
+- `propID` - Property identifier
+- `scope` - Property scope
+- `element` - Element index
+- `pDataSize` - Size of data buffer / receives actual size
+- `pWriteable` - Receives whether property is writable
+- `pData` - Buffer to receive property data
+
+**Returns:** `noErr` on success
+
+#### SetProperty
+```cpp
+OSStatus SetProperty(
+    AudioUnitPropertyID propID,
+    AudioUnitScope scope,
+    AudioUnitElement element,
+    UInt32* pDataSize,
+    const void* pData);
+```
+Sets a property value.
+
+**Parameters:**
+- `propID` - Property identifier
+- `scope` - Property scope
+- `element` - Element index
+- `pDataSize` - Size of property data
+- `pData` - Property data
+
+**Returns:** `noErr` on success
+
+## Bus Configuration
+
+### Bus Types
+
+AUv2 supports multiple input and output buses with different connection types:
+
+```cpp
+enum EAUInputType
+{
+  eNotConnected = 0,
+  eDirectFastProc,        // Fast direct connection
+  eDirectNoFastProc,      // Direct connection without fast proc
+  eRenderCallback         // Render callback connection
+};
+```
+
+### Bus Management
+
+#### GetBus
+```cpp
+BusChannels* GetBus(AudioUnitScope scope, AudioUnitElement busIdx);
+```
+Retrieves a bus configuration.
+
+**Parameters:**
+- `scope` - Input or output scope
+- `busIdx` - Bus index
+
+**Returns:** Pointer to bus channel configuration
+
+#### CheckLegalIO
+```cpp
+bool CheckLegalIO(AudioUnitScope scope, int busIdx, int nChannels);
+bool CheckLegalIO();
+```
+Validates bus I/O configuration.
+
+**Parameters:**
+- `scope` - Bus scope
+- `busIdx` - Bus index
+- `nChannels` - Number of channels
+
+**Returns:** `true` if configuration is valid
+
+## State Management
+
+### GetState
+```cpp
+OSStatus GetState(CFPropertyListRef* ppPropList);
+```
+Serializes plugin state to a Core Foundation property list.
+
+**Parameters:**
+- `ppPropList` - Receives property list containing state
+
+**Returns:** `noErr` on success
+
+### SetState
+```cpp
+OSStatus SetState(CFPropertyListRef pPropList);
+```
+Restores plugin state from a property list.
+
+**Parameters:**
+- `pPropList` - Property list containing state
+
+**Returns:** `noErr` on success
+
+## Factory Template
+
+### IPlugAUFactory
+
+```cpp
+template <class Plug, bool MIDIIn>
+class IPlugAUFactory
+```
+
+Template class that generates the Audio Unit factory functions.
+
+**Template Parameters:**
+- `Plug` - Your plugin class
+- `MIDIIn` - Whether plugin receives MIDI input
+
+**Key Methods:**
+- `Construct()` - Creates plugin instance
+- `Destruct()` - Destroys plugin instance
+- `Lookup()` - Resolves Audio Unit method selectors
+- `Open()` - Opens Audio Unit instance
+- `Close()` - Closes Audio Unit instance
+- `Factory()` - Main factory function
+
+## Configuration
+
+### AUv2 Configuration Options
+
+Set in your plugin's `config.h`:
+
+```cpp
+#define PLUG_TYPE 0 // 0=effect, 1=instrument
+#define PLUG_TYPE_IOS 0 // iOS-specific type
+#define PLUG_MFR_ID 'Acme'
+#define PLUG_UNIQUE_ID 'Plug'
+#define PLUG_LATENCY 0
+```
+
+### Audio Unit Type Codes
+
+<CardGroup cols={2}>
+  <Card title="Effect" icon="wand-magic-sparkles">
+    ```cpp
+    #define PLUG_TYPE 0
+    ```
+    Type: `kAudioUnitType_Effect` (aufx)
+  </Card>
+  
+  <Card title="Instrument" icon="guitar">
+    ```cpp
+    #define PLUG_TYPE 1
+    ```
+    Type: `kAudioUnitType_MusicDevice` (aumu)
+  </Card>
+  
+  <Card title="MIDI Effect" icon="music">
+    ```cpp
+    #define PLUG_TYPE 2
+    ```
+    Type: `kAudioUnitType_MIDIProcessor` (aumi)
+  </Card>
+  
+  <Card title="Offline" icon="download">
+    ```cpp
+    #define PLUG_TYPE 3
+    ```
+    Type: `kAudioUnitType_OfflineEffect` (auol)
+  </Card>
+</CardGroup>
+
+## Factory Function
+
+### MakePlug
+```cpp
+IPlugAU* MakePlug(void* memory);
+```
+Factory function to create plugin instances at a specific memory location.
+
+**Parameters:**
+- `memory` - Pre-allocated memory for plugin instance
+
+**Returns:** Pointer to plugin instance constructed in provided memory
+
+**Example:**
+```cpp
+IPlugAU* MakePlug(void* memory)
+{
+  InstanceInfo info;
+  return new(memory) MyPlugin(info, MakeConfig(kNumParams, kNumPresets));
+}
+```
+
+<Note>
+AUv2 uses placement new to construct plugins in pre-allocated memory for efficient instantiation.
+</Note>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Property Listeners" icon="ear-listen">
+    Support property change listeners to notify hosts of parameter and state changes using `InformListeners()`.
+  </Card>
+  
+  <Card title="Bus Connections" icon="plug">
+    Handle all bus connection types properly. Check `mInputType` to determine connection method.
+  </Card>
+  
+  <Card title="MIDI Output" icon="message">
+    Register MIDI output callback early in initialization if your plugin sends MIDI.
+  </Card>
+  
+  <Card title="Channel Layouts" icon="table-columns">
+    Support multiple channel layout tags for flexibility across hosts and configurations.
+  </Card>
+</CardGroup>
+
+## Common Issues
+
+<Warning>
+**Memory Management**: AUv2 uses placement new construction. Never call `delete` on plugin instances - use the factory's destruct method.
+</Warning>
+
+<Warning>
+**Property Thread Safety**: Property get/set calls may come from any thread. Protect shared state with appropriate synchronization.
+</Warning>
+
+<Tip>
+**Cocoa View Factory**: Set `mCocoaViewFactoryClassName` in InstanceInfo to specify a custom Cocoa view class for your UI.
+</Tip>
+
+## Related Documentation
+
+- [AUv3 Platform API](/api/platforms/auv3) - Modern Audio Unit format
+- [IPlugAPIBase](/api/core/iplugapibase) - Base API functionality
+- [IPlugProcessor](/api/core/iplugprocessor) - Audio processing interface
+- [Audio Unit Programming Guide](https://developer.apple.com/library/archive/documentation/MusicAudio/Conceptual/AudioUnitProgrammingGuide/) - Apple's official documentation

@@ -1,0 +1,333 @@
+---
+title: "Surround Sound Example"
+description: "Learn how to create plugins that support surround sound formats including Atmos"
+---
+
+## Overview
+
+The **IPlugSurroundEffect** example demonstrates how to build plugins that support various surround sound formats including stereo, 5.1, 7.1, 7.1.2, and 7.1.4 (Atmos). This example shows proper speaker arrangement configuration for VST3, AU, and AAX formats.
+
+<Info>
+This example handles up to 12 channels, supporting Dolby Atmos 7.1.4 configurations with height channels.
+</Info>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Multiple Formats" icon="layer-group">
+    Support stereo, 5.1, 7.1, 7.1.2, and 7.1.4 configurations
+  </Card>
+  <Card title="Speaker Layouts" icon="diagram-project">
+    Proper speaker arrangement for each plugin format
+  </Card>
+  <Card title="12-Channel Metering" icon="chart-bar">
+    Visual monitoring for all channels
+  </Card>
+  <Card title="Dynamic I/O" icon="arrows-left-right">
+    Adapt to host's channel configuration
+  </Card>
+</CardGroup>
+
+## Supported Channel Configurations
+
+| Channels | Format | Description |
+|----------|--------|-------------|
+| 1 | Mono | Single channel |
+| 2 | Stereo | L, R |
+| 6 | 5.1 | L, R, C, LFE, Ls, Rs |
+| 8 | 7.1 | L, R, C, LFE, Ls, Rs, Lsr, Rsr |
+| 10 | 7.1.2 | 7.1 + Ltm, Rtm (top middle) |
+| 12 | 7.1.4 | 7.1 + Ltf, Rtf, Ltr, Rtr (Atmos) |
+
+## Implementation
+
+### Speaker Arrangement Function
+
+The key to surround support is mapping channel counts to format-specific speaker arrangements:
+
+```cpp
+uint64_t GetAPIBusTypeForChannelIOConfig(
+  int configIdx, 
+  ERoute dir, 
+  int busIdx, 
+  const IOConfig* pConfig, 
+  WDL_TypedBuf<uint64_t>* APIBusTypes)
+{
+  assert(pConfig != nullptr);
+  assert(busIdx >= 0 && busIdx < pConfig->NBuses(dir));
+  
+  int numChans = pConfig->GetBusInfo(dir, busIdx)->NChans();
+
+#if defined AU_API || defined AUv3_API
+  switch (numChans)
+  {
+    case 0: APIBusTypes->Add(kAudioChannelLayoutTag_UseChannelDescriptions | 0); break;
+    case 1: APIBusTypes->Add(kAudioChannelLayoutTag_Mono); break;
+    case 2: APIBusTypes->Add(kAudioChannelLayoutTag_Stereo); break;
+    case 6: APIBusTypes->Add(kAudioChannelLayoutTag_AudioUnit_5_1); break;
+    case 8: APIBusTypes->Add(kAudioChannelLayoutTag_AudioUnit_7_1); break;
+#if defined (MAC_OS_VERSION_11_0)
+    case 10: APIBusTypes->Add(kAudioChannelLayoutTag_Atmos_7_1_2); break;
+    case 12: APIBusTypes->Add(kAudioChannelLayoutTag_Atmos_7_1_4); break;
+#endif
+    default: APIBusTypes->Add(kAudioChannelLayoutTag_DiscreteInOrder | numChans); break;
+  }
+  return 0;
+  
+#elif defined VST3_API
+  switch (numChans)
+  {
+    case 0: return Steinberg::Vst::SpeakerArr::kEmpty;
+    case 1: return Steinberg::Vst::SpeakerArr::kMono;
+    case 2: return Steinberg::Vst::SpeakerArr::kStereo;
+    case 6: return Steinberg::Vst::SpeakerArr::k51;
+    case 8: return Steinberg::Vst::SpeakerArr::k71CineSideFill;
+    case 10: return Steinberg::Vst::SpeakerArr::k71_2;
+    case 12: return Steinberg::Vst::SpeakerArr::k71_4;
+    default: return Steinberg::Vst::SpeakerArr::kEmpty;
+  }
+  
+#elif defined AAX_API
+  switch (numChans)
+  {
+    case 0: return AAX_eStemFormat_None;
+    case 1: return AAX_eStemFormat_Mono;
+    case 2: return AAX_eStemFormat_Stereo;
+    case 6: return AAX_eStemFormat_5_1;
+    case 8: return AAX_eStemFormat_7_1_DTS;
+    case 10: return AAX_eStemFormat_7_1_2;
+    case 12: return AAX_eStemFormat_7_1_4;
+    default: return AAX_eStemFormat_None;
+  }
+#else
+  return 0;
+#endif
+}
+```
+
+<Note>
+This function must be defined **before** including `IPlug_include_in_plug_src.h` in your `.cpp` file, as iPlug2 will automatically use it if it exists.
+</Note>
+
+### Plugin Class
+
+```cpp
+class IPlugSurroundEffect final : public Plugin
+{
+public:
+  IPlugSurroundEffect(const InstanceInfo& info);
+
+#if IPLUG_DSP
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  void OnIdle() override;
+  
+  IPeakAvgSender<12> mInputPeakSender;
+  IPeakAvgSender<12> mOutputPeakSender;
+#endif
+};
+```
+
+### Processing Surround Audio
+
+The processing is channel-agnostic - it adapts to however many channels are connected:
+
+```cpp
+void IPlugSurroundEffect::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kGain)->Value() / 100.;
+  const int nChans = NOutChansConnected();
+  
+  // Process all connected channels
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+
+  // Send to meters (always send all 12 channels)
+  mInputPeakSender.ProcessBlock(inputs, nFrames, kCtrlTagInputMeter);
+  mOutputPeakSender.ProcessBlock(outputs, nFrames, kCtrlTagOutputMeter);
+}
+```
+
+<Tip>
+Use `NOutChansConnected()` to get the actual number of channels being used. Don't assume a fixed channel count.
+</Tip>
+
+### Creating Multi-Channel Meters
+
+Display all 12 channels with individual meters:
+
+```cpp
+const IVStyle meterStyle = DEFAULT_STYLE.WithColor(kFG, COLOR_WHITE.WithOpacity(0.3f));
+
+pGraphics->AttachControl(
+  new IVPeakAvgMeterControl<12>(
+    bounds, "Inputs", meterStyle, EDirection::Vertical, 
+    {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"}
+  ), 
+  kCtrlTagInputMeter
+);
+```
+
+## Channel Order Reference
+
+### 5.1 (6 channels)
+```
+0: L (Left)
+1: R (Right)  
+2: C (Center)
+3: LFE (Low Frequency Effects)
+4: Ls (Left Surround)
+5: Rs (Right Surround)
+```
+
+### 7.1 (8 channels)
+```
+0: L (Left)
+1: R (Right)
+2: C (Center)
+3: LFE (Low Frequency Effects)
+4: Ls (Left Surround)
+5: Rs (Right Surround)
+6: Lsr (Left Surround Rear)
+7: Rsr (Right Surround Rear)
+```
+
+### 7.1.4 Atmos (12 channels)
+```
+0: L (Left)
+1: R (Right)
+2: C (Center)
+3: LFE (Low Frequency Effects)
+4: Ls (Left Surround)
+5: Rs (Right Surround)
+6: Lsr (Left Surround Rear)
+7: Rsr (Right Surround Rear)
+8: Ltf (Left Top Front)
+9: Rtf (Right Top Front)
+10: Ltr (Left Top Rear)
+11: Rtr (Right Top Rear)
+```
+
+<Warning>
+Channel ordering can vary slightly between plugin formats. The above represents common conventions, but always test in your target DAWs.
+</Warning>
+
+## Building a Surround Plugin
+
+<Steps>
+  <Step title="Define channel configurations">
+    Specify all supported I/O configurations in `PLUG_CHANNEL_IO`
+  </Step>
+  <Step title="Implement GetAPIBusTypeForChannelIOConfig">
+    Map channel counts to format-specific speaker arrangements
+  </Step>
+  <Step title="Use dynamic channel count">
+    Process based on `NOutChansConnected()` rather than fixed assumptions
+  </Step>
+  <Step title="Test in multiple formats">
+    Verify behavior in stereo, 5.1, 7.1, and Atmos if possible
+  </Step>
+  <Step title="Handle gracefully">
+    Ensure plugin doesn't crash with unexpected channel configurations
+  </Step>
+</Steps>
+
+## Platform-Specific Considerations
+
+### Audio Unit (macOS)
+
+- Atmos tags require macOS 11.0+ (`kAudioChannelLayoutTag_Atmos_7_1_2`)
+- Use `kAudioChannelLayoutTag_DiscreteInOrder` for unsupported channel counts
+- AU supports dynamic I/O reconfiguration
+
+### VST3
+
+- Use `Steinberg::Vst::SpeakerArr` constants
+- VST3 has specific 7.1 variants (Cinema, SDDS, etc.)
+- Return `kEmpty` for unsupported configurations
+
+### AAX (Pro Tools)
+
+- Use `AAX_eStemFormat` enums
+- Pro Tools has strict stem format requirements
+- Test with real Pro Tools if targeting this format
+
+## Testing Surround Plugins
+
+<Tabs>
+  <Tab title="macOS">
+    - Logic Pro: Excellent 5.1/7.1/Atmos support
+    - Configure surround bus in track settings
+    - Use Audio MIDI Setup for speaker testing
+  </Tab>
+  <Tab title="Windows">
+    - Reaper: Good multi-channel support
+    - Nuendo: Professional surround DAW
+    - Configure speaker layout in project settings
+  </Tab>
+  <Tab title="Standalone">
+    Build standalone app to test without DAW:
+    ```cpp
+    #define APP_NUM_CHANNELS 12  // Max channels in standalone
+    ```
+  </Tab>
+</Tabs>
+
+## Common Surround Operations
+
+### Downmixing
+
+```cpp
+// Simple stereo downmix from 5.1
+void DownmixToStereo(sample** inputs, sample** outputs, int nFrames)
+{
+  for (int s = 0; s < nFrames; s++) {
+    sample l = inputs[0][s];  // L
+    sample r = inputs[1][s];  // R
+    sample c = inputs[2][s];  // C
+    sample ls = inputs[4][s]; // Ls
+    sample rs = inputs[5][s]; // Rs
+    
+    outputs[0][s] = l + (c * 0.707) + (ls * 0.707);  // L output
+    outputs[1][s] = r + (c * 0.707) + (rs * 0.707);  // R output
+  }
+}
+```
+
+### Panning to Surround Position
+
+```cpp
+// Pan mono source to 5.1 position (angle in radians, 0 = front)
+void PanToSurround(sample input, sample* output, float angle, float spread)
+{
+  // Calculate speaker gains based on angle
+  // This is simplified - real implementation would use VBAP or similar
+  float frontGain = std::max(0.f, std::cos(angle));
+  float rearGain = std::max(0.f, -std::cos(angle));
+  float leftGain = std::max(0.f, std::sin(angle));
+  
+  output[0] = input * frontGain * leftGain;   // L
+  output[1] = input * frontGain * (1-leftGain); // R
+  output[4] = input * rearGain * leftGain;    // Ls
+  output[5] = input * rearGain * (1-leftGain); // Rs
+}
+```
+
+## Related Examples
+
+<CardGroup cols={2}>
+  <Card title="Sidechain" icon="arrow-right-to-bracket" href="/examples/sidechain">
+    Multiple input buses and channel routing
+  </Card>
+  <Card title="Visualizer" icon="chart-line" href="/examples/visualizer">
+    Multi-channel visualization with meters
+  </Card>
+</CardGroup>
+
+## Source Files
+
+- `Examples/IPlugSurroundEffect/IPlugSurroundEffect.h`
+- `Examples/IPlugSurroundEffect/IPlugSurroundEffect.cpp`
+- `Examples/IPlugSurroundEffect/config.h`

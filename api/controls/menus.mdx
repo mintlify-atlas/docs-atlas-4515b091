@@ -1,0 +1,468 @@
+---
+title: "Menus & Text Entry"
+description: "Pop-up menus, text entry, and number box controls"
+---
+
+## Pop-up Menu Control
+
+`IPopupMenuControl` creates customizable pop-up menus within the plugin UI.
+
+<Info>
+This is a **special control** that lives outside the main control stack. Typically added with `IGraphics::AttachPopupMenuControl()` or created on-demand with `IGraphics::CreatePopupMenu()`.
+</Info>
+
+### Constructor
+
+```cpp
+IPopupMenuControl(
+  int paramIdx = kNoParameter,
+  IText text = IText(16),
+  IRECT collapsedBounds = IRECT(),
+  IRECT expandedBounds = IRECT()
+);
+```
+
+<ParamField path="paramIdx" type="int" default="kNoParameter">
+  Parameter to link (menu items populated from parameter display text)
+</ParamField>
+
+<ParamField path="text" type="IText" default="IText(16)">
+  Text properties for menu items
+</ParamField>
+
+<ParamField path="collapsedBounds" type="IRECT" default="IRECT()">
+  Bounds when menu is closed (empty = no space when closed)
+</ParamField>
+
+<ParamField path="expandedBounds" type="IRECT" default="IRECT()">
+  Explicit bounds for expanded menu (empty = auto-calculated)
+</ParamField>
+
+### Creating Menus
+
+```cpp
+// Method 1: On-demand popup (most common)
+IPopupMenu menu;
+menu.AddItem("Option 1");
+menu.AddItem("Option 2");
+menu.AddItem("Option 3");
+menu.AddSeparator();
+menu.AddItem("Reset");
+
+// Show menu at control's location
+pGraphics->CreatePopupMenu(*pControl, menu, x, y);
+
+// Method 2: Replace platform menus globally
+auto* popupControl = new IPopupMenuControl();
+pGraphics->AttachPopupMenuControl(popupControl);
+```
+
+### IPopupMenu API
+
+```cpp
+IPopupMenu menu;
+
+// Add items
+menu.AddItem("Item Text", itemID);
+menu.AddItem("Checkable Item", itemID, IPopupMenu::Item::kChecked);
+menu.AddItem("Disabled Item", itemID, IPopupMenu::Item::kDisabled);
+
+// Add separator
+menu.AddSeparator();
+
+// Add submenu
+IPopupMenu submenu;
+submenu.AddItem("Sub Item 1");
+submenu.AddItem("Sub Item 2");
+menu.AddItem("Submenu", &submenu);
+
+// Check items
+menu.CheckItem(itemID, true);
+menu.CheckItemAlone(itemID); // Check one, uncheck all others
+
+// Get selected item
+int chosenIdx = menu.GetChosenItemIdx();
+IPopupMenu::Item* chosen = menu.GetChosenItem();
+```
+
+### Example: Parameter Menu
+
+```cpp
+// In control's OnMouseDown or OnPopupMenuSelection
+void MyControl::OnMouseDown(float x, float y, const IMouseMod& mod) {
+  if (mod.R) { // Right-click
+    IPopupMenu menu;
+    
+    // Populate from parameter
+    IParam* param = GetParam();
+    for (int i = 0; i < param->NDisplayTexts(); i++) {
+      menu.AddItem(param->GetDisplayText(i), i);
+    }
+    
+    // Check current value
+    menu.CheckItemAlone(static_cast<int>(param->GetNormalized() * (param->NDisplayTexts() - 1)));
+    
+    GetUI()->CreatePopupMenu(*this, menu, x, y);
+  }
+}
+
+void MyControl::OnPopupMenuSelection(IPopupMenu* pSelectedMenu, int valIdx) {
+  if (pSelectedMenu) {
+    int chosen = pSelectedMenu->GetChosenItemIdx();
+    if (chosen >= 0) {
+      GetParam()->SetNormalized(static_cast<double>(chosen) / (GetParam()->NDisplayTexts() - 1));
+      SetDirty(true);
+    }
+  }
+}
+```
+
+### Example: Custom Action Menu
+
+```cpp
+enum EMenuItems {
+  kMenuItemSave = 1,
+  kMenuItemLoad,
+  kMenuItemReset,
+  kMenuItemAbout
+};
+
+void ShowContextMenu(IControl* pControl, float x, float y) {
+  IPopupMenu menu;
+  
+  menu.AddItem("Save Preset", kMenuItemSave);
+  menu.AddItem("Load Preset", kMenuItemLoad);
+  menu.AddSeparator();
+  menu.AddItem("Reset to Default", kMenuItemReset);
+  menu.AddSeparator();
+  menu.AddItem("About...", kMenuItemAbout);
+  
+  pControl->GetUI()->CreatePopupMenu(*pControl, menu, x, y);
+}
+
+void OnPopupMenuSelection(IPopupMenu* pSelectedMenu, int valIdx) {
+  if (!pSelectedMenu) return;
+  
+  auto* item = pSelectedMenu->GetChosenItem();
+  if (!item) return;
+  
+  switch (item->GetTag()) {
+    case kMenuItemSave:
+      SavePreset();
+      break;
+    case kMenuItemLoad:
+      LoadPreset();
+      break;
+    case kMenuItemReset:
+      ResetAllParameters();
+      break;
+    case kMenuItemAbout:
+      ShowAboutDialog();
+      break;
+  }
+}
+```
+
+### Customization Methods
+
+```cpp
+auto* menu = new IPopupMenuControl();
+
+// Colors
+menu->SetPanelColor(COLOR_WHITE);
+menu->SetCellBackgroundColor(COLOR_BLUE);
+menu->SetItemMouseoverColor(COLOR_WHITE);
+menu->SetItemColor(COLOR_BLACK);
+menu->SetDisabledItemColor(COLOR_GRAY);
+menu->SetSeparatorColor(COLOR_MID_GRAY);
+
+// Behavior
+menu->SetCallout(true);  // Offset menu for touch interfaces
+menu->SetMenuForcedSouth(true);  // Force menu below control
+menu->SetShiftForSubmenus(20.f);  // Shift main menu for submenu space
+menu->SetMaxBounds(bounds);  // Restrict menu to specific area
+
+pGraphics->AttachPopupMenuControl(menu);
+```
+
+### Override Drawing Methods
+
+Subclass `IPopupMenuControl` to customize appearance:
+
+```cpp
+class MyPopupMenu : public IPopupMenuControl {
+public:
+  using IPopupMenuControl::IPopupMenuControl;
+  
+  void DrawCellBackground(IGraphics& g, const IRECT& bounds,
+                          const IPopupMenu::Item* pItem,
+                          bool sel, IBlend* pBlend) override {
+    // Custom cell background
+    if (sel) {
+      g.FillRoundRect(COLOR_BLUE, bounds, 5.f);
+    }
+  }
+  
+  void DrawCellText(IGraphics& g, const IRECT& bounds,
+                    const IPopupMenu::Item* pItem,
+                    bool sel, IBlend* pBlend) override {
+    // Custom text rendering
+    IText text = mText;
+    if (sel) text = text.WithFGColor(COLOR_WHITE);
+    g.DrawText(text, pItem->GetText(), bounds);
+  }
+};
+```
+
+---
+
+## Text Entry Control
+
+`ITextEntryControl` provides in-graphics text input.
+
+<Info>
+This is a **special control** added with `IGraphics::AttachTextEntryControl()`. Most users trigger text entry via `IGraphics::CreateTextEntry()` which uses platform-native text input by default.
+</Info>
+
+### Using CreateTextEntry
+
+```cpp
+// In control's OnMouseDblClick
+void OnMouseDblClick(float x, float y, const IMouseMod& mod) override {
+  if (!IsDisabled()) {
+    WDL_String currentText;
+    GetParam()->GetDisplayForHost(currentText);
+    
+    GetUI()->CreateTextEntry(
+      *this,
+      mText,              // IText styling
+      mRECT,              // Text entry bounds
+      currentText.Get(),  // Initial text
+      kCtrlTagTextEntry   // Optional control tag
+    );
+  }
+}
+
+// Handle completion
+void OnTextEntryCompletion(const char* str, int valIdx) override {
+  if (str && strlen(str)) {
+    double value = atof(str);
+    GetParam()->SetNormalized(GetParam()->ToNormalized(value));
+    SetDirty(true);
+  }
+}
+```
+
+### Example: Editable Number Display
+
+```cpp
+class EditableNumberControl : public ITextControl {
+public:
+  EditableNumberControl(const IRECT& bounds, int paramIdx)
+  : ITextControl(bounds, "", DEFAULT_TEXT, paramIdx) {}
+  
+  void OnMouseDblClick(float x, float y, const IMouseMod& mod) override {
+    WDL_String str;
+    GetParam()->GetDisplayForHost(str);
+    GetUI()->CreateTextEntry(*this, mText, mRECT, str.Get());
+  }
+  
+  void OnTextEntryCompletion(const char* str, int valIdx) override {
+    if (str) {
+      GetParam()->SetString(str);
+      SetDirty(true);
+    }
+  }
+  
+  void Draw(IGraphics& g) override {
+    WDL_String str;
+    GetParam()->GetDisplay(str);
+    g.FillRect(COLOR_WHITE, mRECT);
+    g.DrawRect(COLOR_BLACK, mRECT);
+    g.DrawText(mText, str.Get(), mRECT);
+  }
+};
+```
+
+---
+
+## Number Box Control
+
+`IVNumberBoxControl` provides an editable number with optional increment/decrement buttons.
+
+### Constructor
+
+```cpp
+IVNumberBoxControl(
+  const IRECT& bounds,
+  int paramIdx = kNoParameter,
+  IActionFunction actionFunc = nullptr,
+  const char* label = "",
+  const IVStyle& style = DEFAULT_STYLE,
+  bool buttons = false,
+  double defaultValue = 50.f,
+  double minValue = 1.f,
+  double maxValue = 100.f,
+  const char* fmtStr = "%0.0f",
+  bool drawTriangle = true
+);
+```
+
+<ParamField path="bounds" type="IRECT" required>
+  Position and size
+</ParamField>
+
+<ParamField path="paramIdx" type="int" default="kNoParameter">
+  Parameter to link
+</ParamField>
+
+<ParamField path="actionFunc" type="IActionFunction" default="nullptr">
+  Action function for non-parameter variant
+</ParamField>
+
+<ParamField path="label" type="const char*" default="empty string">
+  Label text
+</ParamField>
+
+<ParamField path="style" type="IVStyle" default="DEFAULT_STYLE">
+  Visual styling
+</ParamField>
+
+<ParamField path="buttons" type="bool" default="false">
+  If true, show increment/decrement buttons
+</ParamField>
+
+<ParamField path="defaultValue" type="double" default="50.f">
+  Default value (non-parameter variant only)
+</ParamField>
+
+<ParamField path="minValue" type="double" default="1.f">
+  Minimum value (non-parameter variant only)
+</ParamField>
+
+<ParamField path="maxValue" type="double" default="100.f">
+  Maximum value (non-parameter variant only)
+</ParamField>
+
+<ParamField path="fmtStr" type="const char*" default="%0.0f">
+  Printf-style format string for display
+</ParamField>
+
+<ParamField path="drawTriangle" type="bool" default="true">
+  If true, draw dropdown triangle indicator
+</ParamField>
+
+### Example: With Parameter
+
+```cpp
+// Simple number box
+pGraphics->AttachControl(
+  new IVNumberBoxControl(
+    IRECT(10, 10, 110, 40),
+    kVoiceCount,
+    nullptr,
+    "Voices"
+  )
+);
+
+// With increment/decrement buttons
+pGraphics->AttachControl(
+  new IVNumberBoxControl(
+    IRECT(10, 10, 150, 40),
+    kDelay,
+    nullptr,
+    "Delay (ms)",
+    DEFAULT_STYLE,
+    true  // Show buttons
+  )
+);
+```
+
+### Example: Without Parameter
+
+```cpp
+double bufferSize = 512.0;
+
+auto* numBox = new IVNumberBoxControl(
+  IRECT(10, 10, 110, 40),
+  kNoParameter,
+  [&bufferSize](IControl* pControl) {
+    bufferSize = static_cast<IVNumberBoxControl*>(pControl)->GetRealValue();
+    DBGMSG("Buffer size changed to: %.0f\n", bufferSize);
+  },
+  "Buffer Size",
+  DEFAULT_STYLE,
+  true,      // Show buttons
+  512.0,     // Default
+  64.0,      // Min
+  2048.0,    // Max
+  "%.0f",    // Format (integer)
+  true       // Draw triangle
+);
+
+pGraphics->AttachControl(numBox);
+```
+
+### Interaction
+
+- **Click and drag**: Adjust value vertically
+- **Mouse wheel**: Increment/decrement
+- **Double-click**: Enter text directly
+- **Shift/Ctrl + drag**: Fine adjustment
+- **+/- buttons**: Increment/decrement (if `buttons = true`)
+
+### Methods
+
+```cpp
+double GetRealValue() const;              // Get current real value
+void SetDrawTriangle(bool draw);          // Show/hide triangle
+```
+
+---
+
+## Creating Custom Menu Controls
+
+Combine controls with menus for custom behaviors:
+
+```cpp
+class PresetMenuControl : public IVButtonControl {
+public:
+  PresetMenuControl(const IRECT& bounds)
+  : IVButtonControl(bounds, SplashClickActionFunc, "Presets") {}
+  
+  void OnMouseDown(float x, float y, const IMouseMod& mod) override {
+    IPopupMenu menu;
+    
+    // Load presets from plugin
+    auto* plugin = dynamic_cast<MyPlugin*>(GetDelegate());
+    for (int i = 0; i < plugin->NPresets(); i++) {
+      menu.AddItem(plugin->GetPresetName(i), i);
+    }
+    
+    // Check current preset
+    menu.CheckItemAlone(plugin->GetCurrentPresetIdx());
+    
+    GetUI()->CreatePopupMenu(*this, menu, mRECT);
+  }
+  
+  void OnPopupMenuSelection(IPopupMenu* pSelectedMenu, int valIdx) override {
+    if (pSelectedMenu) {
+      int idx = pSelectedMenu->GetChosenItemIdx();
+      if (idx >= 0) {
+        auto* plugin = dynamic_cast<MyPlugin*>(GetDelegate());
+        plugin->RestorePreset(idx);
+      }
+    }
+  }
+};
+```
+
+---
+
+## Source Reference
+
+**Files:**
+- `IGraphics/Controls/IPopupMenuControl.h` - Pop-up menu (lines 1-255)
+- `IGraphics/Controls/ITextEntryControl.h` - Text entry (lines 1-95)
+- `IGraphics/Controls/IVNumberBoxControl.h` - Number box (lines 1-248)
+- `IPlug/IPlugStructs.h` - IPopupMenu class

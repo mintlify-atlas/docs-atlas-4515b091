@@ -1,0 +1,921 @@
+---
+title: IControl
+description: Base class for all UI controls in iPlug2
+---
+
+# IControl
+
+The `IControl` class is the lowest level base class for all UI controls in IGraphics. Every visible and interactive element in your plugin UI inherits from IControl.
+
+## Overview
+
+IControl provides:
+- Mouse and keyboard event handling
+- Parameter linking and value management
+- Drawing interface
+- Animation support
+- Touch and gesture support
+
+## Constructors
+
+### Basic Constructor
+
+```cpp
+IControl(const IRECT& bounds, int paramIdx = kNoParameter, IActionFunction actionFunc = nullptr)
+```
+
+<ParamField path="bounds" type="const IRECT&" required>
+  The rectangular area the control occupies
+</ParamField>
+
+<ParamField path="paramIdx" type="int" default="kNoParameter">
+  Parameter index to link this control to (-1 for no parameter)
+</ParamField>
+
+<ParamField path="actionFunc" type="IActionFunction" default="nullptr">
+  Lambda function called when the control action occurs
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+IRECT bounds(10, 10, 110, 110);
+auto* control = new IControl(bounds, kGain);
+```
+</CodeGroup>
+
+### Multi-Parameter Constructor
+
+```cpp
+IControl(const IRECT& bounds, const std::initializer_list<int>& params,
+        IActionFunction actionFunc = nullptr)
+```
+
+Create a control linked to multiple parameters.
+
+<ParamField path="params" type="const std::initializer_list<int>&" required>
+  List of parameter indexes
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+auto* control = new IControl(bounds, {kGain, kPan, kWidth});
+```
+</CodeGroup>
+
+### Action-Only Constructor
+
+```cpp
+IControl(const IRECT& bounds, IActionFunction actionFunc)
+```
+
+Create a control not linked to any parameter.
+
+## Core Methods
+
+### Draw
+
+```cpp
+virtual void Draw(IGraphics& g) = 0
+```
+
+Draw the control. This is a pure virtual function that must be implemented.
+
+<ParamField path="g" type="IGraphics&" required>
+  Reference to the graphics context
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+void MyControl::Draw(IGraphics& g) {
+  g.FillRect(COLOR_BLUE, mRECT);
+  g.DrawText(mText, mValueStr.Get(), mRECT);
+}
+```
+</CodeGroup>
+
+### OnInit
+
+```cpp
+virtual void OnInit()
+```
+
+Called when the control is attached, after delegate and graphics are set. Use this for initialization that requires the graphics context.
+
+### OnAttached
+
+```cpp
+virtual void OnAttached()
+```
+
+Called after the control is fully attached. Use for controls that attach sub-controls.
+
+### OnResize
+
+```cpp
+virtual void OnResize()
+```
+
+Called when the control is constructed or resized via SetRECT().
+
+<Note>
+If you call SetDirty() in OnResize(), use SetDirty(false) to avoid triggering parameter changes.
+</Note>
+
+## Mouse Events
+
+### OnMouseDown
+
+```cpp
+virtual void OnMouseDown(float x, float y, const IMouseMod& mod)
+```
+
+Called when the mouse is pressed down on this control.
+
+<ParamField path="x" type="float" required>
+  X coordinate of the mouse event
+</ParamField>
+
+<ParamField path="y" type="float" required>
+  Y coordinate of the mouse event
+</ParamField>
+
+<ParamField path="mod" type="const IMouseMod&" required>
+  Struct with modifier key states
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+void MyControl::OnMouseDown(float x, float y, const IMouseMod& mod) {
+  if (mod.R) {
+    // Right click - show context menu
+  } else if (mod.S) {
+    // Shift + click
+  }
+  SetDirty(true);
+}
+```
+</CodeGroup>
+
+### OnMouseUp
+
+```cpp
+virtual void OnMouseUp(float x, float y, const IMouseMod& mod)
+```
+
+Called when the mouse button is released.
+
+### OnMouseDrag
+
+```cpp
+virtual void OnMouseDrag(float x, float y, float dX, float dY, const IMouseMod& mod)
+```
+
+Called when the mouse is dragged over this control.
+
+<ParamField path="dX" type="float" required>
+  X delta since last event
+</ParamField>
+
+<ParamField path="dY" type="float" required>
+  Y delta since last event
+</ParamField>
+
+### OnMouseDblClick
+
+```cpp
+virtual void OnMouseDblClick(float x, float y, const IMouseMod& mod)
+```
+
+Called on double-click.
+
+### OnMouseWheel
+
+```cpp
+virtual void OnMouseWheel(float x, float y, const IMouseMod& mod, float d)
+```
+
+Called when the mouse wheel is scrolled over this control.
+
+<ParamField path="d" type="float" required>
+  Delta value (positive = up/forward, negative = down/backward)
+</ParamField>
+
+### OnMouseOver
+
+```cpp
+virtual void OnMouseOver(float x, float y, const IMouseMod& mod)
+```
+
+Called when the mouse moves over this control. Implementations should call the base class to use `mMouseIsOver`.
+
+### OnMouseOut
+
+```cpp
+virtual void OnMouseOut()
+```
+
+Called when the mouse leaves this control.
+
+## Keyboard Events
+
+### OnKeyDown
+
+```cpp
+virtual bool OnKeyDown(float x, float y, const IKeyPress& key)
+```
+
+Handle key press events.
+
+<ResponseField name="return" type="bool">
+  True if the key was handled
+</ResponseField>
+
+### OnKeyUp
+
+```cpp
+virtual bool OnKeyUp(float x, float y, const IKeyPress& key)
+```
+
+Handle key release events.
+
+## Parameter Management
+
+### GetParamIdx
+
+```cpp
+int GetParamIdx(int valIdx = 0) const
+```
+
+Get the parameter index linked to this control.
+
+<ParamField path="valIdx" type="int" default="0">
+  Value index for multi-value controls
+</ParamField>
+
+<ResponseField name="return" type="int">
+  Parameter index or kNoParameter if not linked
+</ResponseField>
+
+### SetParamIdx
+
+```cpp
+virtual void SetParamIdx(int paramIdx, int valIdx = 0)
+```
+
+Set the parameter index for this control.
+
+### GetValue
+
+```cpp
+double GetValue(int valIdx = 0) const
+```
+
+Get the control's normalized value (0-1).
+
+<ResponseField name="return" type="double">
+  Normalized value in the range 0-1
+</ResponseField>
+
+### SetValue
+
+```cpp
+virtual void SetValue(double value, int valIdx = 0)
+```
+
+Set the control's normalized value.
+
+<ParamField path="value" type="double" required>
+  Normalized value (0-1)
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+SetValue(0.5); // Set to 50%
+```
+</CodeGroup>
+
+### SetValueFromDelegate
+
+```cpp
+virtual void SetValueFromDelegate(double value, int valIdx = 0)
+```
+
+Called by the delegate to update the control's value. Sets the control dirty for redraw.
+
+### SetValueFromUserInput
+
+```cpp
+virtual void SetValueFromUserInput(double value, int valIdx = 0)
+```
+
+Set value after user input (text entry or popup menu). Calls SetDirty(true) to send the value back to the delegate.
+
+### SetValueToDefault
+
+```cpp
+virtual void SetValueToDefault(int valIdx = kNoValIdx)
+```
+
+Reset value(s) to the default parameter value.
+
+<ParamField path="valIdx" type="int" default="kNoValIdx">
+  Specific value index, or kNoValIdx to reset all values
+</ParamField>
+
+### GetParam
+
+```cpp
+const IParam* GetParam(int valIdx = 0) const
+```
+
+Get the IParam associated with this control.
+
+<ResponseField name="return" type="const IParam*">
+  Pointer to IParam or nullptr if not linked
+</ResponseField>
+
+## User Interaction
+
+### PromptUserInput
+
+```cpp
+void PromptUserInput(int valIdx = 0)
+```
+
+Create a text entry box or popup menu for parameter input.
+
+<CodeGroup>
+```cpp Example
+void MyControl::OnMouseDown(float x, float y, const IMouseMod& mod) {
+  if (mod.R) {
+    PromptUserInput(); // Show text entry or menu
+  }
+}
+```
+</CodeGroup>
+
+### OnPopupMenuSelection
+
+```cpp
+virtual void OnPopupMenuSelection(IPopupMenu* pSelectedMenu, int valIdx)
+```
+
+Handle popup menu selection. Override to customize behavior.
+
+### OnTextEntryCompletion
+
+```cpp
+virtual void OnTextEntryCompletion(const char* str, int valIdx)
+```
+
+Handle text entry completion. Override to customize behavior.
+
+### CreateContextMenu
+
+```cpp
+virtual void CreateContextMenu(IPopupMenu& contextMenu)
+```
+
+Add custom items to the right-click context menu.
+
+<CodeGroup>
+```cpp Example
+void MyControl::CreateContextMenu(IPopupMenu& menu) {
+  menu.AddItem("Reset to Default");
+  menu.AddItem("Learn MIDI CC");
+}
+```
+</CodeGroup>
+
+### OnContextSelection
+
+```cpp
+virtual void OnContextSelection(int itemSelected)
+```
+
+Handle context menu selection.
+
+## Bounds and Layout
+
+### GetRECT
+
+```cpp
+const IRECT& GetRECT() const
+```
+
+Get the control's draw area.
+
+<ResponseField name="return" type="const IRECT&">
+  The control's bounds
+</ResponseField>
+
+### SetRECT
+
+```cpp
+void SetRECT(const IRECT& bounds)
+```
+
+Set the control's draw area and call OnResize().
+
+### GetTargetRECT
+
+```cpp
+const IRECT& GetTargetRECT() const
+```
+
+Get the mouse tracking target area.
+
+### SetTargetRECT
+
+```cpp
+void SetTargetRECT(const IRECT& bounds)
+```
+
+Set the mouse tracking target area.
+
+### SetTargetAndDrawRECTs
+
+```cpp
+void SetTargetAndDrawRECTs(const IRECT& bounds)
+```
+
+Set both the draw rect and target area to the same bounds.
+
+### SetPosition
+
+```cpp
+virtual void SetPosition(float x, float y)
+```
+
+Move the control to a new position, preserving size.
+
+### SetSize
+
+```cpp
+virtual void SetSize(float w, float h)
+```
+
+Resize the control, preserving position.
+
+### IsHit
+
+```cpp
+virtual bool IsHit(float x, float y) const
+```
+
+Test if a point hits this control.
+
+<ResponseField name="return" type="bool">
+  True if the control was hit
+</ResponseField>
+
+<Tip>
+Override IsHit() for controls with non-rectangular hit areas (e.g., circular buttons).
+</Tip>
+
+## State Management
+
+### SetDirty
+
+```cpp
+virtual void SetDirty(bool triggerAction = true, int valIdx = kNoValIdx)
+```
+
+Mark the control for redraw.
+
+<ParamField path="triggerAction" type="bool" default="true">
+  If true and control is linked to a parameter, notify the delegate of the change
+</ParamField>
+
+<ParamField path="valIdx" type="int" default="kNoValIdx">
+  Specific value index or kNoValIdx for all
+</ParamField>
+
+<Warning>
+SetDirty() **always** marks the control for redraw. The parameter only affects whether actions are triggered.
+</Warning>
+
+### IsDirty
+
+```cpp
+virtual bool IsDirty()
+```
+
+Check if the control needs redrawing.
+
+### Hide
+
+```cpp
+virtual void Hide(bool hide)
+```
+
+Show or hide the control.
+
+### IsHidden
+
+```cpp
+bool IsHidden() const
+```
+
+Check if the control is hidden.
+
+### SetDisabled
+
+```cpp
+virtual void SetDisabled(bool disable)
+```
+
+Disable or enable the control.
+
+### IsDisabled
+
+```cpp
+bool IsDisabled() const
+```
+
+Check if the control is disabled.
+
+### SetIgnoreMouse
+
+```cpp
+virtual void SetIgnoreMouse(bool ignore)
+```
+
+Make the control ignore mouse events.
+
+## Animation
+
+### SetAnimation
+
+```cpp
+void SetAnimation(IAnimationFunction func, int duration)
+```
+
+Set an animation function and start it.
+
+<ParamField path="func" type="IAnimationFunction" required>
+  Animation function called each frame
+</ParamField>
+
+<ParamField path="duration" type="int" required>
+  Duration in milliseconds
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+SetAnimation([](IControl* pCaller) {
+  double progress = pCaller->GetAnimationProgress();
+  // Animate based on progress (0.0 to 1.0)
+}, 300);
+```
+</CodeGroup>
+
+### StartAnimation
+
+```cpp
+void StartAnimation(int duration)
+```
+
+Start a previously set animation.
+
+### OnEndAnimation
+
+```cpp
+virtual void OnEndAnimation()
+```
+
+Called when animation completes. Override to perform cleanup.
+
+### GetAnimationProgress
+
+```cpp
+double GetAnimationProgress() const
+```
+
+Get animation progress (0.0 to 1.0).
+
+<ResponseField name="return" type="double">
+  Current animation progress
+</ResponseField>
+
+## Action Functions
+
+### SetActionFunction
+
+```cpp
+IControl* SetActionFunction(IActionFunction actionFunc)
+```
+
+Set a custom action function.
+
+<ResponseField name="return" type="IControl*">
+  Pointer to this control (for chaining)
+</ResponseField>
+
+<CodeGroup>
+```cpp Example
+pControl->SetActionFunction([](IControl* pCaller) {
+  DBGMSG("Control value: %f\n", pCaller->GetValue());
+});
+```
+</CodeGroup>
+
+### SetAnimationEndActionFunction
+
+```cpp
+IControl* SetAnimationEndActionFunction(IActionFunction actionFunc)
+```
+
+Set an action function called when animation ends.
+
+## Appearance
+
+### GetText
+
+```cpp
+const IText& GetText() const
+```
+
+Get the control's text style.
+
+### SetText
+
+```cpp
+virtual void SetText(const IText& txt)
+```
+
+Set the control's text style.
+
+### SetBlend
+
+```cpp
+void SetBlend(const IBlend& blend)
+```
+
+Set the control's blend mode.
+
+### GetBlend
+
+```cpp
+IBlend GetBlend() const
+```
+
+Get the control's blend mode.
+
+### SetTooltip
+
+```cpp
+IControl* SetTooltip(const char* str)
+```
+
+Set a tooltip for this control.
+
+<ResponseField name="return" type="IControl*">
+  Pointer to this control (for chaining)
+</ResponseField>
+
+### GetTooltip
+
+```cpp
+const char* GetTooltip() const
+```
+
+Get the tooltip text.
+
+## Grouping and Tagging
+
+### SetGroup
+
+```cpp
+void SetGroup(const char* groupName)
+```
+
+Assign the control to a group.
+
+<CodeGroup>
+```cpp Example
+pControl->SetGroup("filterSection");
+```
+</CodeGroup>
+
+### GetGroup
+
+```cpp
+const char* GetGroup() const
+```
+
+Get the control's group name.
+
+### GetTag
+
+```cpp
+int GetTag() const
+```
+
+Get the control's tag (assigned via AttachControl).
+
+## Context Access
+
+### GetUI
+
+```cpp
+IGraphics* GetUI()
+```
+
+Get pointer to the IGraphics context.
+
+### GetDelegate
+
+```cpp
+IGEditorDelegate* GetDelegate()
+```
+
+Get pointer to the editor delegate.
+
+### GetParent
+
+```cpp
+IContainerBase* GetParent() const
+```
+
+Get pointer to the parent container (if any).
+
+### GetMouseIsOver
+
+```cpp
+bool GetMouseIsOver() const
+```
+
+Check if mouse is over this control.
+
+<Note>
+Only valid if IGraphics::EnableMouseOver(true) has been called.
+</Note>
+
+## Utility Methods
+
+### SnapToMouse
+
+```cpp
+virtual void SnapToMouse(float x, float y, EDirection direction, const IRECT& bounds,
+                        int valIdx = -1, double minClip = 0., double maxClip = 1.)
+```
+
+Set control value based on x,y position within a rectangle. Commonly used for sliders/faders.
+
+<ParamField path="direction" type="EDirection" required>
+  Horizontal or vertical direction
+</ParamField>
+
+<ParamField path="bounds" type="const IRECT&" required>
+  Track area bounds
+</ParamField>
+
+### As
+
+```cpp
+template <class T>
+T* As()
+```
+
+Dynamic cast helper to convert to a subclass.
+
+<CodeGroup>
+```cpp Example
+if (auto* knob = pControl->As<IVKnobControl>()) {
+  knob->SetGearing(2.0);
+}
+```
+</CodeGroup>
+
+## Base Control Classes
+
+### IContainerBase
+
+```cpp
+class IContainerBase : public IControl
+```
+
+Base class for controls that contain child controls. Automatically clips child drawing and manages child visibility/state.
+
+<CodeGroup>
+```cpp Example
+class MyPanel : public IContainerBase {
+public:
+  MyPanel(const IRECT& bounds) : IContainerBase(bounds) {}
+  
+  void OnAttached() override {
+    AddChildControl(new IVKnobControl(mRECT.GetGridCell(0, 2, 1), kGain));
+    AddChildControl(new IVKnobControl(mRECT.GetGridCell(1, 2, 1), kPan));
+  }
+};
+```
+</CodeGroup>
+
+### IKnobControlBase
+
+```cpp
+class IKnobControlBase : public IControl
+```
+
+Base class for knob/dial controls with standard mouse handling and gearing.
+
+**Key Features:**
+- Vertical or horizontal drag direction
+- Configurable gearing/sensitivity
+- Fine control with modifier keys
+- Auto-hide cursor during drag
+
+### ISliderControlBase
+
+```cpp
+class ISliderControlBase : public IControl
+```
+
+Base class for slider/fader controls with track-based mouse handling.
+
+**Key Features:**
+- Click-to-jump or drag-only modes  
+- Track bounds management
+- Handle sizing
+- Gearing support
+
+## Example Usage
+
+<CodeGroup>
+```cpp Custom Control
+class MyCustomControl : public IControl {
+public:
+  MyCustomControl(const IRECT& bounds, int paramIdx)
+  : IControl(bounds, paramIdx) {}
+  
+  void Draw(IGraphics& g) override {
+    // Draw background
+    g.FillRoundRect(COLOR_DARK_GRAY, mRECT, 5.f);
+    
+    // Draw value indicator
+    IRECT valueRect = mRECT.FracRectVertical(GetValue());
+    g.FillRoundRect(COLOR_BLUE, valueRect, 5.f);
+    
+    // Draw text
+    if (const IParam* pParam = GetParam()) {
+      WDL_String str;
+      pParam->GetDisplayForHost(str);
+      g.DrawText(mText, str.Get(), mRECT);
+    }
+  }
+  
+  void OnMouseDown(float x, float y, const IMouseMod& mod) override {
+    SnapToMouse(x, y, EDirection::Vertical, mRECT);
+  }
+  
+  void OnMouseDrag(float x, float y, float dX, float dY, const IMouseMod& mod) override {
+    SnapToMouse(x, y, EDirection::Vertical, mRECT);
+  }
+};
+```
+
+```cpp Multi-Value Control
+class MyStereoMeter : public IControl {
+public:
+  MyStereoMeter(const IRECT& bounds, int leftParam, int rightParam)
+  : IControl(bounds, {leftParam, rightParam}) {
+    SetWantsMidi(false);
+  }
+  
+  void Draw(IGraphics& g) override {
+    IRECT leftRect = mRECT.FracRectHorizontal(0.5f);
+    IRECT rightRect = mRECT.FracRectHorizontal(0.5f, true);
+    
+    // Draw left channel
+    IRECT leftLevel = leftRect.FracRectVertical(GetValue(0));
+    g.FillRect(COLOR_GREEN, leftLevel);
+    
+    // Draw right channel
+    IRECT rightLevel = rightRect.FracRectVertical(GetValue(1));
+    g.FillRect(COLOR_GREEN, rightLevel);
+  }
+  
+  void OnMsgFromDelegate(int msgTag, int dataSize, const void* pData) override {
+    // Receive peak values from DSP
+    if (msgTag == kMsgTagMetering) {
+      const float* peaks = static_cast<const float*>(pData);
+      SetValue(peaks[0], 0);
+      SetValue(peaks[1], 1);
+      SetDirty(false);
+    }
+  }
+};
+```
+</CodeGroup>
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="IGraphics" icon="paintbrush" href="/api/igraphics">
+    Graphics context and drawing API
+  </Card>
+  <Card title="IGraphics Structs" icon="shapes" href="/api/igraphics-structs">
+    Supporting data structures (IRECT, IColor, etc.)
+  </Card>
+</CardGroup>

@@ -1,0 +1,319 @@
+---
+title: "Sidechain Input Example"
+description: "Learn how to create an audio effect with sidechain input for compression and ducking"
+---
+
+## Overview
+
+The **IPlugSideChain** example demonstrates how to implement a plugin with multiple input buses, specifically showing how to set up and use a sidechain input. This is commonly used for sidechain compression, ducking effects, and other dynamics processing.
+
+<Info>
+This example shows how to configure multiple input buses, detect which channels are connected, and handle the notorious Logic Pro sidechain bug.
+</Info>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Multiple Input Buses" icon="arrow-right-to-bracket">
+    Two input buses: Main Input (L/R) and Sidechain (L/R)
+  </Card>
+  <Card title="Channel Detection" icon="signal">
+    Detect and display which channels are connected
+  </Card>
+  <Card title="Bus Naming" icon="tag">
+    Custom names for input and output buses
+  </Card>
+  <Card title="Peak Metering" icon="gauge">
+    Visual feedback for all input and output channels
+  </Card>
+</CardGroup>
+
+## Plugin Configuration
+
+The channel I/O configuration supports various combinations:
+
+```cpp
+#define PLUG_CHANNEL_IO "\
+1-1 \     // Mono in -> Mono out
+1.1-1 \   // Mono main + Mono sidechain -> Mono out
+1.2-1 \   // Mono main + Stereo sidechain -> Mono out
+1.2-2 \   // Mono main + Stereo sidechain -> Stereo out
+2.1-1 \   // Stereo main + Mono sidechain -> Mono out
+2.1-2 \   // Stereo main + Mono sidechain -> Stereo out
+2-2 \     // Stereo in -> Stereo out
+2.2-2"    // Stereo main + Stereo sidechain -> Stereo out
+```
+
+<Note>
+The notation `2.2-2` means: 2 channels on bus 0 (main input), 2 channels on bus 1 (sidechain), to 2 output channels.
+</Note>
+
+## Implementation
+
+### Header Structure
+
+```cpp
+class IPlugSideChain final : public Plugin
+{
+public:
+  IPlugSideChain(const InstanceInfo& info);
+
+  void OnIdle() override;
+  
+#if IPLUG_DSP
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  void OnActivate(bool enable) override;
+  void OnReset() override;
+  void GetBusName(ERoute direction, int busIdx, int nBuses, WDL_String& str) const override;
+#endif
+
+  bool mInputChansConnected[4] = {};
+  bool mOutputChansConnected[2] = {};
+  bool mSendUpdate = false;
+  
+  IPeakAvgSender<4> mInputPeakSender;
+  IPeakAvgSender<2> mOutputPeakSender;
+};
+```
+
+### Setting Channel Labels
+
+Label each channel for better host integration:
+
+```cpp
+IPlugSideChain::IPlugSideChain(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+#if IPLUG_DSP
+  SetChannelLabel(ERoute::kInput, 0, "Main L");
+  SetChannelLabel(ERoute::kInput, 1, "Main R");
+  SetChannelLabel(ERoute::kInput, 2, "SideChain L");
+  SetChannelLabel(ERoute::kInput, 3, "SideChain R");
+#endif
+
+  GetParam(kGain)->InitGain("Gain");
+}
+```
+
+### Naming Input Buses
+
+Override `GetBusName` to provide custom names for each bus:
+
+```cpp
+void IPlugSideChain::GetBusName(ERoute direction, int busIdx, int nBuses, WDL_String& str) const
+{
+  if (direction == ERoute::kInput)
+  {
+    if (busIdx == 0)
+      str.Set("Main Input");
+    else
+      str.Set("SideChain");
+  }
+  else
+  {
+    str.Set("Output");
+  }
+}
+```
+
+### Detecting Connected Channels
+
+Check which channels are actually connected and update the UI:
+
+```cpp
+void IPlugSideChain::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kGain)->DBToAmp();
+  const int nChans = NOutChansConnected();
+  
+  // Check input channel connections
+  for (int i=0; i < 4; i++) {
+    bool connected = IsChannelConnected(ERoute::kInput, i);
+    if(connected != mInputChansConnected[i]) {
+      mInputChansConnected[i] = connected;
+      mSendUpdate = true;
+    }
+  }
+  
+  // Check output channel connections
+  for (int i=0; i < 2; i++) {
+    bool connected = IsChannelConnected(ERoute::kOutput, i);
+    if(connected != mOutputChansConnected[i]) {
+      mOutputChansConnected[i] = connected;
+      mSendUpdate = true;
+    }
+  }
+  
+  // Process audio
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+  
+  // Send to meters
+  mInputPeakSender.ProcessBlock(inputs, nFrames, kCtrlTagInputMeter, 4, 0);
+  mOutputPeakSender.ProcessBlock(outputs, nFrames, kCtrlTagOutputMeter, 2, 0);
+}
+```
+
+<Steps>
+  <Step title="Check connection status">
+    Use `IsChannelConnected(ERoute::kInput, channelIdx)` to detect if a channel is connected
+  </Step>
+  <Step title="Track changes">
+    Compare with previous state and set a flag when connections change
+  </Step>
+  <Step title="Update UI in OnIdle">
+    Use the flag to trigger UI updates from the idle thread
+  </Step>
+</Steps>
+
+### Updating the UI
+
+Update meter labels when channel connections change:
+
+```cpp
+void IPlugSideChain::OnIdle()
+{
+  mInputPeakSender.TransmitData(*this);
+  mOutputPeakSender.TransmitData(*this);
+
+#if IPLUG_EDITOR
+  if (mSendUpdate)
+  {
+    if(GetUI())
+    {
+      mInputMeter->SetTrackName(0, mInputChansConnected[0] ? 
+        "Main L (Connected)" : "Main L (Not connected)");
+      mInputMeter->SetTrackName(1, mInputChansConnected[1] ? 
+        "Main R (Connected)" : "Main R (Not connected)");
+      mInputMeter->SetTrackName(2, mInputChansConnected[2] ? 
+        "SideChain L (Connected)" : "SideChain L (Not connected)");
+      mInputMeter->SetTrackName(3, mInputChansConnected[3] ? 
+        "SideChain R (Connected)" : "SideChain R (Not connected)");
+
+      GetUI()->SetAllControlsDirty();
+    }
+    mSendUpdate = false;
+  }
+#endif
+}
+```
+
+### The Logic Pro Sidechain Bug
+
+Logic Pro and GarageBand have a long-standing bug where they send the main input to the sidechain bus when no sidechain is connected. Here's the workaround:
+
+```cpp
+#if defined OS_MAC && defined AU_API
+  if(GetHost() == kHostLogic || GetHost() == kHostGarageBand) {
+    const int sz = nFrames * sizeof(sample);
+    // If sidechain buffer equals main buffer, clear it
+    if(!memcmp(inputs[0], inputs[2], sz)) {
+      memset(inputs[2], 0, sz);
+      mInputChansConnected[2] = false;
+    }
+    if(!memcmp(inputs[1], inputs[3], sz)) {
+      memset(inputs[3], 0, sz);
+      mInputChansConnected[3] = false;
+    }
+  }
+#endif
+```
+
+<Warning>
+This workaround compares the sidechain buffer to the main input buffer. If they're identical, it assumes no sidechain is connected and clears the buffer. This isn't perfect but works in most cases.
+</Warning>
+
+## Using Peak Meters
+
+The example uses `IPeakAvgSender` to send peak data from audio thread to UI:
+
+### In the Header
+
+```cpp
+IPeakAvgSender<4> mInputPeakSender;   // 4 input channels
+IPeakAvgSender<2> mOutputPeakSender;  // 2 output channels
+
+#if IPLUG_EDITOR
+IVMeterControl<4>* mInputMeter = nullptr;
+IVMeterControl<2>* mOutputMeter = nullptr;
+#endif
+```
+
+### Initialize in OnReset
+
+```cpp
+void IPlugSideChain::OnReset()
+{
+  mInputPeakSender.Reset(GetSampleRate());
+  mOutputPeakSender.Reset(GetSampleRate());
+}
+```
+
+### Create Meter Controls
+
+```cpp
+const IVStyle meterStyle = DEFAULT_STYLE.WithColor(kFG, COLOR_WHITE.WithOpacity(0.3f));
+
+pGraphics->AttachControl(
+  mInputMeter = new IVPeakAvgMeterControl<4>(
+    bounds, "Inputs", meterStyle, EDirection::Horizontal, 
+    {"Main L", "Main R", "SideChain L", "SideChain R"}
+  ), 
+  kCtrlTagInputMeter
+);
+```
+
+## Building a Sidechain Plugin
+
+<Steps>
+  <Step title="Configure multiple buses">
+    Use the `X.Y-Z` notation in `PLUG_CHANNEL_IO` to define main and sidechain buses
+  </Step>
+  <Step title="Label channels">
+    Call `SetChannelLabel()` for each channel in the constructor
+  </Step>
+  <Step title="Name buses">
+    Override `GetBusName()` to provide meaningful bus names
+  </Step>
+  <Step title="Detect connections">
+    Use `IsChannelConnected()` in ProcessBlock to detect active channels
+  </Step>
+  <Step title="Handle Logic bug">
+    Implement the workaround for Logic Pro/GarageBand on macOS
+  </Step>
+  <Step title="Process audio">
+    Access main input on channels 0-1, sidechain on channels 2-3
+  </Step>
+</Steps>
+
+## Channel Indexing
+
+When using multiple buses, channels are indexed sequentially:
+
+```cpp
+// For config: 2.2-2 (stereo main + stereo sidechain -> stereo out)
+inputs[0]  // Main L
+inputs[1]  // Main R
+inputs[2]  // Sidechain L
+inputs[3]  // Sidechain R
+```
+
+## Related Examples
+
+<CardGroup cols={2}>
+  <Card title="Drum Synth" icon="drum" href="/examples/drum-synth">
+    Multi-output bus configuration
+  </Card>
+  <Card title="Surround Effect" icon="surround-sound" href="/examples/surround">
+    Complex multi-channel routing
+  </Card>
+</CardGroup>
+
+## Source Files
+
+- `Examples/IPlugSideChain/IPlugSideChain.h`
+- `Examples/IPlugSideChain/IPlugSideChain.cpp`
+- `Examples/IPlugSideChain/config.h`

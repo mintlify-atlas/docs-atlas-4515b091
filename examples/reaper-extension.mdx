@@ -1,0 +1,376 @@
+---
+title: REAPER Extension
+description: Build standalone REAPER extensions with native Windows UI integration
+---
+
+## Overview
+
+The IPlugReaperExtension example demonstrates how to create a REAPER extension using iPlug2. Unlike plugins, REAPER extensions are standalone modules that integrate directly into REAPER's UI, providing custom tools, actions, and windows without audio processing constraints.
+
+<Info>
+REAPER extensions are **not** audio plugins. They're used for creating utility tools, custom actions, project management features, and specialized UI windows within REAPER.
+</Info>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Native Integration" icon="window-restore">
+    Access REAPER API functions directly, register custom actions, and integrate with REAPER's menu system.
+  </Card>
+  <Card title="Dockable Windows" icon="grip-vertical">
+    Create windows that can dock into REAPER's interface or float independently with state persistence.
+  </Card>
+  <Card title="Custom Actions" icon="bolt">
+    Register keyboard shortcuts and menu items that execute your custom functionality.
+  </Card>
+  <Card title="IGraphics UI" icon="paint-brush">
+    Use the full IGraphics toolkit for building modern, cross-platform user interfaces.
+  </Card>
+</CardGroup>
+
+## Basic Structure
+
+### Header File
+
+The extension class inherits from `ReaperExtBase` instead of the standard `Plugin` class:
+
+```cpp
+#pragma once
+
+#include "ReaperExt_include_in_plug_hdr.h"
+
+enum EControlTags
+{
+  kCtrlTagText = 0,
+  kNumCtrlTags
+};
+
+using namespace iplug;
+using namespace igraphics;
+
+class IPlugReaperExtension : public ReaperExtBase
+{
+public:
+  IPlugReaperExtension(reaper_plugin_info_t* pRec);
+  void OnIdle() override;
+  void OnUIClose() override { mGUIToggle = 0; }
+  
+private:
+  int mPrevTrackCount = 0;
+  int mGUIToggle = 0;
+};
+```
+
+### Implementation File
+
+```cpp
+#include "IPlugReaperExtension.h"
+#include "ReaperExt_include_in_plug_src.h"
+#include "IControls.h"
+#include "roboto.hpp"
+
+IPlugReaperExtension::IPlugReaperExtension(reaper_plugin_info_t* pRec)
+: ReaperExtBase(pRec)
+{
+  // Import REAPER API functions you need
+  IMPAPI(GetNumTracks);
+  IMPAPI(CountTracks);
+  IMPAPI(InsertTrackAtIndex);
+  
+  // Set up graphics creation function
+  mMakeGraphicsFunc = [&]() {
+    return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS);
+  };
+  
+  // Register custom actions...
+}
+```
+
+## Registering REAPER API Functions
+
+Before using REAPER API functions, you must import them using the `IMPAPI` macro:
+
+```cpp
+// Import functions at construction
+IMPAPI(GetNumTracks);
+IMPAPI(CountTracks);
+IMPAPI(InsertTrackAtIndex);
+IMPAPI(ShowConsoleMsg);
+
+// Now you can call them anywhere
+int trackCount = CountTracks(0);
+InsertTrackAtIndex(GetNumTracks(), false);
+ShowConsoleMsg("Hello from extension!\n");
+```
+
+<Warning>
+IMPAPI must be called in the constructor before any API functions are used. Calling unimported functions will result in crashes.
+</Warning>
+
+## Registering Actions
+
+Actions integrate your extension into REAPER's command system:
+
+<Steps>
+  <Step title="Define Lambda Functions">
+    Create lambda functions for your actions:
+    
+    ```cpp
+    auto action1 = [](){
+      MessageBox(gParent, "Action 1!", "Extension", MB_OK);
+    };
+    
+    auto action2 = [](){
+      InsertTrackAtIndex(GetNumTracks(), false);
+    };
+    ```
+  </Step>
+  
+  <Step title="Register with REAPER">
+    Use `RegisterAction()` to make actions available:
+    
+    ```cpp
+    // Basic action
+    RegisterAction("MyExtension: Action 1 - MsgBox", action1, true);
+    
+    // Action without menu item
+    RegisterAction("MyExtension: Action 2 - AddTrack", action2);
+    
+    // Toggle action with state tracking
+    RegisterAction("MyExtension: Show/Hide UI", 
+                   [&]() { ShowHideMainWindow(); mGUIToggle = !mGUIToggle; }, 
+                   true, &mGUIToggle);
+    ```
+  </Step>
+  
+  <Step title="Use in REAPER">
+    Actions appear in REAPER's Actions list and can be:
+    - Assigned to keyboard shortcuts
+    - Added to toolbars
+    - Executed via scripting
+    - Displayed in custom menus (if `addMenuItem` is true)
+  </Step>
+</Steps>
+
+### RegisterAction Parameters
+
+```cpp
+void RegisterAction(
+  const char* actionName,        // Action identifier
+  std::function<void()> func,    // Function to execute
+  bool addMenuItem = false,      // Add to extensions menu
+  int* pToggle = nullptr         // Toggle state variable
+);
+```
+
+## Building the UI
+
+The layout function works similarly to regular plugins, but integrates with REAPER's docking system:
+
+```cpp
+mLayoutFunc = [&](IGraphics* pGraphics) {
+  const IRECT bounds = pGraphics->GetBounds();
+  
+  // Enable layout recalculation on resize
+  pGraphics->SetLayoutOnResize(true);
+  pGraphics->LoadFont("Roboto-Regular", (void*) ROBOTO_REGULAR, ROBOTO_REGULAR_length);
+  pGraphics->AttachPanelBackground(COLOR_GRAY);
+  
+  // Add button that calls REAPER API
+  pGraphics->AttachControl(new IVButtonControl(
+    bounds.GetGridCell(0, 3, 1).GetPadded(-20.),
+    [&](IControl* pCaller) {
+      SplashClickActionFunc(pCaller);
+      InsertTrackAtIndex(GetNumTracks(), false);
+    }, 
+    "Add Track"
+  ));
+  
+  // Add dock toggle button
+  pGraphics->AttachControl(new IVButtonControl(
+    bounds.GetGridCell(1, 3, 1).GetPadded(-20.),
+    [&](IControl* pCaller) {
+      SplashClickActionFunc(pCaller);
+      ToggleDocking();
+    }, 
+    "Dock"
+  ));
+  
+  // Display track count with control tag
+  WDL_String str;
+  str.SetFormatted(64, "NumTracks: %i", CountTracks(0));
+  pGraphics->AttachControl(
+    new ITextControl(bounds.GetGridCell(2, 3, 1), str.Get(), 
+                     IText(24, EAlign::Center)), 
+    kCtrlTagText
+  );
+};
+```
+
+## Real-time Updates with OnIdle
+
+Use `OnIdle()` to update your UI based on REAPER's state:
+
+```cpp
+void IPlugReaperExtension::OnIdle()
+{
+  int tracks = CountTracks(0);
+  
+  if(tracks != mPrevTrackCount) {
+    mPrevTrackCount = tracks;
+    
+    if(GetUI()) {
+      GetUI()->GetControlWithTag(kCtrlTagText)->As<ITextControl>()
+        ->SetStrFmt(64, "NumTracks: %i", tracks);
+    }
+  }
+}
+```
+
+<Info>
+`OnIdle()` is called periodically (rate defined by `IDLE_TIMER_RATE`). It's safe to call REAPER API functions here, but keep operations lightweight for good performance.
+</Info>
+
+## Docking System
+
+Extension windows can dock into REAPER's interface:
+
+<Tabs>
+  <Tab title="Toggle Docking">
+    ```cpp
+    // Toggle between docked and floating
+    ToggleDocking();
+    
+    // Check current state
+    if (IsDocked()) {
+      // Window is docked
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Show/Hide Window">
+    ```cpp
+    // Toggle window visibility
+    ShowHideMainWindow();
+    
+    // Usually combined with action:
+    RegisterAction("MyExt: Show/Hide", 
+                   [&]() { ShowHideMainWindow(); },
+                   true);
+    ```
+  </Tab>
+  
+  <Tab title="Custom Dock ID">
+    ```cpp
+    // Set unique dock identifier for state persistence
+    SetDockId("MyExtension_MainWindow");
+    ```
+  </Tab>
+</Tabs>
+
+Dock state (position, size, docked/floating) is automatically saved to REAPER's INI file and restored on next launch.
+
+## Configuration
+
+Minimal configuration is needed in `config.h`:
+
+```cpp
+#define PLUG_CLASS_NAME IPlugReaperExtension
+#define PLUG_WIDTH 300
+#define PLUG_HEIGHT 300
+#define PLUG_FPS 60
+#define PLUG_SHARED_RESOURCES 0
+
+#define ROBOTO_FN "Roboto-Regular.ttf"
+#define SHARED_RESOURCES_SUBPATH "IPlugReaperExtension"
+```
+
+<Note>
+Extensions don't need the typical plugin identifiers (PLUG_UNIQUE_ID, PLUG_MFR_ID, etc.) since they're not audio plugins.
+</Note>
+
+## Common Patterns
+
+### Responding to Project Changes
+
+```cpp
+void OnIdle() override
+{
+  // Track when project changes
+  static ReaProject* lastProject = nullptr;
+  ReaProject* currentProject = EnumProjects(-1, nullptr, 0);
+  
+  if (currentProject != lastProject) {
+    lastProject = currentProject;
+    // Project switched - update UI
+  }
+}
+```
+
+### Working with Track Selection
+
+```cpp
+IMPAPI(GetSelectedTrack);
+IMPAPI(SetTrackSelected);
+IMPAPI(CountSelectedTracks);
+
+auto processSelectedTracks = [&]() {
+  int selCount = CountSelectedTracks(0);
+  for (int i = 0; i < selCount; i++) {
+    MediaTrack* track = GetSelectedTrack(0, i);
+    // Process track...
+  }
+};
+```
+
+### Showing Console Output
+
+```cpp
+IMPAPI(ShowConsoleMsg);
+
+// Debug output to REAPER console
+WDL_String msg;
+msg.SetFormatted(256, "Processing %d items\n", itemCount);
+ShowConsoleMsg(msg.Get());
+```
+
+## Platform Support
+
+<Card title="Windows and macOS" icon="desktop">
+  REAPER extensions are supported on both Windows and macOS. The iPlug2 framework abstracts platform differences, but be aware:
+  - Windows: Uses Win32 dialogs and HWND
+  - macOS: Uses NSWindow wrapping
+  - Docking system works identically on both platforms
+</Card>
+
+## Extension vs Plugin
+
+<CardGroup cols={2}>
+  <Card title="Extensions" icon="puzzle-piece">
+    - No audio processing
+    - Direct REAPER integration
+    - Custom actions and menus
+    - Dockable windows
+    - Full API access
+    - Single instance per REAPER
+  </Card>
+  <Card title="Plugins" icon="sliders">
+    - Audio/MIDI processing
+    - Hosted in FX chain
+    - Parameter automation
+    - Multiple instances
+    - Limited host interaction
+    - Standard plugin formats
+  </Card>
+</CardGroup>
+
+## Resources
+
+- [REAPER Extension SDK](http://reaper.fm/sdk/plugin/plugin.php)
+- [REAPER API Documentation](https://www.reaper.fm/sdk/reascript/reascripthelp.html)
+- [ReaperExtBase API Reference](/api/reaper-ext-base)
+- Example location: `Examples/IPlugReaperExtension/`
+
+<Tip>
+When developing extensions, use REAPER's console (View → Show REAPER console) to debug with `ShowConsoleMsg()` output.
+</Tip>

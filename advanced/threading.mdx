@@ -1,0 +1,447 @@
+---
+title: Threading & Concurrency
+description: Thread-safe communication between audio and UI threads
+---
+
+iPlug2 plugins run on multiple threads simultaneously. Understanding thread safety is critical for stable, glitch-free plugins.
+
+## Thread Architecture
+
+iPlug2 plugins typically operate on three threads:
+
+<CardGroup cols={3}>
+  <Card title="Audio Thread" icon="waveform-lines">
+    **Realtime-critical**
+    - `ProcessBlock()`
+    - MIDI processing
+    - DSP calculations
+  </Card>
+  
+  <Card title="Main/UI Thread" icon="desktop">
+    **Non-realtime**
+    - UI drawing
+    - `OnIdle()`
+    - User interactions
+  </Card>
+  
+  <Card title="Background Threads" icon="gears">
+    **Optional**
+    - File I/O
+    - Preset scanning
+    - Convolution IR loading
+  </Card>
+</CardGroup>
+
+<Warning>
+The audio thread must **never** block or allocate memory. Blocking causes audio dropouts (clicks/pops).
+</Warning>
+
+## Realtime-Safe Rules
+
+Code running on the audio thread must follow strict rules:
+
+### ❌ Never Do This on Audio Thread
+
+```cpp
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  // ❌ Memory allocation
+  std::vector<float> buffer(nFrames);
+  
+  // ❌ Locks/mutexes
+  std::lock_guard<std::mutex> lock(mMutex);
+  
+  // ❌ File I/O
+  mFile.read(buffer, size);
+  
+  // ❌ System calls
+  printf("Processing audio\n");
+  
+  // ❌ Memory deallocation
+  delete[] mOldBuffer;
+}
+```
+
+### ✅ Always Do This Instead
+
+```cpp
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  // ✅ Stack allocation (fixed size)
+  float buffer[512];
+  
+  // ✅ Lock-free communication
+  mQueue.Push(data);
+  
+  // ✅ Atomic operations
+  mGain.store(newGain, std::memory_order_release);
+  
+  // ✅ Pre-allocated memory
+  mBuffer.Get()[0] = value; // WDL_TypedBuf allocated in OnReset()
+}
+```
+
+## Thread-Safe Communication
+
+### Atomics for Simple Values
+
+Use `std::atomic` for single values:
+
+```cpp title="Atomic Communication"
+class MyPlugin : public Plugin
+{
+public:
+  void OnParamChange(int paramIdx) override
+  {
+    // Main thread - store value
+    mAtomicGain.store(GetParam(kParamGain)->Value(), 
+                      std::memory_order_release);
+  }
+  
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+  {
+    // Audio thread - read value
+    double gain = mAtomicGain.load(std::memory_order_acquire);
+    
+    for(int s = 0; s < nFrames; s++)
+    {
+      outputs[0][s] = inputs[0][s] * gain;
+      outputs[1][s] = inputs[1][s] * gain;
+    }
+  }
+
+private:
+  std::atomic<double> mAtomicGain {1.0};
+};
+```
+
+<Note>
+Only use atomics for **primitive types** (int, float, double, bool, pointers). Not for complex objects.
+</Note>
+
+### IPlugQueue for Complex Data
+
+For structured data, use `IPlugQueue` - a lock-free SPSC queue:
+
+```cpp title="IPlug/IPlugQueue.h:27"
+template<typename T>
+class IPlugQueue
+{
+public:
+  IPlugQueue(int size);
+  
+  bool Push(const T& item);  // Producer (e.g., audio thread)
+  bool Pop(T& item);         // Consumer (e.g., main thread)
+  size_t ElementsAvailable() const;
+};
+```
+
+**Example: Sending MIDI events to UI**
+
+```cpp title="MIDI Queue Example"
+class MyPlugin : public Plugin
+{
+public:
+  MyPlugin(const InstanceInfo& info)
+  : Plugin(info, MakeConfig(kNumParams, kNumPresets))
+  , mMidiQueue(128) // Queue capacity
+  {
+  }
+  
+  void ProcessMidiMsg(const IMidiMsg& msg) override
+  {
+    // Audio thread - push to queue
+    mMidiQueue.Push(msg);
+  }
+  
+  void OnIdle() override
+  {
+    // Main thread - pop and process
+    IMidiMsg msg;
+    while(mMidiQueue.Pop(msg))
+    {
+      // Update UI based on MIDI
+      if(msg.StatusMsg() == IMidiMsg::kNoteOn)
+      {
+        // Highlight key, etc.
+      }
+    }
+  }
+
+private:
+  IPlugQueue<IMidiMsg> mMidiQueue;
+};
+```
+
+## ISender System
+
+The `ISender` classes use `IPlugQueue` internally for audio visualization:
+
+```cpp title="IPlug/ISender.h:64"
+template <int MAXNC = 1, int QUEUE_SIZE = 64, typename T = float>
+class ISender
+{
+public:
+  void PushData(const ISenderData<MAXNC, T>& d)  // Audio thread
+  {
+    mQueue.Push(d);
+  }
+  
+  void TransmitData(IEditorDelegate& dlg)        // Main thread
+  {
+    while (mQueue.ElementsAvailable())
+    {
+      ISenderData<MAXNC, T> d;
+      mQueue.Pop(d);
+      dlg.SendControlMsgFromDelegate(d.ctrlTag, kUpdateMessage, 
+                                     sizeof(d), &d);
+    }
+  }
+  
+protected:
+  IPlugQueue<ISenderData<MAXNC, T>> mQueue {QUEUE_SIZE};
+};
+```
+
+See [Visualization](/advanced/visualization) for detailed usage.
+
+## Memory Management
+
+### Pre-Allocate in OnReset
+
+Allocate all buffers in `OnReset()`, never in `ProcessBlock()`:
+
+```cpp title="Proper Memory Allocation"
+class MyPlugin : public Plugin
+{
+public:
+  void OnReset() override
+  {
+    // Main thread - safe to allocate
+    const int maxBlockSize = GetBlockSize();
+    mWorkBuffer.Resize(maxBlockSize * 2);
+    mDelayBuffer.Resize(GetSampleRate() * 2); // 2 seconds
+  }
+  
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+  {
+    // Audio thread - use pre-allocated buffers
+    sample* pWork = mWorkBuffer.Get();
+    sample* pDelay = mDelayBuffer.Get();
+    
+    // Process without allocation...
+  }
+
+private:
+  WDL_TypedBuf<sample> mWorkBuffer;
+  WDL_TypedBuf<sample> mDelayBuffer;
+};
+```
+
+<Info>
+`WDL_TypedBuf` is iPlug2's dynamic array. `Resize()` may allocate, so only call it outside `ProcessBlock()`.
+</Info>
+
+### Stack vs Heap
+
+```cpp title="Stack Allocation (Fast)"
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  // ✅ Stack allocation - realtime safe for small, fixed sizes
+  sample temp[512];
+  
+  if(nFrames <= 512)
+  {
+    // Use temp buffer...
+  }
+}
+```
+
+```cpp title="Heap Allocation (Slow)"
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  // ❌ Heap allocation - NOT realtime safe
+  sample* temp = new sample[nFrames]; // Can block!
+  
+  // Process...
+  
+  delete[] temp; // Also can block!
+}
+```
+
+## OnMessage for Bidirectional Communication
+
+Send arbitrary data from UI to DSP:
+
+```cpp title="IPlugChunks Example"
+// UI thread - send data
+pGraphics->GetDelegate()->SendArbitraryMsgFromUI(
+  kMsgTagSliderChanged, kCtrlTag, sizeof(data), &data
+);
+
+// DSP thread - receive data  
+bool IPlugChunks::OnMessage(int msgTag, int ctrlTag, 
+                            int dataSize, const void* pData) override
+{
+  if(msgTag == kMsgTagSliderChanged)
+  {
+    auto* pVals = reinterpret_cast<const double*>(pData);
+    memcpy(mSteps, pVals, kNumSteps * sizeof(double)); // Copy to DSP state
+    return true;
+  }
+  return false;
+}
+```
+
+<Warning>
+Messages sent via `SendArbitraryMsgFromUI()` are delivered on the **audio thread**. Keep `OnMessage()` fast and realtime-safe.
+</Warning>
+
+## Common Threading Patterns
+
+### Pattern 1: Parameter Changes
+
+```cpp
+// OnParamChange runs on MAIN thread
+void OnParamChange(int paramIdx) override
+{
+  double value = GetParam(paramIdx)->Value();
+  
+  // Store atomically for audio thread
+  mAtomicParam.store(value, std::memory_order_release);
+}
+
+// ProcessBlock runs on AUDIO thread
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  // Read atomically
+  double param = mAtomicParam.load(std::memory_order_acquire);
+  
+  // Use param...
+}
+```
+
+### Pattern 2: Audio → UI Visualization
+
+```cpp
+// ProcessBlock - AUDIO thread
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  // Process audio...
+  
+  // Push to lock-free queue
+  mSender.ProcessBlock(outputs, nFrames, kCtrlTag);
+}
+
+// OnIdle - MAIN thread (called ~60Hz)
+void OnIdle() override
+{
+  // Pop from queue and send to UI
+  mSender.TransmitData(*this);
+}
+```
+
+### Pattern 3: UI → Audio Messages
+
+```cpp
+// UI action - MAIN thread
+button->SetActionFunction([](IControl* pCaller) {
+  pCaller->GetDelegate()->SendArbitraryMsgFromUI(
+    kMsgTrigger, kNoTag, 0, nullptr
+  );
+});
+
+// OnMessage - AUDIO thread
+bool OnMessage(int msgTag, int ctrlTag, int dataSize, const void* pData) override
+{
+  if(msgTag == kMsgTrigger)
+  {
+    TriggerEnvelope(); // Realtime-safe operation
+    return true;
+  }
+  return false;
+}
+```
+
+## Debugging Threading Issues
+
+Common symptoms:
+
+<Tabs>
+  <Tab title="Clicks/Pops">
+    **Cause**: Blocking operation on audio thread
+    
+    **Fix**: Remove allocations, locks, I/O from `ProcessBlock()`
+  </Tab>
+  
+  <Tab title="Crashes">
+    **Cause**: Race condition or non-atomic access
+    
+    **Fix**: Use atomics or lock-free queues
+  </Tab>
+  
+  <Tab title="Deadlocks">
+    **Cause**: Mutex held across threads
+    
+    **Fix**: Never use mutexes between audio and main threads
+  </Tab>
+  
+  <Tab title="Missed Updates">
+    **Cause**: Queue overflow
+    
+    **Fix**: Increase queue size or reduce message rate
+  </Tab>
+</Tabs>
+
+### Thread Sanitizer
+
+Use ThreadSanitizer to detect data races:
+
+```bash
+# Compile with thread sanitizer
+export CXXFLAGS="-fsanitize=thread -g"
+make
+
+# Run plugin in host
+# TSan will report data races
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Identify Thread Context">
+    Know which thread your code runs on:
+    - `ProcessBlock()`, `OnMessage()` → Audio
+    - `OnIdle()`, UI callbacks → Main
+    - `OnReset()` → Main (usually)
+  </Step>
+  
+  <Step title="Use Appropriate Primitives">
+    - Simple values → `std::atomic`
+    - Complex data → `IPlugQueue`
+    - UI updates → `ISender` classes
+  </Step>
+  
+  <Step title="Pre-Allocate Memory">
+    Allocate all buffers in `OnReset()` or constructor
+  </Step>
+  
+  <Step title="Test Under Load">
+    Test with small buffer sizes (32 samples) at high sample rates (96kHz)
+  </Step>
+  
+  <Step title="Profile Realtime Safety">
+    Use tools like [RTSafety](https://github.com/hogliux/rtaudio) to verify
+  </Step>
+</Steps>
+
+## See Also
+
+- [Visualization](/advanced/visualization) - ISender and IPlugQueue usage
+- [Processing Audio](/processing-audio) - ProcessBlock guidelines
+- [State Management](/advanced/state-management) - OnMessage examples
+- [IPlugQueue.h](@IPlug/IPlugQueue.h) - Lock-free queue implementation
+
+<Tip>
+When in doubt, use `IPlugQueue`. It's lock-free, tested, and handles most audio-to-UI communication needs.
+</Tip>

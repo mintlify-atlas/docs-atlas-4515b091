@@ -1,0 +1,151 @@
+---
+title: Examples Overview
+description: Introduction to iPlug2 example projects and templates
+---
+
+iPlug2 includes a comprehensive set of example projects that serve as templates for creating audio plugins. Each example demonstrates specific features and can be duplicated to start your own project.
+
+## Getting Started Examples
+
+These three examples provide the foundation for most plugin development:
+
+<CardGroup cols={3}>
+  <Card title="IPlugEffect" icon="waveform" href="/examples/iplug-effect">
+    A basic audio effect with a volume control - perfect for learning the fundamentals
+  </Card>
+  <Card title="IPlugInstrument" icon="music" href="/examples/iplug-instrument">
+    An MPE-capable polyphonic synthesizer with ADSR and LFO
+  </Card>
+  <Card title="IPlugControls" icon="sliders" href="/examples/iplug-controls">
+    A comprehensive showcase of all available UI controls in the IControls library
+  </Card>
+</CardGroup>
+
+## Specialized Examples
+
+Beyond the basics, iPlug2 provides examples for advanced use cases:
+
+<CardGroup cols={2}>
+  <Card title="IPlugChunks" icon="database">
+    Store custom data beyond parameters and access tempo information
+  </Card>
+  <Card title="IPlugMidiEffect" icon="music">
+    MIDI processing plugin (primarily for AudioUnits)
+  </Card>
+  <Card title="IPlugSideChain" icon="arrows-split-up-and-left">
+    Multiple input buses for compressors and gates
+  </Card>
+  <Card title="IPlugSurroundEffect" icon="volume-high">
+    Multichannel volume control for surround buses
+  </Card>
+  <Card title="IPlugDrumSynth" icon="drum">
+    Drum synthesizer with multiple output buses
+  </Card>
+  <Card title="IPlugResponsiveUI" icon="window-restore">
+    Resizable UI that adapts to the platform window
+  </Card>
+  <Card title="IPlugOSCEditor" icon="network-wired">
+    Open Sound Control integration with WebView
+  </Card>
+  <Card title="IPlugConvoEngine" icon="wave-square">
+    Convolution engine with plugin delay compensation
+  </Card>
+  <Card title="IPlugVisualizer" icon="chart-line">
+    Audio signal visualization techniques
+  </Card>
+</CardGroup>
+
+## Alternative UI Examples
+
+iPlug2 supports multiple UI frameworks beyond the default IGraphics:
+
+<CardGroup cols={2}>
+  <Card title="IPlugCocoaUI" icon="apple">
+    Native iOS/macOS UI using AppKit/UIKit
+  </Card>
+  <Card title="IPlugSwiftUI" icon="swift">
+    Modern iOS/macOS UI with SwiftUI
+  </Card>
+  <Card title="IPlugWebUI" icon="globe">
+    HTML/CSS/JavaScript interface using platform webview
+  </Card>
+  <Card title="IPlugP5js" icon="cube">
+    WebGL rendering using p5.js
+  </Card>
+  <Card title="IPlugSvelteUI" icon="code">
+    Reactive UI framework with Svelte
+  </Card>
+</CardGroup>
+
+## REAPER Integration Examples
+
+Special examples for extending the REAPER DAW:
+
+<CardGroup cols={2}>
+  <Card title="IPlugReaperExtension" icon="puzzle-piece">
+    Create REAPER extensions with Win32 API abstraction
+  </Card>
+  <Card title="IPlugReaperPlugin" icon="plug">
+    Plugins that call REAPER ReaScript API functions
+  </Card>
+</CardGroup>
+
+## Project Structure
+
+All example projects follow a consistent structure:
+
+```
+Examples/IPlugEffect/
+├── IPlugEffect.h         # Plugin header with parameter enum
+├── IPlugEffect.cpp       # Plugin implementation
+├── config.h              # Plugin metadata and format settings
+└── resources/            # Images, fonts, and other assets
+```
+
+<Info>
+Each example can be duplicated to start a new project. Modify `config.h` to set your plugin name, manufacturer, and unique IDs.
+</Info>
+
+## Core Files
+
+Every iPlug2 project consists of three main files:
+
+<Steps>
+  <Step title="config.h">
+    Defines plugin metadata, formats, I/O configuration, and resource paths
+  </Step>
+  <Step title="Plugin.h">
+    Declares the plugin class, parameters enum, and any DSP helper classes
+  </Step>
+  <Step title="Plugin.cpp">
+    Implements the constructor (with UI layout), ProcessBlock, and event handlers
+  </Step>
+</Steps>
+
+## Key Concepts
+
+All examples demonstrate these fundamental concepts:
+
+- **Parameters**: Fixed count at compile time, indexed by enum, using non-normalized values
+- **ProcessBlock**: Realtime-safe audio processing (no allocations, locks, or file I/O)
+- **UI Construction**: Typically built in a lambda within the plugin constructor
+- **Control Linking**: UI controls linked to parameters via parameter ID
+- **Data Transmission**: ISender classes for passing data from audio thread to UI
+
+<Warning>
+The `ProcessBlock` method must be realtime-safe. Avoid allocations, mutex locks, and file I/O in audio processing code.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="IPlugEffect" icon="arrow-right" href="/examples/iplug-effect">
+    Start with a simple audio effect
+  </Card>
+  <Card title="IPlugInstrument" icon="arrow-right" href="/examples/iplug-instrument">
+    Build a synthesizer instrument
+  </Card>
+  <Card title="IPlugControls" icon="arrow-right" href="/examples/iplug-controls">
+    Explore all available UI controls
+  </Card>
+</CardGroup>

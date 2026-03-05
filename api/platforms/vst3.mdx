@@ -1,0 +1,391 @@
+---
+title: VST3 Platform API
+description: VST3 API implementation for iPlug2 plugins
+---
+
+# VST3 Platform API
+
+The VST3 implementation in iPlug2 provides a complete integration with Steinberg's VST3 SDK, implementing a non-distributed single-component architecture.
+
+## Overview
+
+The `IPlugVST3` class is the main API class for VST3 plugins in iPlug2. It inherits from multiple base classes to provide full VST3 functionality:
+
+- `IPlugAPIBase` - Core iPlug API interface
+- `IPlugVST3ProcessorBase` - VST3 audio processing
+- `IPlugVST3ControllerBase` - VST3 parameter control
+- `Steinberg::Vst::SingleComponentEffect` - VST3 single-component architecture
+- `Steinberg::Vst::IMidiMapping` - MIDI controller mapping support
+- `Steinberg::Vst::ChannelContext::IInfoListener` - Track context information
+
+<Note>
+VST3 plugins in iPlug2 use the single-component architecture, combining processor and controller in one class for simplicity.
+</Note>
+
+## Core Class
+
+### IPlugVST3
+
+Defined in: `IPlug/VST3/IPlugVST3.h`
+
+```cpp
+class IPlugVST3 : public IPlugAPIBase
+                , public IPlugVST3ProcessorBase
+                , public IPlugVST3ControllerBase
+                , public Steinberg::Vst::SingleComponentEffect
+                , public Steinberg::Vst::IMidiMapping
+                , public Steinberg::Vst::ChannelContext::IInfoListener
+```
+
+## Key Methods
+
+### Host Communication
+
+#### BeginInformHostOfParamChange
+```cpp
+void BeginInformHostOfParamChange(int idx) override;
+```
+Notifies the host that a parameter gesture is beginning.
+
+**Parameters:**
+- `idx` - Parameter index
+
+#### InformHostOfParamChange
+```cpp
+void InformHostOfParamChange(int idx, double normalizedValue) override;
+```
+Informs the host of a parameter value change.
+
+**Parameters:**
+- `idx` - Parameter index
+- `normalizedValue` - Normalized value (0.0 to 1.0)
+
+#### EndInformHostOfParamChange
+```cpp
+void EndInformHostOfParamChange(int idx) override;
+```
+Notifies the host that a parameter gesture has ended.
+
+**Parameters:**
+- `idx` - Parameter index
+
+#### InformHostOfParameterDetailsChange
+```cpp
+void InformHostOfParameterDetailsChange() override;
+```
+Notifies the host that parameter details have changed (e.g., parameter count or metadata).
+
+### Audio Processing
+
+#### initialize
+```cpp
+Steinberg::tresult PLUGIN_API initialize(FUnknown* context) override;
+```
+Initializes the VST3 component. Called by the host during plugin instantiation.
+
+**Parameters:**
+- `context` - Host context providing access to host services
+
+**Returns:** `kResultOk` on success
+
+#### process
+```cpp
+Steinberg::tresult PLUGIN_API process(Steinberg::Vst::ProcessData& data) override;
+```
+Main audio processing callback.
+
+**Parameters:**
+- `data` - Process data structure containing audio buffers, events, and context
+
+**Returns:** `kResultOk` on success
+
+#### setBusArrangements
+```cpp
+Steinberg::tresult PLUGIN_API setBusArrangements(
+    Steinberg::Vst::SpeakerArrangement* pInputs, 
+    Steinberg::int32 numIns,
+    Steinberg::Vst::SpeakerArrangement* pOutputs, 
+    Steinberg::int32 numOuts) override;
+```
+Configures the speaker arrangements for input and output buses.
+
+**Parameters:**
+- `pInputs` - Array of input speaker arrangements
+- `numIns` - Number of input buses
+- `pOutputs` - Array of output speaker arrangements
+- `numOuts` - Number of output buses
+
+**Returns:** `kResultOk` if arrangement is supported
+
+#### SetLatency
+```cpp
+void SetLatency(int samples) override;
+```
+Sets the plugin latency and notifies the host.
+
+**Parameters:**
+- `samples` - Latency in samples
+
+### State Management
+
+#### getState
+```cpp
+Steinberg::tresult PLUGIN_API getState(Steinberg::IBStream* pState) override;
+```
+Saves the plugin state to a stream.
+
+**Parameters:**
+- `pState` - Stream to write state data
+
+**Returns:** `kResultOk` on success
+
+#### setState
+```cpp
+Steinberg::tresult PLUGIN_API setState(Steinberg::IBStream* pState) override;
+```
+Restores the plugin state from a stream.
+
+**Parameters:**
+- `pState` - Stream containing state data
+
+**Returns:** `kResultOk` on success
+
+### Editor
+
+#### createView
+```cpp
+Steinberg::IPlugView* PLUGIN_API createView(const char* name) override;
+```
+Creates the plugin editor view.
+
+**Parameters:**
+- `name` - View type identifier (typically `Steinberg::Vst::ViewType::kEditor`)
+
+**Returns:** Pointer to the created view, or `nullptr` if unsupported
+
+#### EditorResize
+```cpp
+bool EditorResize(int viewWidth, int viewHeight) override;
+```
+Notifies the host that the editor wants to resize.
+
+**Parameters:**
+- `viewWidth` - New width in pixels
+- `viewHeight` - New height in pixels
+
+**Returns:** `true` if resize was accepted
+
+### MIDI Mapping
+
+#### getMidiControllerAssignment
+```cpp
+Steinberg::tresult PLUGIN_API getMidiControllerAssignment(
+    Steinberg::int32 busIndex, 
+    Steinberg::int16 channel,
+    Steinberg::Vst::CtrlNumber midiCCNumber, 
+    Steinberg::Vst::ParamID& tag) override;
+```
+Maps MIDI CC numbers to parameter IDs.
+
+**Parameters:**
+- `busIndex` - MIDI bus index
+- `channel` - MIDI channel
+- `midiCCNumber` - MIDI CC number
+- `tag` - Output parameter ID
+
+**Returns:** `kResultOk` if mapping exists
+
+### Track Context
+
+VST3 provides track context information that plugins can query:
+
+#### GetTrackColor
+```cpp
+void GetTrackColor(int& r, int& g, int& b) override;
+```
+Retrieves the color of the track the plugin is inserted on.
+
+**Parameters:**
+- `r` - Red component (0-255)
+- `g` - Green component (0-255)
+- `b` - Blue component (0-255)
+
+#### GetTrackName
+```cpp
+void GetTrackName(WDL_String& str) override;
+```
+Retrieves the name of the track the plugin is inserted on.
+
+**Parameters:**
+- `str` - String to receive track name
+
+#### GetTrackIndex
+```cpp
+int GetTrackIndex() override;
+```
+Retrieves the index of the track the plugin is inserted on.
+
+**Returns:** Track index
+
+#### GetTrackNamespace
+```cpp
+void GetTrackNamespace(WDL_String& str) override;
+```
+Retrieves the namespace of the track (for grouping tracks).
+
+**Parameters:**
+- `str` - String to receive namespace
+
+#### GetTrackNamespaceIndex
+```cpp
+int GetTrackNamespaceIndex() override;
+```
+Retrieves the namespace index of the track.
+
+**Returns:** Namespace index
+
+## Bus Management
+
+### Audio Bus Access
+
+#### getAudioInput
+```cpp
+Steinberg::Vst::AudioBus* getAudioInput(Steinberg::int32 index);
+```
+Retrieves an input audio bus by index.
+
+**Parameters:**
+- `index` - Bus index
+
+**Returns:** Pointer to audio bus, or `nullptr` if invalid
+
+#### getAudioOutput
+```cpp
+Steinberg::Vst::AudioBus* getAudioOutput(Steinberg::int32 index);
+```
+Retrieves an output audio bus by index.
+
+**Parameters:**
+- `index` - Bus index
+
+**Returns:** Pointer to audio bus, or `nullptr` if invalid
+
+#### removeAudioInputBus
+```cpp
+void removeAudioInputBus(Steinberg::Vst::AudioBus* pBus);
+```
+Removes an input audio bus.
+
+**Parameters:**
+- `pBus` - Bus to remove
+
+#### removeAudioOutputBus
+```cpp
+void removeAudioOutputBus(Steinberg::Vst::AudioBus* pBus);
+```
+Removes an output audio bus.
+
+**Parameters:**
+- `pBus` - Bus to remove
+
+## Configuration
+
+### VST3 Configuration Options
+
+VST3-specific configuration is set in your plugin's `config.h`:
+
+```cpp
+#define PLUG_TYPE 0 // 0=effect, 1=instrument, 2=note effect, 3=analyzer
+#define PLUG_LATENCY 0
+#define PLUG_VST3_CATEGORY "Fx"
+```
+
+<CardGroup cols={2}>
+  <Card title="Plugin Types" icon="sliders">
+    - **Effect (0)**: Audio processor
+    - **Instrument (1)**: MIDI to audio
+    - **Note Effect (2)**: MIDI processor
+    - **Analyzer (3)**: Analysis tool
+  </Card>
+  
+  <Card title="VST3 Categories" icon="tags">
+    Common category strings:
+    - `"Fx"` - Effect
+    - `"Instrument"` - Instrument
+    - `"Synth"` - Synthesizer
+    - `"Delay"`, `"Reverb"`, `"EQ"`, etc.
+  </Card>
+</CardGroup>
+
+## Factory Function
+
+### MakePlug
+```cpp
+IPlugVST3* MakePlug(const InstanceInfo& info);
+```
+Factory function to create plugin instances. You must implement this in your plugin code.
+
+**Parameters:**
+- `info` - Instance information (currently empty for VST3)
+
+**Returns:** Pointer to new plugin instance
+
+**Example:**
+```cpp
+IPlugVST3* MakePlug(const InstanceInfo& info)
+{
+  return new MyPlugin(info, MakeConfig(kNumParams, kNumPresets));
+}
+```
+
+## VST3 SDK Integration
+
+iPlug2's VST3 implementation uses these key VST3 SDK interfaces:
+
+- `IAudioProcessor` - Audio processing
+- `IEditController` - Parameter control
+- `IUnitInfo` - Program/preset management
+- `IConnectionPoint` - Component communication
+- `IProcessContextRequirements` - Timing/transport info
+- `IContextMenu` - Context menu support (platform-specific)
+
+<Info>
+The VST3 SDK is included in `Dependencies/IPlug/VST3_SDK/`. iPlug2 handles the complex VST3 architecture internally, allowing you to focus on your plugin's functionality.
+</Info>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="State Management" icon="floppy-disk">
+    Use `SerializeState()` and `UnserializeState()` for plugin state. The VST3 implementation automatically handles bypass state separately.
+  </Card>
+  
+  <Card title="Parameter Changes" icon="waveform">
+    Always call `BeginInformHostOfParamChange()` before parameter gestures and `EndInformHostOfParamChange()` after to ensure proper automation recording.
+  </Card>
+  
+  <Card title="Bus Arrangements" icon="network-wired">
+    Validate bus arrangements in `setBusArrangements()`. Return `kResultFalse` for unsupported configurations.
+  </Card>
+  
+  <Card title="Editor Sizing" icon="expand">
+    Use `EditorResize()` to request editor size changes. The host may reject resize requests in some configurations.
+  </Card>
+</CardGroup>
+
+## Common Issues
+
+<Warning>
+**Thread Safety**: VST3 hosts may call methods from multiple threads. The audio processing thread must never block or allocate memory.
+</Warning>
+
+<Tip>
+**Track Context**: Not all hosts support track context information. Always check that returned values are valid before using them.
+</Tip>
+
+## Related Documentation
+
+- [IPlugAPIBase](/api/core/iplugapibase) - Base API functionality
+- [IPlugProcessor](/api/core/iplugprocessor) - Audio processing interface
+- [Plugin Configuration](/guides/configuration) - Plugin configuration options
+- [VST3 SDK Documentation](https://steinbergmedia.github.io/vst3_doc/) - Official VST3 documentation

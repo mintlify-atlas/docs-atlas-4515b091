@@ -1,0 +1,914 @@
+---
+title: IGraphics Structs
+description: Data structures and helper classes used throughout IGraphics
+---
+
+# IGraphics Structs
+
+IGraphics uses several key data structures to manage colors, rectangles, text, blending, and other UI-related state. These structs are designed to be platform-independent and work consistently across all drawing backends.
+
+## IRECT
+
+Rectangular area representation. Always specified in 1:1 pixels with (0,0) at top-left.
+
+### Constructor
+
+```cpp
+IRECT(float l, float t, float r, float b)
+```
+
+<ParamField path="l" type="float" required>
+  Left edge
+</ParamField>
+
+<ParamField path="t" type="float" required>
+  Top edge
+</ParamField>
+
+<ParamField path="r" type="float" required>
+  Right edge
+</ParamField>
+
+<ParamField path="b" type="float" required>
+  Bottom edge
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+IRECT rect(10, 20, 110, 120); // x=10, y=20, width=100, height=100
+```
+</CodeGroup>
+
+### Static Constructors
+
+#### MakeXYWH
+
+```cpp
+static IRECT MakeXYWH(float l, float t, float w, float h)
+```
+
+Create an IRECT from position and size.
+
+<CodeGroup>
+```cpp Example
+IRECT rect = IRECT::MakeXYWH(10, 20, 100, 50);
+```
+</CodeGroup>
+
+#### MakeMidXYWH
+
+```cpp
+static IRECT MakeMidXYWH(float x, float y, float w, float h)
+```
+
+Create an IRECT centered at (x, y) with given size.
+
+### Properties
+
+#### Dimensions
+
+```cpp
+float W() const  // Width
+float H() const  // Height
+float MW() const // Middle width (center X)
+float MH() const // Middle height (center Y)
+float Area() const
+```
+
+<CodeGroup>
+```cpp Example
+IRECT rect(0, 0, 100, 50);
+float centerX = rect.MW(); // 50
+float centerY = rect.MH(); // 25
+```
+</CodeGroup>
+
+### Set Operations
+
+#### Union
+
+```cpp
+IRECT Union(const IRECT& rhs) const
+```
+
+Create a rectangle containing both rectangles.
+
+#### Intersect
+
+```cpp
+IRECT Intersect(const IRECT& rhs) const
+```
+
+Create a rectangle of the overlapping area.
+
+#### Intersects
+
+```cpp
+bool Intersects(const IRECT& rhs) const
+```
+
+Check if rectangles share any pixels.
+
+#### Contains
+
+```cpp
+bool Contains(const IRECT& rhs) const
+bool Contains(float x, float y) const
+```
+
+Check if a rectangle or point is fully contained.
+
+### Subdivision
+
+#### GetGridCell
+
+```cpp
+IRECT GetGridCell(int row, int col, int nRows, int nColumns) const
+IRECT GetGridCell(int cellIndex, int nRows, int nColumns, 
+                 EDirection dir = EDirection::Horizontal, int nCells = 1) const
+```
+
+Divide into a grid and get a specific cell.
+
+<CodeGroup>
+```cpp Example
+IRECT bounds = g.GetBounds();
+IRECT topLeft = bounds.GetGridCell(0, 0, 2, 2);    // Top-left quarter
+IRECT topRight = bounds.GetGridCell(0, 1, 2, 2);   // Top-right quarter
+IRECT cell5 = bounds.GetGridCell(5, 3, 4);         // Cell index 5 in 3x4 grid
+```
+</CodeGroup>
+
+#### SubRect
+
+```cpp
+IRECT SubRectVertical(int numSlices, int sliceIdx) const
+IRECT SubRectHorizontal(int numSlices, int sliceIdx) const
+```
+
+Divide into equal slices and get one.
+
+<CodeGroup>
+```cpp Example
+IRECT column = bounds.SubRectHorizontal(3, 1); // Middle third horizontally
+```
+</CodeGroup>
+
+#### FracRect
+
+```cpp
+IRECT FracRectHorizontal(float frac, bool rhs = false) const
+IRECT FracRectVertical(float frac, bool fromTop = false) const
+```
+
+Get a fractional portion of the rectangle.
+
+<CodeGroup>
+```cpp Example
+IRECT leftHalf = bounds.FracRectHorizontal(0.5f);      // Left 50%
+IRECT rightThird = bounds.FracRectHorizontal(0.33f, true); // Right 33%
+```
+</CodeGroup>
+
+### Edge Operations
+
+#### Get From Edge
+
+```cpp
+IRECT GetFromLeft(float amount) const
+IRECT GetFromRight(float amount) const
+IRECT GetFromTop(float amount) const
+IRECT GetFromBottom(float amount) const
+```
+
+Get a subrect from an edge.
+
+<CodeGroup>
+```cpp Example
+IRECT header = bounds.GetFromTop(50);  // Top 50 pixels
+IRECT sidebar = bounds.GetFromLeft(200); // Left 200 pixels
+```
+</CodeGroup>
+
+#### Reduce From Edge
+
+```cpp
+IRECT GetReducedFromLeft(float amount) const
+IRECT GetReducedFromRight(float amount) const
+IRECT GetReducedFromTop(float amount) const
+IRECT GetReducedFromBottom(float amount) const
+```
+
+Remove an amount from an edge.
+
+#### Mutating Edge Operations
+
+```cpp
+IRECT ReduceFromLeft(float amount)   // Returns removed part
+IRECT ReduceFromRight(float amount)
+IRECT ReduceFromTop(float amount)
+IRECT ReduceFromBottom(float amount)
+```
+
+Reduce and return the removed portion.
+
+<CodeGroup>
+```cpp Example
+IRECT bounds = g.GetBounds();
+IRECT header = bounds.ReduceFromTop(50);  // Extract top 50px
+IRECT footer = bounds.ReduceFromBottom(30); // Extract bottom 30px
+// bounds now contains the middle section
+```
+</CodeGroup>
+
+### Padding
+
+#### Pad
+
+```cpp
+void Pad(float padding)
+void Pad(float padL, float padT, float padR, float padB)
+void HPad(float padding)  // Horizontal only
+void VPad(float padding)  // Vertical only
+```
+
+Expand (positive) or contract (negative) the rectangle.
+
+#### GetPadded
+
+```cpp
+IRECT GetPadded(float padding) const
+IRECT GetPadded(float padL, float padT, float padR, float padB) const
+IRECT GetHPadded(float padding) const
+IRECT GetVPadded(float padding) const
+```
+
+Get a padded copy.
+
+<CodeGroup>
+```cpp Example
+IRECT inner = bounds.GetPadded(-10);  // Shrink by 10px on all sides
+IRECT outer = bounds.GetPadded(5);    // Expand by 5px on all sides
+```
+</CodeGroup>
+
+### Centering
+
+#### GetCentredInside
+
+```cpp
+IRECT GetCentredInside(float w, float h = 0.f) const
+IRECT GetCentredInside(const IRECT& sr) const
+IRECT GetCentredInside(const IBitmap& bitmap) const
+```
+
+Get a rectangle centered within this one.
+
+<CodeGroup>
+```cpp Example
+IRECT centered = bounds.GetCentredInside(100, 100); // 100x100 square in center
+IRECT bitmapRect = bounds.GetCentredInside(myBitmap);
+```
+</CodeGroup>
+
+### Transformation
+
+#### Translate
+
+```cpp
+void Translate(float x, float y)
+IRECT GetTranslated(float x, float y) const
+IRECT GetHShifted(float x) const
+IRECT GetVShifted(float y) const
+```
+
+Move the rectangle.
+
+#### Scale
+
+```cpp
+void Scale(float scale)
+void ScaleAboutCentre(float scale)
+IRECT GetScaled(float scale) const
+IRECT GetScaledAboutCentre(float scale) const
+```
+
+Scale the rectangle.
+
+<CodeGroup>
+```cpp Example
+IRECT scaled = bounds.GetScaledAboutCentre(0.8f); // 80% size, centered
+```
+</CodeGroup>
+
+### Pixel Alignment
+
+#### PixelAlign
+
+```cpp
+void PixelAlign()
+void PixelAlign(float scale)
+IRECT GetPixelAligned() const
+IRECT GetPixelAligned(float scale) const
+```
+
+Align to pixel boundaries (expand outward).
+
+#### PixelSnap
+
+```cpp
+void PixelSnap()
+void PixelSnap(float scale)
+IRECT GetPixelSnapped() const
+IRECT GetPixelSnapped(float scale) const
+```
+
+Snap to nearest pixels (may shrink).
+
+<Info>
+PixelAlign expands to cover pixels, PixelSnap rounds to nearest. Use PixelAlign for drawing bounds to avoid gaps.
+</Info>
+
+### Alignment
+
+```cpp
+void HAlignTo(const IRECT& sr, EAlign align)
+void VAlignTo(const IRECT& sr, EVAlign align)
+IRECT GetHAlignedTo(const IRECT& sr, EAlign align) const
+IRECT GetVAlignedTo(const IRECT& sr, EVAlign align) const
+```
+
+Align to another rectangle.
+
+<CodeGroup>
+```cpp Example
+IRECT button = IRECT::MakeXYWH(0, 0, 100, 40);
+button.HAlignTo(bounds, EAlign::Center);
+button.VAlignTo(bounds, EVAlign::Bottom);
+```
+</CodeGroup>
+
+### Interpolation
+
+```cpp
+static IRECT LinearInterpolateBetween(const IRECT& start, const IRECT& dest, float progress)
+```
+
+Linear interpolation between two rectangles.
+
+---
+
+## IColor
+
+RGB color with alpha channel (ARGB format, 0-255 per channel).
+
+### Constructor
+
+```cpp
+IColor(int a = 255, int r = 0, int g = 0, int b = 0)
+```
+
+<ParamField path="a" type="int" default="255">
+  Alpha (0=transparent, 255=opaque)
+</ParamField>
+
+<ParamField path="r" type="int" default="0">
+  Red (0-255)
+</ParamField>
+
+<ParamField path="g" type="int" default="0">
+  Green (0-255)
+</ParamField>
+
+<ParamField path="b" type="int" default="0">
+  Blue (0-255)
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+IColor red(255, 255, 0, 0);
+IColor semiTransparentBlue(128, 0, 0, 255);
+```
+</CodeGroup>
+
+### Static Constructors
+
+#### FromColorCode
+
+```cpp
+static IColor FromColorCode(int colorCode, int A = 0xFF)
+```
+
+Create from hex color code.
+
+<CodeGroup>
+```cpp Example
+IColor blue = IColor::FromColorCode(0x0000FF);
+IColor red = IColor::FromColorCode(0xFF0000, 128); // Semi-transparent
+```
+</CodeGroup>
+
+#### FromColorCodeStr
+
+```cpp
+static IColor FromColorCodeStr(const char* hexStr)
+```
+
+Create from hex string.
+
+<CodeGroup>
+```cpp Example
+IColor color = IColor::FromColorCodeStr("#3498db");
+```
+</CodeGroup>
+
+#### FromHSLA
+
+```cpp
+static IColor FromHSLA(float h, float s, float l, float a = 1.f)
+```
+
+Create from HSL values (0-1 range).
+
+<ParamField path="h" type="float" required>
+  Hue (0-1)
+</ParamField>
+
+<ParamField path="s" type="float" required>
+  Saturation (0-1)
+</ParamField>
+
+<ParamField path="l" type="float" required>
+  Lightness (0-1)
+</ParamField>
+
+### Methods
+
+#### SetOpacity
+
+```cpp
+void SetOpacity(float alpha)
+IColor WithOpacity(float alpha) const
+```
+
+Set or get color with different opacity (0-1).
+
+<CodeGroup>
+```cpp Example
+IColor faded = COLOR_RED.WithOpacity(0.5f); // 50% transparent red
+```
+</CodeGroup>
+
+#### Contrast
+
+```cpp
+void Contrast(float c)
+IColor WithContrast(float c) const
+```
+
+Adjust color contrast (-1 to +1).
+
+<CodeGroup>
+```cpp Example
+IColor lighter = baseColor.WithContrast(0.3f);
+IColor darker = baseColor.WithContrast(-0.3f);
+```
+</CodeGroup>
+
+#### Color Space Conversion
+
+```cpp
+void GetHSLA(float& h, float& s, float& l, float& a) const
+void GetRGBf(float* rgbf) const    // 3-element float array
+void GetRGBAf(float* rgbaf) const  // 4-element float array
+```
+
+#### GetLuminosity
+
+```cpp
+int GetLuminosity() const
+```
+
+Get perceived brightness (0-255).
+
+#### Randomize
+
+```cpp
+void Randomise(int alpha = 255)
+static IColor GetRandomColor(bool randomAlpha = false)
+```
+
+### Interpolation
+
+```cpp
+static IColor LinearInterpolateBetween(const IColor& start, const IColor& dest, float progress)
+```
+
+<CodeGroup>
+```cpp Example
+IColor gradient = IColor::LinearInterpolateBetween(COLOR_BLUE, COLOR_RED, 0.5f);
+```
+</CodeGroup>
+
+### Predefined Colors
+
+```cpp
+const IColor COLOR_TRANSPARENT;
+const IColor COLOR_BLACK;
+const IColor COLOR_WHITE;
+const IColor COLOR_GRAY;
+const IColor COLOR_LIGHT_GRAY;
+const IColor COLOR_MID_GRAY;
+const IColor COLOR_DARK_GRAY;
+const IColor COLOR_RED;
+const IColor COLOR_GREEN;
+const IColor COLOR_BLUE;
+const IColor COLOR_YELLOW;
+const IColor COLOR_ORANGE;
+```
+
+---
+
+## IText
+
+Text formatting and style information.
+
+### Constructor
+
+```cpp
+IText(float size = DEFAULT_TEXT_SIZE,
+     const IColor& color = DEFAULT_TEXT_FGCOLOR,
+     const char* fontID = nullptr,
+     EAlign align = EAlign::Center,
+     EVAlign valign = EVAlign::Middle,
+     float angle = 0,
+     const IColor& TEBGColor = DEFAULT_TEXTENTRY_BGCOLOR,
+     const IColor& TEFGColor = DEFAULT_TEXTENTRY_FGCOLOR)
+```
+
+<ParamField path="size" type="float" default="DEFAULT_TEXT_SIZE">
+  Font size in pixels
+</ParamField>
+
+<ParamField path="color" type="const IColor&" default="DEFAULT_TEXT_FGCOLOR">
+  Text color
+</ParamField>
+
+<ParamField path="fontID" type="const char*" default="nullptr">
+  Font identifier (loaded via LoadFont)
+</ParamField>
+
+<ParamField path="align" type="EAlign" default="EAlign::Center">
+  Horizontal alignment (Near/Center/Far)
+</ParamField>
+
+<ParamField path="valign" type="EVAlign" default="EVAlign::Middle">
+  Vertical alignment (Top/Middle/Bottom)
+</ParamField>
+
+<ParamField path="angle" type="float" default="0">
+  Rotation angle in degrees clockwise
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+IText titleText(24, COLOR_BLACK, "Roboto-Bold", EAlign::Center, EVAlign::Top);
+IText bodyText(14, COLOR_DARK_GRAY, "Roboto-Regular");
+```
+</CodeGroup>
+
+### Builder Methods
+
+```cpp
+IText WithFGColor(const IColor& fgColor) const
+IText WithAlign(EAlign align) const
+IText WithVAlign(EVAlign valign) const
+IText WithSize(float size) const
+IText WithAngle(float angle) const
+IText WithFont(const char* fontID) const
+```
+
+Chainable methods for creating variations.
+
+<CodeGroup>
+```cpp Example
+IText base(16, COLOR_BLACK, "Roboto-Regular");
+IText larger = base.WithSize(20);
+IText centered = base.WithAlign(EAlign::Center);
+IText rotated = base.WithAngle(45.f);
+```
+</CodeGroup>
+
+---
+
+## IBitmap
+
+Bitmap image abstraction (doesn't own pixel data).
+
+### Methods
+
+```cpp
+int W() const              // Overall width
+int H() const              // Overall height
+int FW() const             // Single frame width
+int FH() const             // Single frame height
+int N() const              // Number of frames
+float GetScale() const     // Bitmap scale
+float GetDrawScale() const
+bool IsValid() const
+const WDL_String& GetResourceName() const
+```
+
+<CodeGroup>
+```cpp Example
+IBitmap knobBitmap = g.LoadBitmap("knob.png", 60, true); // 60 frames horizontal
+int frameWidth = knobBitmap.FW();
+int frameHeight = knobBitmap.FH();
+```
+</CodeGroup>
+
+---
+
+## ISVG
+
+SVG image abstraction.
+
+### Methods
+
+```cpp
+float W() const
+float H() const
+bool IsValid() const
+```
+
+<CodeGroup>
+```cpp Example
+ISVG logo = g.LoadSVG("logo.svg");
+g.DrawSVG(logo, bounds);
+```
+</CodeGroup>
+
+---
+
+## IBlend
+
+Blending/compositing mode.
+
+### Constructor
+
+```cpp
+IBlend(EBlend type = EBlend::Default, float weight = 1.0f)
+```
+
+<ParamField path="type" type="EBlend" default="EBlend::Default">
+  Blend type
+</ParamField>
+
+<ParamField path="weight" type="float" default="1.0">
+  Blend weight/opacity (0-1)
+</ParamField>
+
+### Predefined Blends
+
+```cpp
+const IBlend BLEND_75;  // 75% opacity
+const IBlend BLEND_50;  // 50% opacity
+const IBlend BLEND_25;  // 25% opacity
+const IBlend BLEND_10;
+const IBlend BLEND_05;
+```
+
+<CodeGroup>
+```cpp Example
+g.FillRect(COLOR_RED, bounds, &BLEND_50); // 50% transparent red
+```
+</CodeGroup>
+
+---
+
+## IMouseMod
+
+Mouse modifier state.
+
+### Constructor
+
+```cpp
+IMouseMod(bool l = false, bool r = false, bool s = false, bool c = false, bool a = false)
+```
+
+### Fields
+
+<ParamField path="L" type="bool">
+  Left mouse button
+</ParamField>
+
+<ParamField path="R" type="bool">
+  Right mouse button
+</ParamField>
+
+<ParamField path="S" type="bool">
+  Shift key
+</ParamField>
+
+<ParamField path="C" type="bool">
+  Control/Command key
+</ParamField>
+
+<ParamField path="A" type="bool">
+  Alt/Option key
+</ParamField>
+
+<CodeGroup>
+```cpp Example
+void OnMouseDown(float x, float y, const IMouseMod& mod) {
+  if (mod.R) {
+    // Right click
+  }
+  if (mod.S && mod.L) {
+    // Shift + left click
+  }
+  if (mod.C) {
+    // Ctrl/Cmd modifier
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## IStrokeOptions
+
+Path stroke configuration.
+
+### Fields
+
+```cpp
+float mMiterLimit = 10.f;
+bool mPreserve = false;
+ELineCap mCapOption = ELineCap::Butt;
+ELineJoin mJoinOption = ELineJoin::Miter;
+DashOptions mDash;
+```
+
+### DashOptions
+
+```cpp
+DashOptions(float* array, float offset, int count)
+```
+
+Define dash pattern (max 8 floats).
+
+<CodeGroup>
+```cpp Example
+float dashPattern[] = {5.f, 3.f}; // 5px dash, 3px gap
+IStrokeOptions::DashOptions dash(dashPattern, 0.f, 2);
+IStrokeOptions opts;
+opts.mDash = dash;
+g.PathStroke(IPattern(COLOR_BLACK), 2.f, opts);
+```
+</CodeGroup>
+
+---
+
+## IFillOptions
+
+Path fill configuration.
+
+### Constructor
+
+```cpp
+IFillOptions(bool preserve = false, EFillRule fillRule = EFillRule::Winding)
+```
+
+<ParamField path="preserve" type="bool" default="false">
+  Preserve path after filling
+</ParamField>
+
+<ParamField path="fillRule" type="EFillRule" default="EFillRule::Winding">
+  Fill rule (Winding or EvenOdd)
+</ParamField>
+
+---
+
+## IRECTList
+
+Manage and optimize lists of rectangles.
+
+### Methods
+
+```cpp
+void Add(const IRECT& rect)
+void Set(int idx, const IRECT& rect)
+const IRECT& Get(int idx) const
+int Size() const
+void Clear()
+IRECT Bounds()  // Union of all rects
+void Optimize() // Merge and remove overlaps
+void PixelAlign()
+int Find(float x, float y) const
+```
+
+<CodeGroup>
+```cpp Example
+IRECTList dirtyRects;
+dirtyRects.Add(control1->GetRECT());
+dirtyRects.Add(control2->GetRECT());
+dirtyRects.Optimize(); // Merge overlapping areas
+```
+</CodeGroup>
+
+### GetFracGrid
+
+```cpp
+static bool GetFracGrid(const IRECT& input, IRECTList& rects,
+                       const std::initializer_list<float>& rowFractions,
+                       const std::initializer_list<float>& colFractions,
+                       EDirection layoutDir = EDirection::Horizontal)
+```
+
+Divide a rectangle into a proportional grid.
+
+<CodeGroup>
+```cpp Example
+IRECTList cells;
+IRECTList::GetFracGrid(bounds, cells, 
+  {0.3f, 0.7f},  // 30% top row, 70% bottom row
+  {0.5f, 0.5f}   // 50% each column
+);
+// Creates 4 cells: top-left (30%x50%), top-right (30%x50%), 
+//                  bottom-left (70%x50%), bottom-right (70%x50%)
+```
+</CodeGroup>
+
+---
+
+## IMatrix
+
+Affine transformation matrix for path operations.
+
+### Methods
+
+```cpp
+IMatrix& Translate(float x, float y)
+IMatrix& Scale(float x, float y)
+IMatrix& Rotate(float angle)  // Degrees
+IMatrix& Skew(float xa, float ya)
+IMatrix& Transform(float x, float y, float& xOut, float& yOut)
+```
+
+---
+
+## Common Patterns
+
+<CodeGroup>
+```cpp Layout Helper
+IRECT CreateLayout(IGraphics& g) {
+  IRECT bounds = g.GetBounds().GetPadded(-20);
+  
+  IRECT header = bounds.ReduceFromTop(50);
+  IRECT footer = bounds.ReduceFromBottom(30);
+  
+  IRECT leftPanel = bounds.FracRectHorizontal(0.3f);
+  IRECT rightPanel = bounds.FracRectHorizontal(0.7f, true);
+  
+  return rightPanel;
+}
+```
+
+```cpp Grid Layout
+void LayoutControls(IGraphics& g) {
+  IRECT bounds = g.GetBounds().GetPadded(-10);
+  
+  // 2x3 grid of knobs
+  for (int row = 0; row < 2; row++) {
+    for (int col = 0; col < 3; col++) {
+      IRECT cell = bounds.GetGridCell(row, col, 2, 3).GetPadded(-5);
+      g.AttachControl(new IVKnobControl(cell, row * 3 + col));
+    }
+  }
+}
+```
+
+```cpp Color Utilities
+IColor GetThemedColor(bool isDarkMode) {
+  return isDarkMode 
+    ? IColor::FromColorCode(0x2c3e50)
+    : IColor::FromColorCode(0xecf0f1);
+}
+
+IColor BlendColors(const IColor& a, const IColor& b, float t) {
+  return IColor::LinearInterpolateBetween(a, b, t);
+}
+```
+</CodeGroup>
+
+## See Also
+
+<CardGroup cols={2}>
+  <Card title="IGraphics" icon="paintbrush" href="/api/igraphics">
+    Main graphics context
+  </Card>
+  <Card title="IControl" icon="cube" href="/api/icontrol">
+    Control base class
+  </Card>
+</CardGroup>

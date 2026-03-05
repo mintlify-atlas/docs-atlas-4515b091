@@ -1,0 +1,556 @@
+---
+title: REAPER Plugin
+description: Create audio plugins that can call REAPER API functions and support embedded UI
+---
+
+## Overview
+
+The IPlugReaperPlugin example demonstrates how to create an audio plugin that can call REAPER-specific API functions and optionally support REAPER's embedded UI system. This bridges the gap between standard audio plugins and full REAPER integration.
+
+<Info>
+REAPER plugins are **audio plugins** (VST2, VST3, CLAP) with special REAPER integration. They can access project context, track info, and REAPER-specific features while maintaining compatibility as standard plugins.
+</Info>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="REAPER API Access" icon="code">
+    Call REAPER API functions from within your plugin to access project state, track info, and more.
+  </Card>
+  <Card title="Embedded UI" icon="image">
+    Optional LICE-based embedded UI that renders directly in REAPER's FX window (VST2/VST3 only).
+  </Card>
+  <Card title="Multi-Format Support" icon="layer-group">
+    Works as VST2, VST3, and CLAP with REAPER API support in all formats.
+  </Card>
+  <Card title="Standard Plugin" icon="plug">
+    Still functions as a normal plugin in other DAWs without REAPER-specific features.
+  </Card>
+</CardGroup>
+
+## Basic Structure
+
+### Header File
+
+The plugin class supports REAPER-specific interfaces:
+
+```cpp
+#pragma once
+
+#include "IPlug_include_in_plug_hdr.h"
+
+#if defined VST3_API
+using namespace Steinberg;
+#include "reaper_vst3_interfaces.h"
+#endif
+
+#if defined CLAP_API
+void *(*clap_get_reaper_context)(const clap_host *host, int sel);
+#endif
+
+enum EParams
+{
+  kGain = 0,
+  kNumParams
+};
+
+using namespace iplug;
+using namespace igraphics;
+
+class ReaProject;
+class MediaTrack;
+class MediaItem_Take;
+class FxDsp;
+
+class IPlugReaperPlugin final : public Plugin
+#if defined VST3_API
+, public IReaperUIEmbedInterface
+#endif
+{
+public:
+  IPlugReaperPlugin(const InstanceInfo& info);
+  
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  void OnHostIdentified() override;
+  
+  // Embedded UI interface (optional)
+  void DrawEmbeddedUI(REAPER_FXEMBED_IBitmap* pBitmap, int mouseX, int mouseY, 
+                      bool leftMouseDown, bool rightMouseDown);
+  
+private:
+  template<typename T>
+  T GetReaperThing(int type);
+  
+  MediaTrack* GetReaperTrack();
+  MediaItem_Take* GetReaperTake();
+  ReaProject* GetReaperProject();
+  int GetReaperTrackChannelCount();
+  void LogToReaperConsole(const char* str);
+};
+```
+
+## Loading REAPER API
+
+The REAPER API must be loaded after host identification:
+
+```cpp
+void IPlugReaperPlugin::OnHostIdentified()
+{
+#if defined VST2_API || defined VST3_API || defined CLAP_API
+  if (GetHost() == kHostReaper)
+  {
+    int errorCount = REAPERAPI_LoadAPI([this](const char* str) -> void* {
+#if defined VST2_API
+      return (void*) mHostCallback(NULL, 0xdeadbeef, 0xdeadf00d, 0, (void*) str, 0.0);
+#elif defined VST3_API
+      return (void*) mpReaperHostApplication->getReaperApi(str);
+#elif defined CLAP_API
+      auto pRec = reinterpret_cast<const reaper_plugin_info_t*>(
+        mpClapHost->get_extension(mpClapHost, "cockos.reaper_extension")
+      );
+      return (void*) pRec->GetFunc(str);
+#endif
+    });
+    
+    if (errorCount > 0) {
+      LogToReaperConsole("Some errors loading REAPER API functions\n");
+    }
+  }
+#endif
+}
+```
+
+<Warning>
+Always check if the host is REAPER using `GetHost() == kHostReaper` before calling REAPER API functions. This prevents crashes when loading in other DAWs.
+</Warning>
+
+## Accessing REAPER Context
+
+Retrieve REAPER-specific objects related to your plugin instance:
+
+<Tabs>
+  <Tab title="Get Track">
+    ```cpp
+    MediaTrack* IPlugReaperPlugin::GetReaperTrack()
+    {
+      return GetReaperThing<MediaTrack*>(1);
+    }
+    
+    // Usage
+    if (auto pTrack = GetReaperTrack()) {
+      char buf[2048];
+      GetSetMediaTrackInfo_String(pTrack, "P_NAME", buf, false);
+      // buf now contains track name
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Get Project">
+    ```cpp
+    ReaProject* IPlugReaperPlugin::GetReaperProject()
+    {
+      return GetReaperThing<ReaProject*>(3);
+    }
+    
+    // Usage
+    ReaProject* proj = GetReaperProject();
+    double bpm = TimeMap2_GetDividedBpmAtTime(proj, 0.0);
+    ```
+  </Tab>
+  
+  <Tab title="Get Track Info">
+    ```cpp
+    int IPlugReaperPlugin::GetReaperTrackChannelCount()
+    {
+      return (int) GetReaperThing<INT_PTR>(5);
+    }
+    
+    // Get index in FX chain
+    int IPlugReaperPlugin::GetReaperIndexInChain()
+    {
+      return (int) GetReaperThing<INT_PTR>(6);
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### GetReaperThing Implementation
+
+The template function retrieves REAPER context across different plugin formats:
+
+```cpp
+template<typename T>
+T IPlugReaperPlugin::GetReaperThing(int sel)
+{
+  void* pResult = nullptr;
+#if defined VST2_API
+  pResult = (void*) mHostCallback(&mAEffect, 0xdeadbeef, 0xdeadf00e, sel, NULL, 0.0);
+#elif defined VST3_API
+  if (mpReaperHostApplication) {
+    pResult = mpReaperHostApplication->getReaperParent(sel);
+  }
+#elif defined CLAP_API
+  if (clap_get_reaper_context) {
+    pResult = clap_get_reaper_context(mpClapHost, sel);
+  }
+#endif
+  return reinterpret_cast<T>(pResult);
+}
+```
+
+**Context Selectors:**
+- `1`: MediaTrack* - The track this plugin is on
+- `2`: MediaItem_Take* - The take if in item FX chain
+- `3`: ReaProject* - The project containing this plugin
+- `4`: FxDsp* - Internal DSP object (advanced)
+- `5`: INT_PTR - Track channel count
+- `6`: INT_PTR - Index in FX chain
+
+## Using REAPER API Functions
+
+### Reading Track Information
+
+```cpp
+void GetReaperTrackName(MediaTrack* pTrack, WDL_String& str)
+{
+  char buf[2048];
+  if (GetSetMediaTrackInfo_String(pTrack, "P_NAME", buf, false)) {
+    str.Set(buf);
+  }
+}
+
+// In your UI drawing code:
+if (GetHost() == kHostReaper) {
+  if (auto pTrack = GetReaperTrack()) {
+    WDL_String trackName;
+    GetReaperTrackName(pTrack, trackName);
+    g.DrawText({30}, trackName.Get(), rect);
+  }
+}
+```
+
+### Modifying Track Parameters
+
+```cpp
+void SetReaperTrackName(MediaTrack* pTrack, const char* name)
+{
+  GetSetMediaTrackInfo_String(pTrack, "P_NAME", const_cast<char*>(name), true);
+  UpdateArrange();
+}
+
+void SetTrackVolume(MediaTrack* pTrack, double gain)
+{
+  SetMediaTrackInfo_Value(pTrack, "D_VOL", gain);
+}
+```
+
+### Accessing Transport State
+
+```cpp
+extern int (*GetPlayState)();
+
+// In UI draw callback:
+if (GetHost() == kHostReaper) {
+  if (GetPlayState && GetPlayState()) {
+    g.FillRect(COLOR_GREEN, rect);
+    g.DrawText({30}, "PLAYING", rect);
+  } else {
+    g.FillRect(COLOR_RED, rect);
+    g.DrawText({30}, "STOPPED", rect);
+  }
+}
+```
+
+## Standard IGraphics UI
+
+Create a normal IGraphics interface that displays REAPER-specific information:
+
+```cpp
+mMakeGraphicsFunc = [&]() {
+  return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS, 
+                     GetScaleForScreen(PLUG_WIDTH, PLUG_HEIGHT));
+};
+
+mLayoutFunc = [&](IGraphics* pGraphics) {
+  pGraphics->AttachCornerResizer(EUIResizerMode::Scale, false);
+  pGraphics->AttachPanelBackground(COLOR_GRAY);
+  pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
+  
+  const IRECT b = pGraphics->GetBounds();
+  
+  // Animated control that updates with REAPER state
+  pGraphics->AttachControl(new ILambdaControl(b,
+    [&](ILambdaControl* pCaller, IGraphics& g, IRECT& rect) {
+      
+      if (GetHost() == kHostReaper) {
+        // Show transport state
+        if (GetPlayState && GetPlayState()) {
+          g.FillRect(COLOR_GREEN, rect);
+          g.DrawText({30}, "PLAYING", rect);
+        } else {
+          g.FillRect(COLOR_RED, rect);
+          g.DrawText({30}, "STOPPED", rect);
+        }
+        
+        // Show track info
+        if (auto pTrack = GetReaperTrack()) {
+          WDL_String trackName;
+          GetReaperTrackName(pTrack, trackName);
+          g.DrawText({30}, trackName.Get(), rect.GetFromTop(100));
+          
+          WDL_String channelCount;
+          channelCount.SetFormatted(32, "Channel count %i", 
+                                   GetReaperTrackChannelCount());
+          g.DrawText({30}, channelCount.Get(), 
+                    rect.GetFromTop(100).GetVShifted(20));
+        }
+      } else {
+        g.DrawText({30}, "This example is designed for REAPER", rect);
+      }
+    }, 
+    DEFAULT_ANIMATION_DURATION, true /*loop*/, true /*start immediately*/
+  ));
+};
+```
+
+<Tip>
+Use `ILambdaControl` with animation enabled to create UI that automatically updates based on REAPER's state without manual invalidation.
+</Tip>
+
+## Embedded UI (Optional)
+
+REAPER supports an embedded UI mode using LICE for drawing directly in the FX window:
+
+### Implementing Embedded UI
+
+```cpp
+void IPlugReaperPlugin::DrawEmbeddedUI(REAPER_FXEMBED_IBitmap* pBitmap, 
+                                       int mouseX, int mouseY, 
+                                       bool leftMouseDown, 
+                                       bool rightMouseDown)
+{
+  // Cast to LICE_IBitmap for drawing
+  auto* lice = (LICE_IBitmap*) pBitmap;
+  
+  // Fill background
+  LICE_FillRect(lice, 0, 0, pBitmap->getWidth(), pBitmap->getHeight(), 
+                LICE_RGBA(255, 255, 255, 255), 1.f, 0);
+  
+  // Draw based on mouse state
+  if (leftMouseDown || rightMouseDown) {
+    LICE_FillCircle(lice, mouseX, mouseY, 20.f, 
+                    leftMouseDown ? LICE_RGBA(255, 0, 0, 255) 
+                                  : LICE_RGBA(0, 255, 0, 255), 
+                    1.f, 0, true);
+  }
+}
+```
+
+### Declaring Embedded UI Support
+
+<Tabs>
+  <Tab title="VST2">
+    ```cpp
+    VstIntPtr IPlugReaperPlugin::VSTCanDo(const char* hostString)
+    {
+      if (!strcmp(hostString, "hasCockosEmbeddedUI")) {
+        return 0xbeef0000;  // Magic value indicating support
+      }
+      return 0;
+    }
+    ```
+  </Tab>
+  
+  <Tab title="VST3">
+    ```cpp
+    class IPlugReaperPlugin : public Plugin, 
+                              public IReaperUIEmbedInterface
+    {
+      // Implement IReaperUIEmbedInterface methods:
+      void GetEmbeddedUIPrefferedAspectRatio(int& num, int& denom) { 
+        num = 1; denom = 1; 
+      }
+      
+      Steinberg::TPtrInt embed_message(int msg, 
+                                       Steinberg::TPtrInt parm2,
+                                       Steinberg::TPtrInt parm3) override;
+    };
+    ```
+  </Tab>
+</Tabs>
+
+<Info>
+Embedded UI is lightweight but limited compared to full IGraphics. It's best for simple parameter displays or debugging interfaces.
+</Info>
+
+## Audio Processing
+
+Process audio normally while accessing REAPER context:
+
+```cpp
+void IPlugReaperPlugin::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kGain)->Value() / 100.;
+  const int nChans = NOutChansConnected();
+  
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+  
+  // Could access REAPER context here if needed (but keep it realtime-safe!)
+}
+```
+
+<Warning>
+Do not call REAPER API functions that modify project state from the audio thread (`ProcessBlock`). Only read thread-safe information or perform API calls from the UI thread.
+</Warning>
+
+## Configuration
+
+Standard plugin configuration in `config.h`:
+
+```cpp
+#define PLUG_NAME "IPlugReaperPlugin"
+#define PLUG_MFR "AcmeInc"
+#define PLUG_VERSION_HEX 0x00010000
+#define PLUG_UNIQUE_ID 'GpbN'
+#define PLUG_MFR_ID 'Acme'
+
+#define PLUG_CHANNEL_IO "1-1 2-2"
+#define PLUG_TYPE 0  // Effect
+#define PLUG_HAS_UI 1
+#define PLUG_WIDTH 600
+#define PLUG_HEIGHT 600
+
+#define VST3_SUBCATEGORY "Fx"
+#define CLAP_FEATURES "audio-effect"
+```
+
+## Platform-Specific Initialization
+
+### VST3 Context Acquisition
+
+```cpp
+#if defined VST3_API
+tresult PLUGIN_API IPlugReaperPlugin::initialize(FUnknown* pContext)
+{
+  void* pIHostApplication = nullptr;
+  
+  if (pContext->queryInterface(IReaperHostApplication::iid, 
+                              &pIHostApplication) == Steinberg::kResultOk) {
+    mpReaperHostApplication = static_cast<IReaperHostApplication*>(pIHostApplication);
+  }
+  
+  return Plugin::initialize(pContext);
+}
+#endif
+```
+
+### CLAP Context Setup
+
+```cpp
+#if defined CLAP_API
+IPlugReaperPlugin::IPlugReaperPlugin(const InstanceInfo& info)
+: Plugin(info, MakeConfig(kNumParams, kNumPresets))
+, mpClapHost(info.mHost)
+{
+  // Load context getter
+  auto pRec = reinterpret_cast<const reaper_plugin_info_t*>(
+    mpClapHost->get_extension(mpClapHost, "cockos.reaper_extension")
+  );
+  IMPAPI(clap_get_reaper_context);
+  
+  // Must call OnHostIdentified manually for CLAP
+  OnHostIdentified();
+}
+#endif
+```
+
+## Common Patterns
+
+### Graceful Fallback for Other DAWs
+
+```cpp
+if (GetHost() == kHostReaper) {
+  // REAPER-specific functionality
+  if (auto pTrack = GetReaperTrack()) {
+    // Do REAPER things
+  }
+} else {
+  // Standard plugin behavior
+  g.DrawText({30}, "Generic mode", rect);
+}
+```
+
+### Debug Logging to REAPER Console
+
+```cpp
+void IPlugReaperPlugin::LogToReaperConsole(const char* str)
+{
+  if (ShowConsoleMsg) {
+    ShowConsoleMsg(str);
+  }
+}
+
+// Usage
+WDL_String msg;
+msg.SetFormatted(128, "Processing on track %d\n", GetReaperIndexInChain());
+LogToReaperConsole(msg.Get());
+```
+
+## Comparison: Plugin vs Extension
+
+<CardGroup cols={2}>
+  <Card title="REAPER Plugin" icon="plug">
+    **Use When:**
+    - Processing audio/MIDI in realtime
+    - Need parameter automation
+    - Want multi-DAW compatibility
+    - Require multiple instances
+    
+    **Limitations:**
+    - Can't add custom actions
+    - Can't modify REAPER menus
+    - Limited UI integration
+  </Card>
+  
+  <Card title="REAPER Extension" icon="puzzle-piece">
+    **Use When:**
+    - Building utility tools
+    - Need custom actions/shortcuts
+    - Want dockable windows
+    - Require deep REAPER integration
+    
+    **Limitations:**
+    - REAPER-only
+    - No audio processing
+    - Single instance
+    - Not automatable
+  </Card>
+</CardGroup>
+
+## Format Support
+
+| Feature | VST2 | VST3 | CLAP | AUv2 |
+|---------|------|------|------|------|
+| REAPER API | ✓ | ✓ | ✓ | ✗ |
+| Embedded UI | ✓ | ✓ | ✗ | ✗ |
+| Context Access | ✓ | ✓ | ✓ | ✗ |
+| IGraphics UI | ✓ | ✓ | ✓ | ✓ |
+
+<Note>
+VST2 is deprecated but still supported. VST3 and CLAP are recommended for new projects.
+</Note>
+
+## Resources
+
+- [REAPER Reascript API](https://www.reaper.fm/sdk/reascript/reascripthelp.html)
+- [REAPER VST Extensions](https://www.reaper.fm/sdk/vst/vst_ext.php)
+- [REAPER SDK on GitHub](https://github.com/justinfrankel/reaper-sdk)
+- Example location: `Examples/IPlugReaperPlugin/`
+
+<Tip>
+Test your plugin in both REAPER and other DAWs to ensure graceful fallback behavior when REAPER-specific features aren't available.
+</Tip>

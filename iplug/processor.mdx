@@ -1,0 +1,452 @@
+---
+title: 'IPlugProcessor'
+description: 'Audio processing, channel I/O configuration, and MIDI handling'
+---
+
+`IPlugProcessor` is the base class for audio processing in iPlug2. It handles DSP, MIDI messages, channel I/O configuration, and transport information.
+
+## Class Definition
+
+```cpp IPlugProcessor.h
+class IPlugProcessor
+{
+public:
+  IPlugProcessor(const Config& config, EAPI plugAPI);
+  virtual ~IPlugProcessor();
+  
+  // Override these in your plugin
+  virtual void ProcessBlock(sample** inputs, sample** outputs, int nFrames);
+  virtual void ProcessMidiMsg(const IMidiMsg& msg);
+  virtual void ProcessSysEx(const ISysEx& msg);
+  virtual void OnReset();
+  virtual void OnActivate(bool active);
+};
+```
+
+## Audio Processing
+
+### ProcessBlock
+
+The main audio processing method called by the host:
+
+```cpp
+virtual void ProcessBlock(sample** inputs, sample** outputs, int nFrames);
+```
+
+<Warning>
+**Realtime Thread Safety**
+
+`ProcessBlock()` runs on the high-priority audio thread. You must:
+- ✅ Access parameters via `GetParam(idx)->Value()`
+- ✅ Use preallocated buffers
+- ✅ Use lock-free data structures
+- ❌ Never allocate memory
+- ❌ Never acquire locks
+- ❌ Never do file I/O or system calls
+</Warning>
+
+#### Buffer Layout
+
+```cpp
+// inputs:  2D array [channel][sample]
+// outputs: 2D array [channel][sample]
+// nFrames: Number of samples per channel
+
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  const int nChans = NOutChansConnected();
+  const double gain = GetParam(kGain)->Value();
+  
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+}
+```
+
+<Info>
+**Guaranteed Channel Pointers**
+
+You always get valid pointers for all requested channels. Unconnected channels contain zeros. The framework handles buffer management automatically.
+</Info>
+
+### Default Implementation
+
+The base class provides a passthrough implementation:
+
+```cpp IPlugProcessor.cpp
+void IPlugProcessor::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const int nIn = mChannelData[ERoute::kInput].GetSize();
+  const int nOut = mChannelData[ERoute::kOutput].GetSize();
+
+  // Copy inputs to outputs
+  for (int i = 0; i < std::min(nIn, nOut); ++i)
+    memcpy(outputs[i], inputs[i], nFrames * sizeof(sample));
+  
+  // Zero remaining outputs
+  for (int i = nIn; i < nOut; ++i)
+    memset(outputs[i], 0, nFrames * sizeof(sample));
+}
+```
+
+## Lifecycle Methods
+
+### OnReset
+
+Called when sample rate or transport changes:
+
+```cpp
+virtual void OnReset()
+{
+  // Clear delay line buffers
+  mDelayLine.Reset();
+  
+  // Update sample-rate dependent coefficients
+  mFilter.SetSampleRate(GetSampleRate());
+  
+  // Reset phase accumulators
+  mPhase = 0.0;
+}
+```
+
+<Tip>
+Use `OnReset()` to:
+- Clear audio buffers
+- Recalculate sample-rate-dependent values
+- Reset DSP state (phase accumulators, filter states)
+</Tip>
+
+### OnActivate
+
+Called when the plugin is activated/deactivated on a track:
+
+```cpp
+virtual void OnActivate(bool active)
+{
+  if (active) {
+    // Plugin switched on
+    mIsActive = true;
+  } else {
+    // Plugin switched off - release resources
+    mIsActive = false;
+  }
+}
+```
+
+<Warning>
+`OnActivate()` behavior varies by host. Use `OnReset()` for critical initialization.
+</Warning>
+
+## Channel Configuration
+
+### Channel I/O String
+
+Define supported channel configurations in `config.h`:
+
+```cpp
+// Format: "input-output" separated by spaces
+#define PLUG_CHANNEL_IO "1-1 2-2"              // Mono and stereo
+#define PLUG_CHANNEL_IO "0-2"                  // Stereo synth (no input)
+#define PLUG_CHANNEL_IO "1.1-1"                // Mono + sidechain -> mono
+#define PLUG_CHANNEL_IO "2-2.2.2.2"            // Stereo in, 4 stereo buses out
+#define PLUG_CHANNEL_IO "1-1 2-2 4-4 8-8"      // Multiple configs
+```
+
+**Syntax:**
+- `-` separates inputs from outputs
+- `.` separates multiple buses
+- Spaces separate different I/O configurations
+- `0` means no channels (e.g., synths have no input)
+
+### Querying Channel Info
+
+```cpp
+// Channel counts
+int MaxNChannels(ERoute direction) const;     // Total channels available
+int NChannelsConnected(ERoute direction) const; // Actually connected
+int NInChansConnected() const;                // Convenience method
+int NOutChansConnected() const;               // Convenience method
+
+// Channel connection status
+bool IsChannelConnected(ERoute direction, int chIdx) const;
+
+// I/O configuration
+int NIOConfigs() const;
+const IOConfig* GetIOConfig(int idx) const;
+int GetIOConfigWithChanCounts(std::vector<int>& inputBuses,
+                               std::vector<int>& outputBuses);
+```
+
+### Bus Configuration
+
+```cpp
+// Bus queries
+int MaxNBuses(ERoute direction, int* pConfigIdxWithTheMostBuses = nullptr) const;
+int MaxNChannelsForBus(ERoute direction, int busIdx) const;
+bool HasWildcardBus(ERoute direction) const;
+bool HasSidechainInput() const;  // More than 1 input bus?
+
+// Custom bus names
+virtual void GetBusName(ERoute direction, int busIdx, int nBuses, 
+                        WDL_String& str) const;
+```
+
+### Channel Labels
+
+Label individual channels for VST2 hosts:
+
+```cpp
+void SetChannelLabel(ERoute direction, int idx, 
+                     const char* formatStr, bool zeroBased = false);
+
+// Example: Label ambisonic channels
+SetChannelLabel(ERoute::kInput, 0, "W");  // Omni
+SetChannelLabel(ERoute::kInput, 1, "X");  // Front-back
+SetChannelLabel(ERoute::kInput, 2, "Y");  // Left-right
+SetChannelLabel(ERoute::kInput, 3, "Z");  // Up-down
+```
+
+## MIDI Processing
+
+See the [MIDI](/iplug/midi) page for detailed MIDI handling. Basic methods:
+
+```cpp
+// Receive MIDI (override these)
+virtual void ProcessMidiMsg(const IMidiMsg& msg);
+virtual void ProcessSysEx(const ISysEx& msg);
+
+// Send MIDI
+virtual bool SendMidiMsg(const IMidiMsg& msg) = 0;
+virtual bool SendMidiMsgs(WDL_TypedBuf<IMidiMsg>& msgs);
+virtual bool SendSysEx(const ISysEx& msg);
+
+// MIDI configuration
+bool DoesMIDIIn() const;
+bool DoesMIDIOut() const;
+bool DoesMPE() const;  // MIDI Polyphonic Expression
+```
+
+## Transport & Timing
+
+### Sample Rate and Block Size
+
+```cpp
+double GetSampleRate() const;  // Current sample rate (Hz)
+int GetBlockSize() const;      // Maximum block size (actual may vary)
+```
+
+### Transport Position
+
+```cpp
+// Sample position
+double GetSamplePos() const;   // Samples since project start
+
+// Musical time
+double GetTempo() const;       // BPM
+double GetPPQPos() const;      // Quarter notes since project start
+double GetSamplesPerBeat() const;
+
+// Time signature
+void GetTimeSig(int& numerator, int& denominator) const;
+
+// Transport state
+bool GetTransportIsRunning() const;
+```
+
+### Example: Tempo-Synced Delay
+
+```cpp
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  const double samplesPerBeat = GetSamplesPerBeat();
+  const double delayTime = samplesPerBeat * 0.25; // Quarter note
+  
+  mDelay.SetDelayTime(delayTime);
+  
+  for (int s = 0; s < nFrames; s++) {
+    outputs[0][s] = mDelay.Process(inputs[0][s]);
+  }
+}
+```
+
+## Latency and Tail
+
+### Latency
+
+Report plugin latency for host compensation:
+
+```cpp
+int GetLatency() const;
+virtual void SetLatency(int latency);  // Update at runtime if needed
+
+// Example: FFT-based processor
+void OnReset() override
+{
+  SetLatency(mFFTSize / 2);  // Half FFT window latency
+}
+```
+
+### Tail Size
+
+For reverbs and effects that continue after input stops:
+
+```cpp
+enum TailSize {
+  kTailNone = 0,
+  kTailInfinite = std::numeric_limits<int>::max()
+};
+
+int GetTailSize() const;
+bool GetTailIsInfinite() const;
+virtual void SetTailSize(int tailSize);
+
+// Example: Reverb with decay time parameter
+void OnParamChange(int paramIdx) override
+{
+  if (paramIdx == kDecayTime) {
+    double decaySeconds = GetParam(kDecayTime)->Value();
+    int tailSamples = decaySeconds * GetSampleRate();
+    SetTailSize(tailSamples);
+  }
+}
+```
+
+## Plugin State
+
+```cpp
+bool GetBypassed() const;
+bool GetRenderingOffline() const;
+```
+
+## Plugin Type
+
+```cpp
+bool IsInstrument() const;   // PLUG_TYPE = kInstrument
+bool IsMidiEffect() const;   // PLUG_TYPE = kMIDIEffect
+int GetAUPluginType() const; // AudioUnit type code
+```
+
+## Complete Example
+
+Here's a stereo chorus effect demonstrating key concepts:
+
+```cpp
+class MyChorus : public iplug::Plugin
+{
+public:
+  MyChorus(const InstanceInfo& info)
+  : Plugin(info, MakeConfig(kNumParams, kNumPresets))
+  {
+    GetParam(kRate)->InitFrequency("Rate", 0.5, 0.1, 5.0);
+    GetParam(kDepth)->InitPercentage("Depth", 50.);
+    GetParam(kMix)->InitPercentage("Mix", 50.);
+  }
+  
+  void OnReset() override
+  {
+    mSampleRate = GetSampleRate();
+    mLFO.SetSampleRate(mSampleRate);
+    mDelayL.Reset();
+    mDelayR.Reset();
+  }
+  
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+  {
+    const int nChans = NOutChansConnected();
+    const double rate = GetParam(kRate)->Value();
+    const double depth = GetParam(kDepth)->Value() / 100.0;
+    const double mix = GetParam(kMix)->Value() / 100.0;
+    
+    mLFO.SetFrequency(rate);
+    
+    for (int s = 0; s < nFrames; s++) {
+      double lfo = mLFO.Process();
+      double modDepth = depth * 0.005 * mSampleRate; // 5ms max
+      
+      for (int c = 0; c < nChans; c++) {
+        double input = inputs[c][s];
+        double delayed = (c == 0) ? mDelayL.Read(modDepth * lfo) 
+                                   : mDelayR.Read(modDepth * -lfo);
+        
+        // Mix dry and wet
+        outputs[c][s] = input * (1.0 - mix) + delayed * mix;
+        
+        // Write to delay line
+        if (c == 0)
+          mDelayL.Write(input);
+        else
+          mDelayR.Write(input);
+      }
+    }
+  }
+  
+private:
+  double mSampleRate = 44100.0;
+  LFO mLFO;
+  DelayLine mDelayL, mDelayR;
+};
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Preallocate in Constructor">
+    Allocate all DSP buffers in the constructor:
+    ```cpp
+    MyPlugin::MyPlugin(const InstanceInfo& info)
+    : Plugin(info, MakeConfig(kNumParams, kNumPresets))
+    {
+      mDelayBuffer.resize(MAX_DELAY_SAMPLES);
+      mFFTBuffer.resize(FFT_SIZE);
+    }
+    ```
+  </Step>
+  
+  <Step title="Initialize in OnReset">
+    Clear state and update sample-rate-dependent values:
+    ```cpp
+    void OnReset() override
+    {
+      std::fill(mDelayBuffer.begin(), mDelayBuffer.end(), 0.0);
+      mFilter.SetCoefficients(GetSampleRate());
+    }
+    ```
+  </Step>
+  
+  <Step title="Keep ProcessBlock Simple">
+    Move complex calculations outside the audio loop:
+    ```cpp
+    // Bad: Expensive calculation in audio loop
+    for (int s = 0; s < nFrames; s++)
+      output[s] = std::pow(input[s], GetParam(kPower)->Value());
+    
+    // Good: Cache parameter value
+    const double power = GetParam(kPower)->Value();
+    for (int s = 0; s < nFrames; s++)
+      output[s] = std::pow(input[s], power);
+    ```
+  </Step>
+  
+  <Step title="Handle Variable Channel Counts">
+    Always check `NOutChansConnected()` for flexible I/O:
+    ```cpp
+    const int nChans = NOutChansConnected();
+    for (int c = 0; c < nChans; c++) {
+      // Process each connected channel
+    }
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="MIDI" icon="music" href="/iplug/midi">
+    Handle MIDI messages and SysEx in ProcessBlock
+  </Card>
+  <Card title="Parameters" icon="sliders" href="/iplug/parameters">
+    Access parameter values efficiently
+  </Card>
+</CardGroup>

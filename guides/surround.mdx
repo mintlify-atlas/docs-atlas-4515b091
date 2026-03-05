@@ -1,0 +1,526 @@
+---
+title: Surround Sound Processing
+description: Build plugins for 5.1, 7.1, Atmos, and other surround formats
+---
+
+## Overview
+
+Surround plugins process multi-channel audio formats beyond stereo. Common formats include:
+
+- **5.1** - 6 channels (L, R, C, LFE, Ls, Rs)
+- **7.1** - 8 channels (L, R, C, LFE, Ls, Rs, Lrs, Rrs)
+- **7.1.2** - 10 channels (7.1 + height pair)
+- **7.1.4** - 12 channels (7.1 + 4 height channels) [Atmos]
+
+## IPlugSurroundEffect Template
+
+The `IPlugSurroundEffect` example demonstrates:
+
+- Multiple channel configurations (1, 2, 6, 8, 10, 12 channels)
+- Platform-specific speaker arrangements
+- 12-channel metering
+- Custom bus type handling for VST3/AU/AAX
+
+### Channel Configuration
+
+```cpp config.h
+#define PLUG_CHANNEL_IO "1-1 2-2 6-6 8-8 10-10 12-12"
+
+#define PLUG_TYPE 0  // Audio Effect
+
+#define VST3_SUBCATEGORY "Fx|Spatial"
+#define AAX_PLUG_CATEGORY_STR "SoundField"
+```
+
+<Note>
+**Supported Configurations:**
+- `1-1` = Mono
+- `2-2` = Stereo
+- `6-6` = 5.1 surround
+- `8-8` = 7.1 surround
+- `10-10` = 7.1.2 (Atmos bed)
+- `12-12` = 7.1.4 (Atmos full)
+</Note>
+
+## Basic Structure
+
+<Tabs>
+<Tab title="Header">
+```cpp IPlugSurroundEffect.h
+#pragma once
+
+#include "IPlug_include_in_plug_hdr.h"
+#include "ISender.h"
+
+enum EParams
+{
+  kGain = 0,
+  kNumParams
+};
+
+enum ECtrlTags
+{
+  kCtrlTagInputMeter = 0,
+  kCtrlTagOutputMeter,
+  kNumCtrlTags
+};
+
+using namespace iplug;
+using namespace igraphics;
+
+class IPlugSurroundEffect final : public Plugin
+{
+public:
+  IPlugSurroundEffect(const InstanceInfo& info);
+
+#if IPLUG_DSP
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  void OnIdle() override;
+  
+  IPeakAvgSender<12> mInputPeakSender;   // Up to 12 channels
+  IPeakAvgSender<12> mOutputPeakSender;
+#endif
+};
+```
+</Tab>
+
+<Tab title="Processing">
+```cpp IPlugSurroundEffect.cpp
+void IPlugSurroundEffect::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kGain)->Value() / 100.;
+  const int nChans = NOutChansConnected();
+  
+  // Process all active channels
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+  
+  // Send meter data for all channels
+  mInputPeakSender.ProcessBlock(inputs, nFrames, kCtrlTagInputMeter);
+  mOutputPeakSender.ProcessBlock(outputs, nFrames, kCtrlTagOutputMeter);
+}
+
+void IPlugSurroundEffect::OnIdle()
+{
+  mInputPeakSender.TransmitData(*this);
+  mOutputPeakSender.TransmitData(*this);
+}
+```
+</Tab>
+
+<Tab title="Bus Types">
+```cpp IPlugSurroundEffect.cpp (lines 5-54)
+uint64_t GetAPIBusTypeForChannelIOConfig(int configIdx, ERoute dir, int busIdx,
+                                          const IOConfig* pConfig, 
+                                          WDL_TypedBuf<uint64_t>* APIBusTypes)
+{
+  assert(pConfig != nullptr);
+  assert(busIdx >= 0 && busIdx < pConfig->NBuses(dir));
+  
+  int numChans = pConfig->GetBusInfo(dir, busIdx)->NChans();
+
+#if defined AU_API || defined AUv3_API
+  switch (numChans)
+  {
+    case 0: APIBusTypes->Add(kAudioChannelLayoutTag_UseChannelDescriptions | 0); break;
+    case 1: APIBusTypes->Add(kAudioChannelLayoutTag_Mono); break;
+    case 2: APIBusTypes->Add(kAudioChannelLayoutTag_Stereo); break;
+    case 6: APIBusTypes->Add(kAudioChannelLayoutTag_AudioUnit_5_1); break;
+    case 8: APIBusTypes->Add(kAudioChannelLayoutTag_AudioUnit_7_1); break;
+#if defined (MAC_OS_VERSION_11_0)
+    case 10: APIBusTypes->Add(kAudioChannelLayoutTag_Atmos_7_1_2); break;
+    case 12: APIBusTypes->Add(kAudioChannelLayoutTag_Atmos_7_1_4); break;
+#endif
+    default: APIBusTypes->Add(kAudioChannelLayoutTag_DiscreteInOrder | numChans); break;
+  }
+  return 0;
+  
+#elif defined VST3_API
+  switch (numChans)
+  {
+    case 0: return Steinberg::Vst::SpeakerArr::kEmpty;
+    case 1: return Steinberg::Vst::SpeakerArr::kMono;
+    case 2: return Steinberg::Vst::SpeakerArr::kStereo;
+    case 6: return Steinberg::Vst::SpeakerArr::k51;
+    case 8: return Steinberg::Vst::SpeakerArr::k71CineSideFill;
+    case 10: return Steinberg::Vst::SpeakerArr::k71_2;
+    case 12: return Steinberg::Vst::SpeakerArr::k71_4;
+    default: return Steinberg::Vst::SpeakerArr::kEmpty;
+  }
+  
+#elif defined AAX_API
+  switch (numChans)
+  {
+    case 0: return AAX_eStemFormat_None;
+    case 1: return AAX_eStemFormat_Mono;
+    case 2: return AAX_eStemFormat_Stereo;
+    case 6: return AAX_eStemFormat_5_1;
+    case 8: return AAX_eStemFormat_7_1_DTS;
+    case 10: return AAX_eStemFormat_7_1_2;
+    case 12: return AAX_eStemFormat_7_1_4;
+    default: return AAX_eStemFormat_None;
+  }
+#endif
+}
+```
+
+**Purpose:**
+Map channel counts to platform-specific surround formats so hosts correctly route audio.
+</Tab>
+</Tabs>
+
+## Creating a Surround Plugin
+
+<Steps>
+
+### Duplicate Template
+
+```bash
+cd iPlug2/Examples
+python duplicate.py IPlugSurroundEffect MySurroundReverb MyCompany
+cd MySurroundReverb
+```
+
+### Configure Channels
+
+Edit `config.h` to support desired formats:
+
+```cpp config.h
+// Support stereo and surround formats
+#define PLUG_CHANNEL_IO "2-2 6-6 8-8"
+
+// Or support everything including Atmos:
+// #define PLUG_CHANNEL_IO "1-1 2-2 6-6 8-8 10-10 12-12"
+
+#define VST3_SUBCATEGORY "Fx|Spatial"
+#define AAX_PLUG_CATEGORY_STR "SoundField"
+```
+
+### Implement Bus Type Mapping
+
+Copy the `GetAPIBusTypeForChannelIOConfig` function from IPlugSurroundEffect to map channel counts to platform formats.
+
+### Process Channels
+
+```cpp
+void MySurroundReverb::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const int nChans = NOutChansConnected();
+  
+  // Detect current format
+  switch (nChans) {
+    case 1:  // Mono
+      ProcessMono(inputs, outputs, nFrames);
+      break;
+      
+    case 2:  // Stereo
+      ProcessStereo(inputs, outputs, nFrames);
+      break;
+      
+    case 6:  // 5.1
+      Process51(inputs, outputs, nFrames);
+      break;
+      
+    case 8:  // 7.1
+      Process71(inputs, outputs, nFrames);
+      break;
+      
+    case 10:  // 7.1.2
+      Process712(inputs, outputs, nFrames);
+      break;
+      
+    case 12:  // 7.1.4 (Atmos)
+      Process714(inputs, outputs, nFrames);
+      break;
+  }
+}
+```
+
+### Add Channel Meters
+
+```cpp
+mLayoutFunc = [&](IGraphics* pGraphics) {
+  pGraphics->AttachPanelBackground(COLOR_GRAY);
+  
+  const IRECT bounds = pGraphics->GetBounds().GetPadded(-10);
+  const IRECT meterArea = bounds.GetPadded(-50);
+  
+  const IVStyle meterStyle = DEFAULT_STYLE.WithColor(kFG, COLOR_WHITE.WithOpacity(0.3f));
+  
+  // Input meters (12 channels max)
+  pGraphics->AttachControl(
+    new IVPeakAvgMeterControl<12>(
+      meterArea.FracRectVertical(0.5, true), 
+      "Inputs",
+      meterStyle,
+      EDirection::Vertical,
+      {"L", "R", "C", "LFE", "Ls", "Rs", "Lrs", "Rrs", "Ltf", "Rtf", "Ltr", "Rtr"}),
+    kCtrlTagInputMeter);
+  
+  // Output meters
+  pGraphics->AttachControl(
+    new IVPeakAvgMeterControl<12>(
+      meterArea.FracRectVertical(0.5, false), 
+      "Outputs",
+      meterStyle,
+      EDirection::Vertical,
+      {"L", "R", "C", "LFE", "Ls", "Rs", "Lrs", "Rrs", "Ltf", "Rtf", "Ltr", "Rtr"}),
+    kCtrlTagOutputMeter);
+};
+```
+
+</Steps>
+
+## Channel Order
+
+### Standard Speaker Layouts
+
+<Tabs>
+<Tab title="5.1 (6 channels)">
+```
+Channel Index  |  Speaker Position
+---------------|-------------------
+     0         |  L   (Left)
+     1         |  R   (Right)
+     2         |  C   (Center)
+     3         |  LFE (Low Frequency)
+     4         |  Ls  (Left Surround)
+     5         |  Rs  (Right Surround)
+```
+</Tab>
+
+<Tab title="7.1 (8 channels)">
+```
+Channel Index  |  Speaker Position
+---------------|-------------------
+     0         |  L   (Left)
+     1         |  R   (Right)
+     2         |  C   (Center)
+     3         |  LFE (Low Frequency)
+     4         |  Ls  (Left Surround)
+     5         |  Rs  (Right Surround)
+     6         |  Lrs (Left Rear Surround)
+     7         |  Rrs (Right Rear Surround)
+```
+</Tab>
+
+<Tab title="7.1.4 (12 channels)">
+```
+Channel Index  |  Speaker Position
+---------------|----------------------------
+     0         |  L   (Left)
+     1         |  R   (Right)
+     2         |  C   (Center)
+     3         |  LFE (Low Frequency)
+     4         |  Ls  (Left Surround)
+     5         |  Rs  (Right Surround)
+     6         |  Lrs (Left Rear Surround)
+     7         |  Rrs (Right Rear Surround)
+     8         |  Ltf (Left Top Front)
+     9         |  Rtf (Right Top Front)
+    10         |  Ltr (Left Top Rear)
+    11         |  Rtr (Right Top Rear)
+```
+</Tab>
+</Tabs>
+
+<Warning>
+**Platform Differences:**
+Channel order can vary between plugin formats and hosts. Always test in your target environment.
+</Warning>
+
+## Processing Examples
+
+### 5.1 Surround Reverb
+
+```cpp
+void Process51(sample** inputs, sample** outputs, int nFrames)
+{
+  // Extract channels
+  sample* L = inputs[0];
+  sample* R = inputs[1];
+  sample* C = inputs[2];
+  sample* LFE = inputs[3];
+  sample* Ls = inputs[4];
+  sample* Rs = inputs[5];
+  
+  for (int s = 0; s < nFrames; s++) {
+    // Process front channels (L, R, C) with reverb
+    const double frontMono = (L[s] + R[s] + C[s]) / 3.0;
+    const double reverbOut = mReverb.Process(frontMono);
+    
+    // Apply reverb to output
+    outputs[0][s] = L[s] + reverbOut * 0.3;   // L
+    outputs[1][s] = R[s] + reverbOut * 0.3;   // R
+    outputs[2][s] = C[s] + reverbOut * 0.2;   // C
+    outputs[3][s] = LFE[s];                    // LFE (no reverb)
+    outputs[4][s] = Ls[s] + reverbOut * 0.5;  // Ls (more reverb)
+    outputs[5][s] = Rs[s] + reverbOut * 0.5;  // Rs (more reverb)
+  }
+}
+```
+
+### Upmixing Stereo to 5.1
+
+```cpp
+void UpmixStereoTo51(sample** stereoIn, sample** surroundOut, int nFrames)
+{
+  for (int s = 0; s < nFrames; s++) {
+    const double left = stereoIn[0][s];
+    const double right = stereoIn[1][s];
+    const double mono = (left + right) * 0.5;
+    
+    surroundOut[0][s] = left;                    // L
+    surroundOut[1][s] = right;                   // R
+    surroundOut[2][s] = mono * 0.7;              // C (phantom center)
+    surroundOut[3][s] = 0.0;                     // LFE
+    surroundOut[4][s] = left * 0.3;              // Ls (ambience)
+    surroundOut[5][s] = right * 0.3;             // Rs (ambience)
+  }
+}
+```
+
+### Spatial Panner
+
+```cpp
+void SpatialPanner::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double azimuth = GetParam(kAzimuth)->Value();    // 0-360 degrees
+  const double elevation = GetParam(kElevation)->Value(); // -90 to +90
+  
+  const int nChans = NOutChansConnected();
+  const double inputMono = inputs[0][0];  // Assume mono input
+  
+  // Calculate speaker gains based on position
+  double gains[12] = {0};
+  CalculateSpeakerGains(azimuth, elevation, nChans, gains);
+  
+  for (int s = 0; s < nFrames; s++) {
+    const double input = inputs[0][s];
+    
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = input * gains[c];
+    }
+  }
+}
+```
+
+## LFE Channel
+
+<Info>
+**LFE Handling:**
+- LFE is typically at index 3
+- Low-pass filter below 120 Hz
+- Don't apply reverb or spatial effects
+- Some hosts expect +10dB gain compensation
+</Info>
+
+```cpp
+void ProcessLFE(sample** inputs, sample** outputs, int nFrames)
+{
+  sample* lfe = inputs[3];
+  
+  for (int s = 0; s < nFrames; s++) {
+    // Low-pass filter
+    double filtered = mLFEFilter.Process(lfe[s]);
+    
+    // Apply gain compensation (optional, host-dependent)
+    outputs[3][s] = filtered * 1.0;  // No gain comp
+    // outputs[3][s] = filtered * 3.16;  // +10dB gain comp
+  }
+}
+```
+
+## Atmos Height Channels
+
+For 7.1.2 and 7.1.4 formats:
+
+```cpp
+void Process714(sample** inputs, sample** outputs, int nFrames)
+{
+  // Bed channels (7.1)
+  for (int c = 0; c < 8; c++) {
+    ProcessChannel(inputs[c], outputs[c], nFrames);
+  }
+  
+  // Height channels (top speakers)
+  sample* ltf = inputs[8];   // Left Top Front
+  sample* rtf = inputs[9];   // Right Top Front
+  sample* ltr = inputs[10];  // Left Top Rear
+  sample* rtr = inputs[11];  // Right Top Rear
+  
+  for (int s = 0; s < nFrames; s++) {
+    // Process height with different reverb
+    const double heightMono = (ltf[s] + rtf[s] + ltr[s] + rtr[s]) / 4.0;
+    const double heightReverb = mHeightReverb.Process(heightMono);
+    
+    outputs[8][s] = ltf[s] + heightReverb;
+    outputs[9][s] = rtf[s] + heightReverb;
+    outputs[10][s] = ltr[s] + heightReverb;
+    outputs[11][s] = rtr[s] + heightReverb;
+  }
+}
+```
+
+## Testing
+
+<Note>
+**Testing Surround:**
+1. Use a DAW with surround support (Pro Tools, Nuendo, Logic)
+2. Create a surround session (5.1, 7.1, etc.)
+3. Insert plugin on surround track
+4. Verify correct channel mapping with tone generators
+5. Test channel meters show correct activity
+6. Check LFE handling (some hosts are picky)
+</Note>
+
+### Test Signals
+
+```cpp
+// Generate test tones for each channel
+void GenerateTestTones(sample** outputs, int nChans, int nFrames)
+{
+  const double frequencies[] = {
+    220.0,  // L   (A3)
+    246.9,  // R   (B3)
+    261.6,  // C   (C4)
+    110.0,  // LFE (A2)
+    293.7,  // Ls  (D4)
+    329.6,  // Rs  (E4)
+    349.2,  // Lrs (F4)
+    392.0,  // Rrs (G4)
+  };
+  
+  for (int c = 0; c < nChans; c++) {
+    for (int s = 0; s < nFrames; s++) {
+      outputs[c][s] = std::sin(mPhase[c]);
+      mPhase[c] += 2.0 * M_PI * frequencies[c] / GetSampleRate();
+    }
+  }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="Channel Routing" href="/reference/channel-routing">
+Advanced channel configuration options
+</Card>
+
+<Card title="Spatial Audio" href="/reference/spatial-audio">
+Ambisonics and 3D audio processing
+</Card>
+
+<Card title="Metering" href="/reference/metering">
+Multi-channel meters and analysis
+</Card>
+
+<Card title="Testing" href="/guides/testing">
+Validate surround plugins in DAWs
+</Card>
+
+</CardGroup>

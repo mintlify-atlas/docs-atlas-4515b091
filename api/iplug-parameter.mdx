@@ -1,0 +1,914 @@
+---
+title: 'IParam'
+description: "iPlug2's parameter class for plugin automation and control"
+---
+
+## Overview
+
+The `IParam` class represents a plugin parameter in iPlug2. It handles value storage, normalization, display formatting, constraints, and parameter shaping. Parameters are accessed by index and store non-normalized (real) values.
+
+**Header:** `IPlug/IPlugParameter.h`
+
+<Info>
+  IParam values are stored as atomic doubles for thread-safe access. Use `Value()` to read and `Set()` to write.
+</Info>
+
+## Enumerations
+
+### EParamType
+
+Defines the type of parameter.
+
+```cpp
+enum EParamType
+{
+  kTypeNone,    // Uninitialized
+  kTypeBool,    // Boolean (0 or 1)
+  kTypeInt,     // Integer
+  kTypeEnum,    // Enumerated list
+  kTypeDouble   // Double precision floating point
+};
+```
+
+### EParamUnit
+
+Used by AudioUnit plugins to determine parameter appearance.
+
+```cpp
+enum EParamUnit
+{
+  kUnitPercentage, kUnitSeconds, kUnitMilliseconds, kUnitSamples,
+  kUnitDB, kUnitLinearGain, kUnitPan, kUnitPhase, kUnitDegrees,
+  kUnitMeters, kUnitRate, kUnitRatio, kUnitFrequency, kUnitOctaves,
+  kUnitCents, kUnitAbsCents, kUnitSemitones, kUnitMIDINote,
+  kUnitMIDICtrlNum, kUnitBPM, kUnitBeats, kUnitCustom
+};
+```
+
+### EDisplayType
+
+Used by AudioUnit plugins to determine parameter mapping.
+
+```cpp
+enum EDisplayType
+{
+  kDisplayLinear, kDisplayLog, kDisplayExp, kDisplaySquared,
+  kDisplaySquareRoot, kDisplayCubed, kDisplayCubeRoot
+};
+```
+
+### EFlags
+
+Parameter flags for special characteristics.
+
+```cpp
+enum EFlags
+{
+  kFlagsNone = 0,
+  kFlagCannotAutomate = 0x1,  // Parameter is not automatable
+  kFlagStepped = 0x2,          // Parameter is stepped/discrete
+  kFlagNegateDisplay = 0x4,    // Display as negative value
+  kFlagSignDisplay = 0x8,      // Display as signed value
+  kFlagMeta = 0x10             // Meta parameter (affects other params)
+};
+```
+
+### EShapeIDs
+
+```cpp
+enum EShapeIDs
+{
+  kShapeLinear = 0,
+  kShapePowCurve = 1,
+  kShapeExponential = 2,
+  kShapeUnknown
+};
+```
+
+## Parameter Shaping
+
+Parameter shapes determine how normalized values (0-1) map to real values.
+
+### Shape
+
+Base struct for parameter shaping.
+
+```cpp
+struct Shape
+{
+  virtual Shape* Clone() const = 0;
+  virtual void Init(const IParam& param);
+  virtual EDisplayType GetDisplayType() const = 0;
+  virtual double NormalizedToValue(double value, const IParam& param) const = 0;
+  virtual double ValueToNormalized(double value, const IParam& param) const = 0;
+};
+```
+
+### ShapeLinear
+
+Linear parameter mapping (default).
+
+```cpp
+struct ShapeLinear : public Shape
+{
+  double mShape;
+};
+```
+
+### ShapePowCurve
+
+Power curve shaping for custom response curves.
+
+```cpp
+struct ShapePowCurve : public Shape
+{
+  ShapePowCurve(double shape);
+  double mShape;
+};
+```
+
+<ParamField path="shape" type="double" required>
+  Shape exponent. Values < 1 compress low end, > 1 compress high end
+</ParamField>
+
+```cpp
+// Example: Frequency parameter with power curve
+GetParam(kFreq)->InitDouble("Frequency", 1000., 20., 20000., 0.1, "Hz",
+                            0, "", IParam::ShapePowCurve(3.0));
+```
+
+### ShapeExp
+
+Exponential/logarithmic shaping (ideal for frequency).
+
+```cpp
+struct ShapeExp : public Shape
+{
+  void Init(const IParam& param) override;
+  double mMul = 1.0;
+  double mAdd = 1.0;
+};
+```
+
+```cpp
+// Example: Exponential frequency parameter
+GetParam(kFreq)->InitDouble("Frequency", 1000., 20., 20000., 0.1, "Hz",
+                            0, "", IParam::ShapeExp());
+```
+
+## Constructor
+
+### IParam
+
+```cpp
+IParam();
+```
+
+Default constructor. Parameters must be initialized with one of the `Init*()` methods.
+
+<Warning>
+  Copy constructor and assignment operator are deleted. Parameters cannot be copied.
+</Warning>
+
+## Initialization Methods
+
+### InitBool
+
+```cpp
+void InitBool(const char* name, bool defaultValue, const char* label = "",
+              int flags = 0, const char* group = "",
+              const char* offText = "off", const char* onText = "on");
+```
+
+Initialize as a boolean parameter.
+
+<ParamField path="name" type="const char*" required>
+  Parameter name
+</ParamField>
+
+<ParamField path="defaultValue" type="bool" required>
+  Default value (true/false)
+</ParamField>
+
+<ParamField path="offText" type="const char*">
+  Display text when value is 0 (default: "off")
+</ParamField>
+
+<ParamField path="onText" type="const char*">
+  Display text when value is 1 (default: "on")
+</ParamField>
+
+```cpp
+GetParam(kBypass)->InitBool("Bypass", false, "", 0, "", "Disabled", "Enabled");
+```
+
+### InitEnum
+
+```cpp
+void InitEnum(const char* name, int defaultValue, int nEnums,
+              const char* label = "", int flags = 0, const char* group = "",
+              const char* listItems = nullptr, ...);
+              
+void InitEnum(const char* name, int defaultValue,
+              const std::initializer_list<const char*>& listItems,
+              int flags = 0, const char* group = "");
+```
+
+Initialize as an enumerated list parameter.
+
+<ParamField path="name" type="const char*" required>
+  Parameter name
+</ParamField>
+
+<ParamField path="defaultValue" type="int" required>
+  Default value (0-based index)
+</ParamField>
+
+<ParamField path="nEnums" type="int" required>
+  Number of enum items (variadic version)
+</ParamField>
+
+<ParamField path="listItems" type="initializer_list or variadic" required>
+  List of item names
+</ParamField>
+
+```cpp
+// Using initializer list (preferred)
+GetParam(kWaveform)->InitEnum("Waveform", 0,
+  {"Sine", "Triangle", "Saw", "Square"}, 0, "Oscillator");
+
+// Using variadic arguments
+GetParam(kFilter)->InitEnum("Filter Type", 0, 3, "", 0, "Filter",
+  "Low Pass", "High Pass", "Band Pass");
+```
+
+### InitInt
+
+```cpp
+void InitInt(const char* name, int defaultValue, int minVal, int maxVal,
+             const char* label = "", int flags = 0, const char* group = "");
+```
+
+Initialize as an integer parameter.
+
+```cpp
+GetParam(kVoices)->InitInt("Voices", 8, 1, 32, "", 0, "Polyphony");
+```
+
+### InitDouble
+
+```cpp
+void InitDouble(const char* name, double defaultVal, double minVal, double maxVal,
+                double step, const char* label = "", int flags = 0,
+                const char* group = "",
+                const Shape& shape = ShapeLinear(),
+                EParamUnit unit = kUnitCustom,
+                DisplayFunc displayFunc = nullptr);
+```
+
+Initialize as a double-precision floating point parameter.
+
+<ParamField path="name" type="const char*" required>
+  Parameter name
+</ParamField>
+
+<ParamField path="defaultVal" type="double" required>
+  Default value
+</ParamField>
+
+<ParamField path="minVal" type="double" required>
+  Minimum value
+</ParamField>
+
+<ParamField path="maxVal" type="double" required>
+  Maximum value
+</ParamField>
+
+<ParamField path="step" type="double" required>
+  Step size (0.01 for 2 decimal places)
+</ParamField>
+
+<ParamField path="label" type="const char*">
+  Unit suffix (e.g., "dB", "Hz", "%")
+</ParamField>
+
+<ParamField path="flags" type="int">
+  Parameter flags (see EFlags)
+</ParamField>
+
+<ParamField path="group" type="const char*">
+  Parameter group name
+</ParamField>
+
+<ParamField path="shape" type="const Shape&">
+  Parameter shaping (linear, exponential, power curve)
+</ParamField>
+
+<ParamField path="unit" type="EParamUnit">
+  AudioUnit unit type
+</ParamField>
+
+<ParamField path="displayFunc" type="DisplayFunc">
+  Custom display function (lambda)
+</ParamField>
+
+```cpp
+// Standard gain parameter
+GetParam(kGain)->InitDouble("Gain", 0., -70., 12., 0.1, "dB",
+                            0, "Levels", IParam::ShapeLinear(), IParam::kUnitDB);
+
+// Frequency with exponential scaling
+GetParam(kFreq)->InitDouble("Frequency", 1000., 20., 20000., 0.1, "Hz",
+                            0, "Filter", IParam::ShapeExp(), IParam::kUnitFrequency);
+```
+
+### Convenience Initialization Methods
+
+<CardGroup cols={2}>
+  <Card title="InitSeconds" icon="clock">
+    ```cpp
+    void InitSeconds(const char* name, double defaultVal = 1.,
+                     double minVal = 0., double maxVal = 10.,
+                     double step = 0.1, int flags = 0,
+                     const char* group = "");
+    ```
+  </Card>
+  
+  <Card title="InitMilliseconds" icon="stopwatch">
+    ```cpp
+    void InitMilliseconds(const char* name, double defaultVal = 1.,
+                          double minVal = 0., double maxVal = 100.,
+                          int flags = 0, const char* group = "");
+    ```
+  </Card>
+  
+  <Card title="InitFrequency" icon="wave-square">
+    ```cpp
+    void InitFrequency(const char* name, double defaultVal = 1000.,
+                       double minVal = 0.1, double maxVal = 10000.,
+                       double step = 0.1, int flags = 0,
+                       const char* group = "");
+    ```
+  </Card>
+  
+  <Card title="InitPitch" icon="music">
+    ```cpp
+    void InitPitch(const char* name, int defaultVal = 60,
+                   int minVal = 0, int maxVal = 128,
+                   int flags = 0, const char* group = "",
+                   bool middleCisC4 = false);
+    ```
+  </Card>
+  
+  <Card title="InitGain" icon="volume">
+    ```cpp
+    void InitGain(const char* name, double defaultVal = 0.,
+                  double minVal = -70., double maxVal = 24.,
+                  double step = 0.5, int flags = 0,
+                  const char* group = "");
+    ```
+  </Card>
+  
+  <Card title="InitPercentage" icon="percent">
+    ```cpp
+    void InitPercentage(const char* name, double defaultVal = 0.,
+                        double minVal = 0., double maxVal = 100.,
+                        int flags = 0, const char* group = "");
+    ```
+  </Card>
+  
+  <Card title="InitAngleDegrees" icon="compass">
+    ```cpp
+    void InitAngleDegrees(const char* name, double defaultVal = 0.,
+                          double minVal = 0., double maxVal = 360.,
+                          int flags = 0, const char* group = "");
+    ```
+  </Card>
+  
+  <Card title="Init" icon="clone">
+    Clone from existing parameter
+    ```cpp
+    void Init(const IParam& p, const char* searchStr = "",
+              const char* replaceStr = "",
+              const char* newGroup = "");
+    ```
+  </Card>
+</CardGroup>
+
+## Value Access
+
+### Value
+
+```cpp
+double Value() const;
+```
+
+Get the current parameter value (non-normalized, real value).
+
+<ResponseField name="return" type="double">
+  Current parameter value (thread-safe atomic read)
+</ResponseField>
+
+### Bool
+
+```cpp
+bool Bool() const;
+```
+
+Get parameter value as boolean.
+
+<ResponseField name="return" type="bool">
+  `true` if value >= 0.5, `false` otherwise
+</ResponseField>
+
+### Int
+
+```cpp
+int Int() const;
+```
+
+Get parameter value as integer.
+
+### DBToAmp
+
+```cpp
+double DBToAmp() const;
+```
+
+Convert current value from decibels to linear amplitude.
+
+<ResponseField name="return" type="double">
+  Linear gain (approximation of 10^(value/20))
+</ResponseField>
+
+```cpp
+// Example: Apply gain parameter
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kGain)->DBToAmp();
+  
+  for (int s = 0; s < nFrames; s++)
+  {
+    outputs[0][s] = inputs[0][s] * gain;
+  }
+}
+```
+
+### GetNormalized
+
+```cpp
+double GetNormalized() const;
+```
+
+Get the current value as normalized (0-1).
+
+## Value Modification
+
+### Set
+
+```cpp
+void Set(double value);
+```
+
+Set the parameter value (real value). Automatically constrains and steps.
+
+<ParamField path="value" type="double" required>
+  New value (will be clamped to min/max and stepped)
+</ParamField>
+
+### SetNormalized
+
+```cpp
+void SetNormalized(double normalizedValue);
+```
+
+Set the parameter from a normalized value (0-1).
+
+<ParamField path="normalizedValue" type="double" required>
+  Normalized value between 0 and 1
+</ParamField>
+
+### SetString
+
+```cpp
+void SetString(const char* str);
+```
+
+Set parameter value from textual representation.
+
+### SetToDefault
+
+```cpp
+void SetToDefault();
+```
+
+Reset parameter to its default value.
+
+### SetDefault
+
+```cpp
+void SetDefault(double value);
+```
+
+Change the default value and reset to it.
+
+## Value Conversion
+
+### ToNormalized
+
+```cpp
+inline double ToNormalized(double nonNormalizedValue) const;
+```
+
+Convert a real value to normalized (0-1).
+
+### FromNormalized
+
+```cpp
+inline double FromNormalized(double normalizedValue) const;
+```
+
+Convert a normalized value (0-1) to real value.
+
+### Constrain
+
+```cpp
+inline double Constrain(double value) const;
+```
+
+Constrain value to min/max range and apply stepping.
+
+### ConstrainNormalized
+
+```cpp
+inline double ConstrainNormalized(double normalizedValue) const;
+```
+
+Constrain a normalized value.
+
+### StringToValue
+
+```cpp
+double StringToValue(const char* str) const;
+```
+
+Convert textual representation to value.
+
+## Display
+
+### GetDisplay
+
+```cpp
+void GetDisplay(WDL_String& display, bool withDisplayText = true) const;
+void GetDisplay(double value, bool normalized, WDL_String& display,
+                bool withDisplayText = true) const;
+```
+
+Get textual display for current or specified value.
+
+<ParamField path="display" type="WDL_String&" required>
+  Output string
+</ParamField>
+
+<ParamField path="value" type="double">
+  Value to format (if not using current value)
+</ParamField>
+
+<ParamField path="normalized" type="bool">
+  If `true`, value is normalized
+</ParamField>
+
+<ParamField path="withDisplayText" type="bool">
+  Include custom display texts
+</ParamField>
+
+### GetDisplayWithLabel
+
+```cpp
+void GetDisplayWithLabel(WDL_String& display, bool withDisplayText = true) const;
+```
+
+Get display string with unit label appended.
+
+### SetDisplayText
+
+```cpp
+void SetDisplayText(double value, const char* str);
+```
+
+Set custom display text for a specific value.
+
+<ParamField path="value" type="double" required>
+  Value to associate with text
+</ParamField>
+
+<ParamField path="str" type="const char*" required>
+  Display text
+</ParamField>
+
+```cpp
+// Example: Show "-inf" for -70dB
+GetParam(kGain)->SetDisplayText(-70.0, "-inf");
+```
+
+### SetDisplayPrecision
+
+```cpp
+void SetDisplayPrecision(int precision);
+```
+
+Set number of decimal places for display.
+
+### SetDisplayFunc
+
+```cpp
+void SetDisplayFunc(DisplayFunc func);
+```
+
+Set custom display function.
+
+```cpp
+// Example: Custom display function
+GetParam(kRatio)->SetDisplayFunc([](double value, WDL_String& str) {
+  str.SetFormatted(32, "%.2f:1", value);
+});
+```
+
+### DisplayFunc Type
+
+```cpp
+using DisplayFunc = std::function<void(double, WDL_String&)>;
+```
+
+### Display Text Methods
+
+<CardGroup cols={2}>
+  <Card title="NDisplayTexts">
+    ```cpp
+    int NDisplayTexts() const;
+    ```
+    Get number of display texts
+  </Card>
+  
+  <Card title="GetDisplayText">
+    ```cpp
+    const char* GetDisplayText(double value) const;
+    ```
+    Get display text for a value
+  </Card>
+  
+  <Card title="GetDisplayTextAtIdx">
+    ```cpp
+    const char* GetDisplayTextAtIdx(int idx, double* pValue = nullptr) const;
+    ```
+    Get display text by index
+  </Card>
+  
+  <Card title="MapDisplayText">
+    ```cpp
+    bool MapDisplayText(const char* str, double* pValue) const;
+    ```
+    Get value for display text
+  </Card>
+</CardGroup>
+
+## Property Accessors
+
+### GetName
+
+```cpp
+const char* GetName() const;
+```
+
+Returns the parameter name.
+
+### GetLabel
+
+```cpp
+const char* GetLabel() const;
+```
+
+Returns the parameter label (unit suffix).
+
+### GetGroup
+
+```cpp
+const char* GetGroup() const;
+```
+
+Returns the parameter group.
+
+### SetLabel
+
+```cpp
+void SetLabel(const char* label);
+```
+
+Set the parameter label after creation.
+
+<Warning>
+  If called after the host queries parameters, the host may not update its display.
+</Warning>
+
+### Type Information
+
+<CardGroup cols={2}>
+  <Card title="Type">
+    ```cpp
+    EParamType Type() const;
+    ```
+  </Card>
+  
+  <Card title="Unit">
+    ```cpp
+    EParamUnit Unit() const;
+    ```
+  </Card>
+  
+  <Card title="DisplayType">
+    ```cpp
+    EDisplayType DisplayType() const;
+    ```
+  </Card>
+  
+  <Card title="GetFlags">
+    ```cpp
+    int GetFlags() const;
+    ```
+  </Card>
+</CardGroup>
+
+### Range Information
+
+<CardGroup cols={2}>
+  <Card title="GetDefault">
+    ```cpp
+    double GetDefault(bool normalized = false) const;
+    ```
+  </Card>
+  
+  <Card title="GetMin">
+    ```cpp
+    double GetMin() const;
+    ```
+  </Card>
+  
+  <Card title="GetMax">
+    ```cpp
+    double GetMax() const;
+    ```
+  </Card>
+  
+  <Card title="GetBounds">
+    ```cpp
+    void GetBounds(double& lo, double& hi) const;
+    ```
+  </Card>
+  
+  <Card title="GetRange">
+    ```cpp
+    double GetRange() const;
+    ```
+  </Card>
+  
+  <Card title="GetStep">
+    ```cpp
+    double GetStep() const;
+    ```
+  </Card>
+</CardGroup>
+
+### Flag Queries
+
+<CardGroup cols={2}>
+  <Card title="GetCanAutomate">
+    ```cpp
+    bool GetCanAutomate() const;
+    ```
+  </Card>
+  
+  <Card title="GetStepped">
+    ```cpp
+    bool GetStepped() const;
+    ```
+  </Card>
+  
+  <Card title="GetNegateDisplay">
+    ```cpp
+    bool GetNegateDisplay() const;
+    ```
+  </Card>
+  
+  <Card title="GetSignDisplay">
+    ```cpp
+    bool GetSignDisplay() const;
+    ```
+  </Card>
+  
+  <Card title="GetMeta">
+    ```cpp
+    bool GetMeta() const;
+    ```
+  </Card>
+</CardGroup>
+
+### Shape Information
+
+```cpp
+EShapeIDs GetShapeID() const;
+double GetShapeValue() const;
+```
+
+## Debug Utilities
+
+### GetJSON
+
+```cpp
+void GetJSON(WDL_String& json, int idx) const;
+```
+
+Get JSON description of the parameter.
+
+### PrintDetails
+
+```cpp
+void PrintDetails() const;
+```
+
+Print parameter details to debug console (debug builds only).
+
+## Example Usage
+
+```cpp
+enum EParams
+{
+  kGain,
+  kFreq,
+  kResonance,
+  kFilterType,
+  kBypass,
+  kNumParams
+};
+
+class MyPlugin : public iplug::Plugin
+{
+public:
+  MyPlugin(const iplug::InstanceInfo& info)
+  : Plugin(info, MakeConfig(kNumParams, 1))
+  {
+    // Gain parameter with dB scaling
+    GetParam(kGain)->InitGain("Gain", 0., -70., 12., 0.5, 0, "Levels");
+    GetParam(kGain)->SetDisplayText(-70.0, "-inf");
+    
+    // Frequency with exponential scaling
+    GetParam(kFreq)->InitFrequency("Cutoff", 1000., 20., 20000., 0.1, 0, "Filter");
+    
+    // Resonance percentage
+    GetParam(kResonance)->InitPercentage("Resonance", 50., 0., 100., 0, "Filter");
+    
+    // Filter type enum
+    GetParam(kFilterType)->InitEnum("Type", 0,
+      {"Low Pass", "High Pass", "Band Pass", "Notch"},
+      0, "Filter");
+    
+    // Bypass bool
+    GetParam(kBypass)->InitBool("Bypass", false);
+  }
+  
+  void OnParamChange(int paramIdx) override
+  {
+    switch (paramIdx)
+    {
+      case kGain:
+      {
+        double gainDB = GetParam(kGain)->Value();
+        double gainLin = GetParam(kGain)->DBToAmp();
+        DBGMSG("Gain changed: %.2f dB = %.4f linear\n", gainDB, gainLin);
+        break;
+      }
+      
+      case kFreq:
+      case kResonance:
+      {
+        double freq = GetParam(kFreq)->Value();
+        double res = GetParam(kResonance)->Value() / 100.0;
+        mFilter.SetCutoff(freq, GetSampleRate());
+        mFilter.SetResonance(res);
+        break;
+      }
+      
+      case kFilterType:
+      {
+        int type = GetParam(kFilterType)->Int();
+        mFilter.SetType(static_cast<FilterType>(type));
+        break;
+      }
+    }
+  }
+};
+```
+
+## See Also
+
+- [IPluginBase](/api/iplug-plugin-base) - Plugin base class with parameter manipulation
+- [Parameter Guide](/guides/parameters) - Working with parameters

@@ -1,0 +1,414 @@
+---
+title: "Envelopes"
+description: "ADSR envelope generator for amplitude and modulation control"
+---
+
+The envelope module provides a flexible ADSR (Attack, Decay, Sustain, Release) envelope generator with support for velocity scaling, retriggering, and custom callbacks.
+
+## ADSREnvelope
+
+A comprehensive ADSR envelope generator with advanced features including anti-click retriggering and configurable AD mode.
+
+### Template Parameters
+
+<ParamField path="T" type="typename">
+  Sample type (typically `double` or `float`)
+</ParamField>
+
+### Constructor
+
+```cpp
+ADSREnvelope(const char* name = "", 
+             std::function<void()> resetFunc = nullptr,
+             bool sustainEnabled = true)
+```
+
+<ParamField path="name" type="const char*" default="empty string">
+  Name for debugging (only used when `DEBUG_ENV=1` is defined)
+</ParamField>
+
+<ParamField path="resetFunc" type="std::function<void()>" default="nullptr">
+  Callback function to execute when envelope is retriggered (useful for resetting oscillator phase)
+</ParamField>
+
+<ParamField path="sustainEnabled" type="bool" default="true">
+  If `true`, envelope is ADSR. If `false`, envelope is AD (suitable for drums)
+</ParamField>
+
+<Warning>
+  Don't call `SetResetFunc()` on the audio thread - `std::function` can allocate memory.
+</Warning>
+
+---
+
+## Envelope Stages
+
+### EStage
+
+Enumeration of envelope stages:
+
+<ParamField path="kIdle" type="-1">
+  Envelope is inactive
+</ParamField>
+
+<ParamField path="kAttack" type="0">
+  Attack phase - rising from 0 to peak
+</ParamField>
+
+<ParamField path="kDecay" type="1">
+  Decay phase - falling from peak to sustain level
+</ParamField>
+
+<ParamField path="kSustain" type="2">
+  Sustain phase - held at sustain level
+</ParamField>
+
+<ParamField path="kRelease" type="3">
+  Release phase - falling from current level to zero
+</ParamField>
+
+<ParamField path="kReleasedToRetrigger" type="-2">
+  Fast fade to zero before retriggering (3ms)
+</ParamField>
+
+<ParamField path="kReleasedToEndEarly" type="-3">
+  Fast fade to zero for voice stealing (20ms)
+</ParamField>
+
+---
+
+## Methods
+
+### SetStageTime
+
+```cpp
+void SetStageTime(int stage, T timeMS)
+```
+
+Set the duration of an envelope stage.
+
+<ParamField path="stage" type="int">
+  Stage to set: `kAttack`, `kDecay`, or `kRelease`
+</ParamField>
+
+<ParamField path="timeMS" type="T">
+  Duration in milliseconds (clamped to 0.022675 - 60000 ms)
+</ParamField>
+
+<Note>
+  Attack uses linear ramping, while decay and release use exponential curves for more natural-sounding envelopes.
+</Note>
+
+### Process
+
+```cpp
+inline T Process(T sustainLevel = 0.)
+```
+
+Generate the next envelope sample.
+
+<ParamField path="sustainLevel" type="T" default="0.0">
+  Sustain level for this sample (0.0 to 1.0). Passed as parameter to allow external smoothing.
+</ParamField>
+
+**Returns:** Envelope output value scaled by velocity level
+
+### Start
+
+```cpp
+inline void Start(T level, T timeScalar = 1.)
+```
+
+Trigger the envelope from the beginning.
+
+<ParamField path="level" type="T">
+  Overall envelope depth, typically linked to MIDI velocity (0.0 to 1.0)
+</ParamField>
+
+<ParamField path="timeScalar" type="T" default="1.0">
+  Factor to scale envelope rates (for key tracking). Values > 1.0 make the envelope faster.
+</ParamField>
+
+### Release
+
+```cpp
+inline void Release()
+```
+
+Release the envelope (move to release stage).
+
+### Retrigger
+
+```cpp
+inline void Retrigger(T newStartLevel, T timeScalar = 1.)
+```
+
+Retrigger the envelope while it's still active. Performs a fast fade-out (3ms) then restarts.
+
+<ParamField path="newStartLevel" type="T">
+  Velocity level for the new note
+</ParamField>
+
+<ParamField path="timeScalar" type="T" default="1.0">
+  Time scaling factor for the new note
+</ParamField>
+
+<Info>
+  This method prevents clicks when voices are stolen or notes are retriggered before release completes.
+</Info>
+
+### Kill
+
+```cpp
+inline void Kill(bool hard)
+```
+
+Force the envelope to end.
+
+<ParamField path="hard" type="bool">
+  If `true`, instantly reset (may cause clicks). If `false`, fade out over 20ms.
+</ParamField>
+
+### SetSampleRate
+
+```cpp
+void SetSampleRate(T sr)
+```
+
+Set the sample rate. Updates internal ramp coefficients.
+
+<ParamField path="sr" type="T">
+  Sample rate in samples per second
+</ParamField>
+
+<Warning>
+  You must also update attack, decay, and release times after changing sample rate.
+</Warning>
+
+### GetBusy
+
+```cpp
+bool GetBusy() const
+```
+
+**Returns:** `true` if envelope is not idle
+
+### GetReleased
+
+```cpp
+bool GetReleased() const
+```
+
+**Returns:** `true` if envelope has been released
+
+### GetPrevOutput
+
+```cpp
+T GetPrevOutput() const
+```
+
+**Returns:** Last output value (after velocity scaling)
+
+### SetResetFunc
+
+```cpp
+void SetResetFunc(std::function<void()> func)
+```
+
+Set the callback function called when envelope is retriggered.
+
+<ParamField path="func" type="std::function<void()>">
+  Callback function or `nullptr` to disable
+</ParamField>
+
+<Warning>
+  Don't call this on the audio thread - `std::function` assignment can allocate.
+</Warning>
+
+### SetEndReleaseFunc
+
+```cpp
+void SetEndReleaseFunc(std::function<void()> func)
+```
+
+Set the callback function called when envelope completes release.
+
+<ParamField path="func" type="std::function<void()>">
+  Callback function or `nullptr` to disable
+</ParamField>
+
+---
+
+## Constants
+
+<ParamField path="EARLY_RELEASE_TIME" type="T" default="20.0">
+  Duration in milliseconds for soft kill fade-out
+</ParamField>
+
+<ParamField path="RETRIGGER_RELEASE_TIME" type="T" default="3.0">
+  Duration in milliseconds for retrigger fade-out
+</ParamField>
+
+<ParamField path="MIN_ENV_TIME_MS" type="T" default="0.022675736961451">
+  Minimum stage time (1 sample at 44.1kHz)
+</ParamField>
+
+<ParamField path="MAX_ENV_TIME_MS" type="T" default="60000.0">
+  Maximum stage time (60 seconds)
+</ParamField>
+
+<ParamField path="ENV_VALUE_LOW" type="T" default="0.000001">
+  Threshold value for considering envelope at zero (-120dB)
+</ParamField>
+
+<ParamField path="ENV_VALUE_HIGH" type="T" default="0.999">
+  Threshold value for considering envelope at peak
+</ParamField>
+
+---
+
+## Usage Examples
+
+### Basic ADSR Envelope
+
+```cpp
+// Create envelope for a synthesizer voice
+ADSREnvelope<double> env("VoiceEnv", nullptr, true);
+env.SetSampleRate(44100.0);
+
+// Set envelope times
+env.SetStageTime(ADSREnvelope<double>::kAttack, 10.0);   // 10ms attack
+env.SetStageTime(ADSREnvelope<double>::kDecay, 100.0);   // 100ms decay
+env.SetStageTime(ADSREnvelope<double>::kRelease, 500.0); // 500ms release
+
+// Trigger on note-on with velocity
+void OnNoteOn(int velocity) {
+  double level = velocity / 127.0;
+  env.Start(level);
+}
+
+// Release on note-off
+void OnNoteOff() {
+  env.Release();
+}
+
+// Process audio
+void ProcessBlock(double** output, int nFrames) {
+  double sustainLevel = mSustainParam->Value();
+  
+  for (int i = 0; i < nFrames; i++) {
+    double envValue = env.Process(sustainLevel);
+    output[0][i] = oscillator.Process() * envValue;
+  }
+}
+```
+
+### AD Envelope for Drums
+
+```cpp
+// Create AD envelope (no sustain)
+ADSREnvelope<double> drumEnv("DrumEnv", nullptr, false);
+drumEnv.SetSampleRate(44100.0);
+drumEnv.SetStageTime(ADSREnvelope<double>::kAttack, 1.0);  // 1ms attack
+drumEnv.SetStageTime(ADSREnvelope<double>::kDecay, 200.0); // 200ms decay
+
+// Trigger drum hit
+drumEnv.Start(1.0);
+
+// Process (no need to call Release - decays automatically)
+for (int i = 0; i < blockSize; i++) {
+  output[i] = drumSample[i] * drumEnv.Process();
+}
+```
+
+### Envelope with Retrigger and Callbacks
+
+```cpp
+class Voice {
+  SinOscillator<double> osc;
+  ADSREnvelope<double> env;
+  
+public:
+  Voice() : env("Voice", [this]() { 
+    // Reset oscillator phase when retriggered
+    osc.Reset(); 
+  }, true) {
+    env.SetSampleRate(44100.0);
+  }
+  
+  void Trigger(double freq, double velocity, bool isRetrigger) {
+    osc.SetFreqCPS(freq);
+    
+    if (isRetrigger && env.GetBusy()) {
+      env.Retrigger(velocity);
+    } else {
+      env.Start(velocity);
+    }
+  }
+  
+  double Process(double sustainLevel) {
+    return osc.Process() * env.Process(sustainLevel);
+  }
+};
+```
+
+### Key Tracking (Velocity Scaling)
+
+```cpp
+// Make higher notes have faster envelopes
+void TriggerNote(int midiNote, int velocity) {
+  double level = velocity / 127.0;
+  
+  // Scale envelope speed based on note (middle C = 1.0)
+  double keyTrack = pow(2.0, (midiNote - 60) / 12.0);
+  
+  env.Start(level, keyTrack);
+}
+```
+
+---
+
+## Implementation Details
+
+### Curve Types
+
+<CardGroup cols={2}>
+  <Card title="Attack" icon="arrow-up">
+    **Linear ramp** from 0 to 1 for predictable rise time
+  </Card>
+  <Card title="Decay" icon="arrow-down">
+    **Exponential curve** using `expm1()` for natural decay
+  </Card>
+  <Card title="Sustain" icon="minus">
+    **Constant level** held until release
+  </Card>
+  <Card title="Release" icon="circle-down">
+    **Exponential curve** matching decay algorithm
+  </Card>
+</CardGroup>
+
+### Anti-Click Features
+
+1. **Retrigger Mode**: Fast 3ms fade to zero before restarting
+2. **Early Release**: 20ms fade when voice is stolen
+3. **Thresholding**: Uses -120dB threshold to detect zero
+
+### Sustain Level Parameter
+
+The sustain level is passed to `Process()` rather than set as a member variable:
+
+- Allows external smoothing of sustain parameter
+- Prevents discontinuities when sustain is changed during playback
+- Gives more control to the calling code
+
+---
+
+## Code Location
+
+Source: `IPlug/Extras/ADSREnvelope.h:1`
+
+## See Also
+
+- [Oscillators](/api/dsp/oscillators) - Waveform generators
+- [LFO](/api/dsp/oscillators#lfo) - Low frequency modulation
+- [Smoothers](/api/dsp/effects#smoothers) - Parameter smoothing

@@ -1,0 +1,195 @@
+---
+title: "Introduction"
+description: "Build cross-platform audio plugins with iPlug2's powerful C++ framework"
+---
+
+## What is iPlug2?
+
+iPlug2 is a comprehensive C++ audio plugin framework that enables you to create professional audio plugins for desktop, mobile, XR, and web platforms. With a single codebase, you can target multiple plugin formats including VST3, AUv2, AUv3, AAX, CLAP, and Web Audio Modules.
+
+<CardGroup cols={2}>
+  <Card
+    title="Quick Start"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Build your first audio plugin in minutes
+  </Card>
+  <Card
+    title="Installation"
+    icon="download"
+    href="/installation"
+  >
+    Set up your development environment
+  </Card>
+  <Card
+    title="Core Concepts"
+    icon="book"
+    href="/concepts/architecture"
+  >
+    Learn the framework architecture
+  </Card>
+  <Card
+    title="Examples"
+    icon="code"
+    href="/examples/overview"
+  >
+    Explore example projects
+  </Card>
+</CardGroup>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Cross-Platform" icon="display">
+    Write once, deploy everywhere: Windows, macOS, iOS, visionOS, and web browsers via WebAssembly
+  </Card>
+  <Card title="Multiple Plugin Formats" icon="puzzle-piece">
+    Support for VST3, AUv2, AUv3, AAX, CLAP, WAM, standalone apps, and REAPER extensions
+  </Card>
+  <Card title="GPU-Accelerated Graphics" icon="paintbrush">
+    Choice of NanoVG or Skia backends for high-performance vector graphics and custom UIs
+  </Card>
+  <Card title="Rich Controls Library" icon="sliders">
+    50+ built-in UI controls including knobs, sliders, buttons, and visualizers
+  </Card>
+  <Card title="Alternative UI Frameworks" icon="window">
+    Use SwiftUI, UIKit, WebView, or web frameworks like Svelte for your plugin UI
+  </Card>
+  <Card title="DSP Utilities" icon="wave-square">
+    Built-in oscillators, envelopes, filters, oversampling, and audio processing tools
+  </Card>
+</CardGroup>
+
+## Two Main Components
+
+### IPlug Core
+
+The core plugin abstraction layer that handles:
+- Parameter management and automation
+- Audio and MIDI processing
+- State serialization and preset management
+- Host communication across all plugin formats
+- Real-time safe threading
+
+### IGraphics
+
+A flexible graphics framework featuring:
+- Multiple rendering backends (NanoVG, Skia)
+- Extensive control library
+- Custom control creation
+- Responsive and resizable UIs
+- Live editing capabilities
+
+<Note>
+IGraphics is optional. You can use alternative UI frameworks like SwiftUI, Cocoa, or web-based UIs instead.
+</Note>
+
+## Supported Platforms
+
+- **Windows**: Windows 8+ (x64, ARM64EC)
+- **macOS**: macOS 10.13+
+- **iOS**: iOS 15+
+- **visionOS**: visionOS 26.0+
+- **Web**: Modern browsers via WebAssembly/Emscripten
+
+## Plugin Format Support
+
+| Format | Description | Platforms |
+|--------|-------------|-----------|
+| **VST3** | Steinberg VST 3 | Windows, macOS |
+| **AUv2** | Apple Audio Units v2 | macOS |
+| **AUv3** | Apple Audio Units v3 | macOS, iOS, visionOS |
+| **AAX** | Avid Audio eXtension | Windows, macOS |
+| **CLAP** | CLever Audio Plugin | Windows, macOS |
+| **WAM** | Web Audio Module | Web browsers |
+| **Standalone** | Independent application | All platforms |
+
+## Architecture Overview
+
+```cpp
+// Simplified plugin structure
+class MyPlugin : public iplug::Plugin
+{
+public:
+  MyPlugin(const iplug::InstanceInfo& info)
+  : Plugin(info, MakeConfig(kNumParams, kNumPresets))
+  {
+    // Initialize parameters
+    GetParam(kGain)->InitDouble("Gain", 0., -70., 12.0, 0.01, "dB");
+    
+    // Setup UI (optional)
+    #if IPLUG_EDITOR
+    mMakeGraphicsFunc = [&]() {
+      return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT);
+    };
+    #endif
+  }
+  
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+  {
+    // Real-time audio processing
+    const double gain = DBToAmp(GetParam(kGain)->Value());
+    
+    for (int c = 0; c < NOutChannelsConnected(); c++) {
+      for (int s = 0; s < nFrames; s++) {
+        outputs[c][s] = inputs[c][s] * gain;
+      }
+    }
+  }
+};
+```
+
+## Community & Resources
+
+<CardGroup cols={2}>
+  <Card
+    title="GitHub Repository"
+    icon="github"
+    href="https://github.com/iPlug2/iPlug2"
+  >
+    View source code and contribute
+  </Card>
+  <Card
+    title="Discussion Forum"
+    icon="comments"
+    href="https://iplug2.discourse.group"
+  >
+    Join the community discussion
+  </Card>
+  <Card
+    title="Discord Server"
+    icon="discord"
+    href="https://discord.gg/7h9HW8N9Ke"
+  >
+    Chat with other developers
+  </Card>
+  <Card
+    title="API Documentation"
+    icon="book-open"
+    href="https://iplug2.github.io/docs"
+  >
+    Browse the full API reference
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<Steps>
+  <Step title="Set up your environment">
+    Follow the [installation guide](/installation) to install required tools and SDKs
+  </Step>
+  <Step title="Build your first plugin">
+    Work through the [quickstart](/quickstart) to create a simple audio effect
+  </Step>
+  <Step title="Explore examples">
+    Study the [example projects](/examples/overview) to learn common patterns
+  </Step>
+  <Step title="Dive deeper">
+    Read about [core concepts](/concepts/architecture) and [IPlug architecture](/iplug/overview)
+  </Step>
+</Steps>
+
+<Tip>
+iPlug2 is licensed under a permissive zlib-like license, making it free to use in commercial closed-source projects.
+</Tip>

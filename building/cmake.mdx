@@ -1,0 +1,700 @@
+---
+title: 'Building with CMake'
+description: 'Modern cross-platform build system for iPlug2 projects'
+---
+
+iPlug2 supports CMake as a modern, cross-platform alternative to IDE-specific projects. CMake works on all platforms and generates project files for Visual Studio, Xcode, Ninja, and more.
+
+## Why CMake?
+
+<CardGroup cols={2}>
+  <Card title="Cross-Platform" icon="globe">
+    Single `CMakeLists.txt` works on Windows, macOS, Linux, iOS, and Web
+  </Card>
+  <Card title="Simplified Configuration" icon="code">
+    `iplug_add_plugin()` macro reduces ~190 lines to ~15 lines
+  </Card>
+  <Card title="Modern Tooling" icon="gear">
+    Full IntelliSense, clangd, and IDE integration
+  </Card>
+  <Card title="Flexible Generators" icon="layer-group">
+    Generate for Ninja (fast), Visual Studio, Xcode, or Unix Makefiles
+  </Card>
+</CardGroup>
+
+## Prerequisites
+
+### macOS
+
+```bash
+# Install via Homebrew
+brew install cmake ninja
+
+# Verify
+cmake --version  # 3.14 or later
+```
+
+**Also required**:
+- Xcode Command Line Tools: `xcode-select --install`
+
+### Windows
+
+<Tabs>
+  <Tab title="Visual Studio Installer">
+    CMake is included with Visual Studio:
+    
+    1. Open **Visual Studio Installer**
+    2. **Modify** your installation
+    3. **Individual Components**
+    4. Install **C++ CMake tools for Windows**
+  </Tab>
+  
+  <Tab title="Standalone">
+    Download from [cmake.org](https://cmake.org/download/)
+    
+    Or use winget:
+    ```bash
+    winget install Kitware.CMake
+    winget install Ninja-build.Ninja
+    ```
+  </Tab>
+</Tabs>
+
+### Web (Emscripten)
+
+```bash
+# Install Emscripten
+git clone https://github.com/emscripten-core/emsdk.git
+cd emsdk
+./emsdk install latest
+./emsdk activate latest
+source ./emsdk_env.sh
+```
+
+## Quick Start
+
+<Steps>
+  <Step title="Navigate to project">
+    ```bash
+    cd MyPlugin
+    mkdir build && cd build
+    ```
+  </Step>
+  
+  <Step title="Configure">
+    Choose a generator:
+    
+    ```bash
+    # Ninja (recommended, fast)
+    cmake -G Ninja ..
+    
+    # Visual Studio (Windows)
+    cmake -G "Visual Studio 17 2022" -A x64 ..
+    
+    # Xcode (macOS/iOS)
+    cmake -G Xcode ..
+    ```
+  </Step>
+  
+  <Step title="Build">
+    ```bash
+    # Ninja
+    ninja
+    
+    # Visual Studio / Xcode
+    cmake --build . --config Release
+    ```
+  </Step>
+</Steps>
+
+## Generators
+
+### Ninja (Recommended)
+
+Fast, single-configuration generator that works on macOS and Windows.
+
+```bash
+cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ..
+ninja
+
+# Build specific target
+ninja MyPlugin-vst3
+```
+
+<Tip>
+Ninja is **significantly faster** than Visual Studio and Xcode for incremental builds.
+</Tip>
+
+### Visual Studio (Windows)
+
+Multi-configuration generator for Windows.
+
+```bash
+# x64 (default)
+cmake -G "Visual Studio 17 2022" -A x64 ..
+
+# ARM64EC
+cmake -G "Visual Studio 17 2022" -A ARM64EC ..
+
+# Build
+cmake --build . --config Release
+
+# Or open in Visual Studio
+start MyPlugin.sln
+```
+
+### Xcode (macOS/iOS/visionOS)
+
+Multi-configuration generator for Apple platforms.
+
+```bash
+cmake -G Xcode ..
+cmake --build . --config Release
+
+# Or open in Xcode
+open MyPlugin.xcodeproj
+```
+
+## Supported Formats & Targets
+
+| Format | Target Suffix | macOS | Windows | iOS | visionOS | Web |
+|--------|---------------|-------|---------|-----|----------|-----|
+| Standalone App | `-app` | ✓ | ✓ | ✓ | ✓ | - |
+| VST2 | `-vst2` | ✓ | ✓ | - | - | - |
+| VST3 | `-vst3` | ✓ | ✓ | - | - | - |
+| CLAP | `-clap` | ✓ | ✓ | - | - | - |
+| AAX | `-aax` | ✓ | ✓ | - | - | - |
+| AUv2 | `-au` | ✓ | - | - | - | - |
+| AUv3 | `AU-framework`, `AUv3-appex` | ✓ | - | ✓ | ✓ | - |
+| WAM | `-wam`, `-web` | - | - | - | - | ✓ |
+
+<Note>
+- VST2 requires the VST2 SDK (deprecated)
+- VST3/AAX/CLAP require respective SDKs
+- AUv3 is embedded in the standalone APP on macOS
+</Note>
+
+## Project Structure
+
+Minimal CMake-enabled iPlug2 project:
+
+```
+MyPlugin/
+├── CMakeLists.txt               # CMake project file
+├── MyPlugin.cpp                 # Plugin implementation
+├── MyPlugin.h
+├── config.h                     # Plugin configuration
+└── resources/
+    ├── MyPlugin-macOS-Info.plist
+    ├── MyPlugin-VST3-Info.plist
+    ├── fonts/
+    └── img/
+```
+
+## The iplug_add_plugin Macro
+
+The `iplug_add_plugin()` macro simplifies plugin configuration, reducing boilerplate from ~190 lines to ~15 lines.
+
+### Basic Usage
+
+```cmake
+cmake_minimum_required(VERSION 3.14)
+project(MyPlugin VERSION 1.0.0)
+
+# Set iPlug2 root directory
+if(NOT DEFINED IPLUG2_DIR)
+  set(IPLUG2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "iPlug2 root")
+endif()
+
+# Include iPlug2 CMake configuration
+include(${IPLUG2_DIR}/iPlug2.cmake)
+find_package(iPlug2 REQUIRED)
+
+# Define plugin
+iplug_add_plugin(${PROJECT_NAME}
+  SOURCES
+    MyPlugin.cpp
+    MyPlugin.h
+    resources/resource.h
+  RESOURCES
+    resources/fonts/Roboto-Regular.ttf
+)
+```
+
+### Syntax
+
+```cmake
+iplug_add_plugin(<name>
+  SOURCES <file1> [file2 ...]
+  [RESOURCES <file1> [file2 ...]]
+  [WEB_RESOURCES <file1> [file2 ...]]
+  [FORMATS <format1> [format2 ...]]
+  [EXCLUDE_FORMATS <format1> [format2 ...]]
+  [LINK <library1> [library2 ...]]
+  [DEFINES <def1> [def2 ...]]
+  [UI <IGRAPHICS|WEBVIEW|NONE>]
+  [WAM_SITE_ORIGIN <origin>]
+)
+```
+
+### Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|----------|
+| `SOURCES` | Source files (.cpp, .h, .mm) | Required |
+| `RESOURCES` | Bundle resources (fonts, images) → `Resources/` | None |
+| `WEB_RESOURCES` | Web UI files (HTML, JS, CSS) → `Resources/web/` | None |
+| `FORMATS` | Target formats to build | `ALL` |
+| `EXCLUDE_FORMATS` | Formats to skip | None |
+| `LINK` | Additional libraries | None |
+| `DEFINES` | Preprocessor definitions | None |
+| `UI` | UI framework: `IGRAPHICS`, `WEBVIEW`, `NONE` | `IGRAPHICS` |
+| `WAM_SITE_ORIGIN` | WAM site origin for CORS | `"/"` |
+
+### Format Groups
+
+| Group | Expands To | Notes |
+|-------|------------|-------|
+| `ALL` | APP, VST2, VST3, CLAP, AAX, AU, AUv3, WAM | All formats |
+| `ALL_PLUGINS` | VST2, VST3, CLAP, AAX, AU, AUv3, WAM | No APP |
+| `ALL_DESKTOP` | APP, VST2, VST3, CLAP, AAX, AU, AUv3 | No WAM |
+| `MINIMAL_PLUGINS` | VST3, CLAP, AU | Core formats |
+| `DESKTOP` | APP, VST3, CLAP, AAX, AU | No VST2/AUv3 |
+| `WEB` | WAM | Web only |
+
+### Examples
+
+<CodeGroup>
+```cmake Standard Plugin
+iplug_add_plugin(${PROJECT_NAME}
+  SOURCES
+    MyPlugin.cpp
+    MyPlugin.h
+    resources/resource.h
+  RESOURCES
+    resources/fonts/Roboto-Regular.ttf
+)
+```
+
+```cmake Minimal Plugin (VST3, CLAP, AU only)
+iplug_add_plugin(${PROJECT_NAME}
+  SOURCES
+    MyPlugin.cpp
+    MyPlugin.h
+  FORMATS MINIMAL_PLUGINS
+)
+```
+
+```cmake Plugin with Extra Libraries
+iplug_add_plugin(${PROJECT_NAME}
+  SOURCES
+    MyPlugin.cpp
+    MyPlugin.h
+  LINK
+    iPlug2::Extras::Synth
+    iPlug2::Extras::HIIR
+)
+```
+
+```cmake DSP-Only Plugin (No UI)
+iplug_add_plugin(${PROJECT_NAME}
+  SOURCES
+    MyPlugin.cpp
+    MyPlugin.h
+  UI NONE
+  DEFINES NO_IGRAPHICS
+  EXCLUDE_FORMATS WAM
+)
+```
+
+```cmake WebView UI Plugin
+iplug_add_plugin(${PROJECT_NAME}
+  SOURCES
+    MyPlugin.cpp
+    MyPlugin.h
+  WEB_RESOURCES
+    resources/web/index.html
+    resources/web/script.js
+  UI WEBVIEW
+  EXCLUDE_FORMATS WAM
+)
+```
+</CodeGroup>
+
+## Build Options
+
+### Common Options
+
+```bash
+# Debug build (default)
+cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug ..
+
+# Release build
+cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ..
+
+# Enable tracer/profiling
+cmake -G Ninja -DIPLUG2_TRACER=ON ..
+```
+
+### macOS Options
+
+```bash
+# Universal binaries (Intel + Apple Silicon)
+cmake -G Ninja -DIPLUG2_UNIVERSAL=ON ..
+
+# Or set architectures directly
+cmake -G Ninja -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" ..
+
+# Deployment target (default: 10.13)
+cmake -G Ninja -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 ..
+```
+
+### Windows Options
+
+```bash
+# x64 (default)
+cmake -G "Visual Studio 17 2022" -A x64 ..
+
+# ARM64EC
+cmake -G "Visual Studio 17 2022" -A ARM64EC ..
+```
+
+### iOS Options
+
+```bash
+# iOS Device
+cmake -G Xcode \
+  -DCMAKE_SYSTEM_NAME=iOS \
+  -DIPLUG2_IOS_PLATFORM=OS ..
+
+# iOS Simulator
+cmake -G Xcode \
+  -DCMAKE_SYSTEM_NAME=iOS \
+  -DIPLUG2_IOS_PLATFORM=SIMULATOR ..
+
+# visionOS Device
+cmake -G Xcode \
+  -DCMAKE_SYSTEM_NAME=iOS \
+  -DIPLUG2_IOS_PLATFORM=VISIONOS ..
+
+# visionOS Simulator
+cmake -G Xcode \
+  -DCMAKE_SYSTEM_NAME=iOS \
+  -DIPLUG2_IOS_PLATFORM=VISIONOS_SIMULATOR ..
+
+# Deployment target (default: 14)
+cmake -G Xcode \
+  -DCMAKE_SYSTEM_NAME=iOS \
+  -DIPLUG2_IOS_DEPLOYMENT_TARGET=15 ..
+```
+
+| `IPLUG2_IOS_PLATFORM` | SDK | Description |
+|-----------------------|-----|-------------|
+| `OS` | iphoneos | iOS device (default) |
+| `SIMULATOR` | iphonesimulator | iOS Simulator |
+| `VISIONOS` | xros | visionOS device |
+| `VISIONOS_SIMULATOR` | xrsimulator | visionOS Simulator |
+
+### Web/Emscripten Options
+
+```bash
+# Configure with Emscripten toolchain
+emcmake cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ..
+
+# Build WAM and Web targets
+ninja MyPlugin-wam       # Audio processor (WASM)
+ninja MyPlugin-web       # UI controller (WASM)
+ninja MyPlugin-wam-dist  # Complete distribution
+```
+
+## IGraphics Backends
+
+Configure graphics backend at build time:
+
+```bash
+# Default: NanoVG with GL2 (Windows) or Metal (macOS)
+cmake -G Ninja ..
+
+# Skia with OpenGL 3
+cmake -G Ninja \
+  -DIGRAPHICS_BACKEND=SKIA \
+  -DIGRAPHICS_RENDERER=GL3 ..
+
+# NanoVG with Metal (macOS)
+cmake -G Ninja \
+  -DIGRAPHICS_BACKEND=NANOVG \
+  -DIGRAPHICS_RENDERER=METAL ..
+```
+
+### Available Backends
+
+| Variable | Options | Default |
+|----------|---------|----------|
+| `IGRAPHICS_BACKEND` | `NANOVG`, `SKIA` | `NANOVG` |
+| `IGRAPHICS_RENDERER` | `GL2`, `GL3`, `METAL`, `CPU` | `GL2` (Win), `METAL` (Mac) |
+
+### Available Targets
+
+```cmake
+# NanoVG (lightweight, included)
+iPlug2::IGraphics::NanoVG        # GL2 (default)
+iPlug2::IGraphics::NanoVG::GL3   # OpenGL 3
+iPlug2::IGraphics::NanoVG::Metal # Metal (macOS/iOS)
+
+# Skia (feature-rich, requires dependencies)
+iPlug2::IGraphics::Skia::GL3     # OpenGL 3
+iPlug2::IGraphics::Skia::Metal   # Metal (macOS/iOS)
+iPlug2::IGraphics::Skia::CPU     # Software rendering
+```
+
+## Debugging
+
+### Setting Debug Host
+
+```bash
+# Windows (Visual Studio)
+cmake -G "Visual Studio 17 2022" -A x64 \
+  -DIPLUG2_DEBUG_HOST="C:/Program Files/REAPER (x64)/reaper.exe" ..
+
+# macOS (Xcode)
+cmake -G Xcode \
+  -DIPLUG2_DEBUG_HOST="/Applications/REAPER.app" ..
+```
+
+| Variable | Description |
+|----------|-------------|
+| `IPLUG2_DEBUG_HOST` | Path to host application (DAW) |
+| `IPLUG2_DEBUG_HOST_ARGS` | Command line arguments |
+
+**Windows**: Sets `VS_DEBUGGER_COMMAND`, allowing **F5** to launch host and attach debugger. If REAPER is installed at default path, it's automatically used.
+
+**macOS**: Generates Xcode schemes with the executable set. Otherwise, schemes allow "Ask on Launch".
+
+## Build Output
+
+### macOS
+
+```
+build/out/
+├── MyPlugin.app/                    # Standalone (with embedded AUv3)
+│   └── Contents/
+│       ├── Frameworks/
+│       │   └── MyPluginAU.framework/
+│       └── PlugIns/
+│           └── MyPlugin.appex/
+├── MyPlugin.vst3/
+├── MyPlugin.clap/
+├── MyPlugin.aaxplugin/
+├── MyPlugin.component/              # AUv2
+├── MyPluginAU.framework/            # AUv3 framework
+└── MyPlugin.appex/                  # AUv3 appex
+```
+
+### Windows
+
+```
+build/out/
+├── MyPlugin.exe                     # Standalone
+├── MyPlugin.vst3/
+│   └── Contents/
+│       └── x86_64-win/              # or arm64ec-win
+│           └── MyPlugin.vst3
+├── MyPlugin.clap
+└── MyPlugin.aaxplugin/
+    └── Contents/
+        └── x64/                     # or ARM64EC
+            └── MyPlugin.aaxplugin
+```
+
+### Web
+
+```
+build/out/MyPlugin/
+├── scripts/
+│   ├── MyPlugin-wam.js
+│   ├── MyPlugin-wam.wasm
+│   ├── MyPlugin-web.js
+│   └── MyPlugin-web.wasm
+├── index.html
+├── descriptor.json
+└── styles/
+```
+
+## Deployment
+
+### Automatic Deployment
+
+Plugins are automatically deployed (symlinked/copied) to standard locations:
+
+**macOS**:
+- VST3: `~/Library/Audio/Plug-Ins/VST3`
+- CLAP: `~/Library/Audio/Plug-Ins/CLAP`
+- AUv2: `~/Library/Audio/Plug-Ins/Components`
+- AAX: `/Library/Application Support/Avid/Audio/Plug-Ins`
+- APP: `~/Applications`
+
+**Windows**:
+- VST3: `%LOCALAPPDATA%\Programs\Common\VST3` (per-user)
+- CLAP: `%LOCALAPPDATA%\Programs\Common\CLAP` (per-user)
+- AAX: `%COMMONPROGRAMFILES%\Avid\Audio\Plug-Ins`
+
+### Deployment Options
+
+```bash
+# Disable automatic deployment
+cmake -G Ninja -DIPLUG_DEPLOY_PLUGINS=OFF ..
+
+# Use symlink instead of copy (default: COPY)
+cmake -G Ninja -DIPLUG_DEPLOY_METHOD=SYMLINK ..
+
+# Custom paths
+cmake -G Ninja -DIPLUG_VST3_DEPLOY_PATH=/custom/path ..
+```
+
+<Note>
+VST3/CLAP use per-user paths by default (spec-compliant). For system-wide installation, use:
+```bash
+-DIPLUG_VST3_DEPLOY_PATH="%COMMONPROGRAMFILES%\VST3"
+```
+</Note>
+
+## Code Signing (macOS)
+
+AUv3 requires code signing:
+
+```bash
+# Ad-hoc signing (development only)
+codesign -s - build/out/MyPlugin.app/Contents/Frameworks/MyPluginAU.framework
+codesign -s - build/out/MyPlugin.app/Contents/PlugIns/MyPlugin.appex
+codesign -s - build/out/MyPlugin.app
+
+# Run app to register AUv3
+open build/out/MyPlugin.app
+```
+
+<Warning>
+Ad-hoc signing (`-s -`) is for **local development only**. For distribution, use a Developer ID certificate.
+</Warning>
+
+**Distribution signing**:
+
+```bash
+codesign -s "Developer ID Application: Your Name (TEAM_ID)" \
+  --options runtime --timestamp \
+  build/out/MyPlugin.app
+
+xcrun notarytool submit build/out/MyPlugin.app \
+  --apple-id your@email.com \
+  --team-id TEAM_ID \
+  --wait
+
+xcrun stapler staple build/out/MyPlugin.app
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="CMake Error: iPlug2 not found">
+    **Cause**: `IPLUG2_DIR` not set or incorrect
+    
+    **Solution**:
+    ```cmake
+    set(IPLUG2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "iPlug2 root")
+    ```
+    
+    Or set via command line:
+    ```bash
+    cmake -DIPLUG2_DIR=/path/to/iPlug2 ..
+    ```
+  </Accordion>
+  
+  <Accordion title="Link errors: Missing symbols">
+    **Cause**: Missing frameworks or libraries
+    
+    **Solution**:
+    - Verify SDKs are downloaded
+    - Check `find_package(iPlug2 REQUIRED)` is called
+    - Ensure all libraries use same runtime (`/MT` on Windows)
+  </Accordion>
+  
+  <Accordion title="Plugin not loading in DAW">
+    **Cause**: Deployment path incorrect or architecture mismatch
+    
+    **Solution**:
+    - Check deployment paths in CMake output
+    - Verify architecture matches DAW (x64/ARM64EC)
+    - Manually copy plugin to correct location
+  </Accordion>
+  
+  <Accordion title="Xcode/Visual Studio integration broken">
+    **Cause**: Generator mismatch
+    
+    **Solution**:
+    - Use `-G Xcode` for Xcode integration
+    - Use `-G "Visual Studio 17 2022"` for VS integration
+    - Delete `build/` and reconfigure
+  </Accordion>
+</AccordionGroup>
+
+## Advanced Usage
+
+### Custom Build Scripts
+
+```bash build.sh
+#!/bin/bash
+set -e
+
+# Configure
+cmake -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DIPLUG2_UNIVERSAL=ON \
+  -DIGRAPHICS_BACKEND=SKIA \
+  -B build
+
+# Build all targets
+cmake --build build --parallel
+
+# Build specific target
+cmake --build build --target MyPlugin-vst3
+```
+
+### Multi-Configuration Builds
+
+For Visual Studio and Xcode generators:
+
+```bash
+# Configure once
+cmake -G Xcode ..
+
+# Build different configurations
+cmake --build . --config Debug
+cmake --build . --config Release
+cmake --build . --config Tracer
+```
+
+## Examples
+
+All iPlug2 examples include `CMakeLists.txt`:
+
+- `Examples/IPlugEffect/`
+- `Examples/IPlugInstrument/`
+- `Examples/IPlugControls/`
+- `Examples/IPlugWebUI/`
+- And many more...
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Windows Build" icon="windows" href="/building/windows">
+    Visual Studio and MSBuild
+  </Card>
+  <Card title="macOS Build" icon="apple" href="/building/macos">
+    Xcode and command-line tools
+  </Card>
+  <Card title="iOS Build" icon="mobile" href="/building/ios">
+    AUv3 for iOS and iPadOS
+  </Card>
+  <Card title="Web Build" icon="globe" href="/building/web">
+    WebAssembly with Emscripten
+  </Card>
+</CardGroup>

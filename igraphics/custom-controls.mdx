@@ -1,0 +1,631 @@
+---
+title: 'Creating Custom Controls'
+description: 'Build your own IGraphics controls with custom drawing and interaction'
+---
+
+## IControl Anatomy
+
+All controls inherit from `IControl` and implement key methods:
+
+```cpp IControl.h:44-81
+class IControl {
+public:
+  IControl(const IRECT& bounds, int paramIdx = kNoParameter, 
+           IActionFunction actionFunc = nullptr);
+  
+  // Core methods to override:
+  virtual void Draw(IGraphics& g) = 0;                    // Required
+  virtual void OnMouseDown(float x, float y, const IMouseMod& mod);
+  virtual void OnMouseDrag(float x, float y, float dX, float dY, const IMouseMod& mod);
+  virtual void OnMouseUp(float x, float y, const IMouseMod& mod);
+  virtual void OnMouseOver(float x, float y, const IMouseMod& mod);
+  virtual void OnMouseOut();
+  virtual void OnResize();                                 // When control bounds change
+  virtual void OnInit();                                   // After attachment
+  virtual bool IsHit(float x, float y) const;             // Hit testing
+};
+```
+
+## Basic Custom Control
+
+Let's create a simple circular LED indicator:
+
+<Steps>
+  <Step title="Define the class">
+```cpp MyLEDControl.h
+#pragma once
+#include "IControl.h"
+
+class MyLEDControl : public IControl {
+public:
+  MyLEDControl(const IRECT& bounds, const IColor& color = COLOR_RED)
+  : IControl(bounds)
+  , mColor(color)
+  , mLit(false)
+  {}
+  
+  void Draw(IGraphics& g) override;
+  void OnMouseDown(float x, float y, const IMouseMod& mod) override;
+  
+  void SetLit(bool lit) { mLit = lit; SetDirty(false); }
+  
+private:
+  IColor mColor;
+  bool mLit;
+};
+```
+  </Step>
+  
+  <Step title="Implement Draw()">
+```cpp MyLEDControl.cpp
+void MyLEDControl::Draw(IGraphics& g) {
+  // Get the center and radius
+  const float cx = mRECT.MW();
+  const float cy = mRECT.MH();
+  const float radius = mRECT.W() * 0.4f;
+  
+  // Draw outer ring (always visible)
+  g.DrawCircle(COLOR_GRAY, cx, cy, radius, nullptr, 2.f);
+  
+  // Fill with color when lit
+  if (mLit) {
+    g.FillCircle(mColor, cx, cy, radius * 0.8f);
+    
+    // Add glow effect
+    IColor glowColor = mColor.WithOpacity(0.3f);
+    g.FillCircle(glowColor, cx, cy, radius);
+  } else {
+    // Dim when off
+    g.FillCircle(COLOR_DARK_GRAY, cx, cy, radius * 0.8f);
+  }
+}
+```
+  </Step>
+  
+  <Step title="Implement interaction">
+```cpp
+void MyLEDControl::OnMouseDown(float x, float y, const IMouseMod& mod) {
+  mLit = !mLit;  // Toggle on click
+  SetDirty(true); // Mark for redraw and trigger action
+}
+```
+  </Step>
+  
+  <Step title="Use the control">
+```cpp
+pGraphics->AttachControl(
+  new MyLEDControl(bounds.GetCentredInside(50), COLOR_GREEN), 
+  kCtrlTagLED
+);
+
+// Control externally
+pGraphics->GetControlWithTag(kCtrlTagLED)->As<MyLEDControl>()->SetLit(true);
+```
+  </Step>
+</Steps>
+
+## Parameter-Linked Control
+
+Controls can automatically synchronize with plugin parameters:
+
+```cpp
+class MySlider : public IControl {
+public:
+  MySlider(const IRECT& bounds, int paramIdx)
+  : IControl(bounds, paramIdx)  // Link to parameter
+  {}
+  
+  void Draw(IGraphics& g) override {
+    // Draw track
+    IRECT track = mRECT.GetPadded(-10);
+    g.FillRect(COLOR_DARK_GRAY, track);
+    
+    // Draw filled portion based on parameter value
+    double value = GetValue();  // 0.0 to 1.0
+    IRECT filled = track.FracRectVertical(static_cast<float>(value), false);
+    g.FillRect(COLOR_BLUE, filled);
+  }
+  
+  void OnMouseDrag(float x, float y, float dX, float dY, const IMouseMod& mod) override {
+    // Convert Y position to normalized value
+    IRECT track = mRECT.GetPadded(-10);
+    double value = 1.0 - (y - track.T) / track.H();
+    value = Clip(value, 0.0, 1.0);
+    
+    SetValue(value);     // Update control's value
+    SetDirty(true);      // Mark dirty and send to parameter
+  }
+};
+```
+
+<Note>
+**Key methods for parameter-linked controls:**
+- `GetValue(int valIdx = 0)` - Get current normalized value (0-1)
+- `SetValue(double value, int valIdx = 0)` - Update value locally
+- `SetDirty(bool triggerAction)` - Mark for redraw and optionally send to parameter
+- `GetParam(int valIdx = 0)` - Access the IParam object
+</Note>
+
+## Advanced: Vector Control with IVectorBase
+
+For styleable vector controls, inherit from both `IControl` and `IVectorBase`:
+
+```cpp
+class MyVectorKnob : public IKnobControlBase, public IVectorBase {
+public:
+  MyVectorKnob(const IRECT& bounds, int paramIdx, const char* label = "",
+               const IVStyle& style = DEFAULT_STYLE)
+  : IKnobControlBase(bounds, paramIdx)
+  , IVectorBase(style)
+  {
+    AttachIControl(this, label);  // Link IVectorBase to IControl
+  }
+  
+  void Draw(IGraphics& g) override {
+    DrawBackground(g, mRECT);  // IVectorBase helper
+    DrawWidget(g);
+    DrawLabel(g);               // IVectorBase helper
+    DrawValue(g, mMouseIsOver); // IVectorBase helper
+  }
+  
+  void DrawWidget(IGraphics& g) override {
+    // Custom knob drawing using IVectorBase colors
+    float angle = static_cast<float>(GetValue() * 270.f - 135.f);
+    float cx = mWidgetBounds.MW();
+    float cy = mWidgetBounds.MH();
+    float radius = mWidgetBounds.W() * 0.4f;
+    
+    // Draw arc track (uses IVStyle colors)
+    g.DrawArc(GetColor(kFG), cx, cy, radius, -135.f, 135.f, nullptr, 3.f);
+    
+    // Draw filled arc to current value
+    g.DrawArc(GetColor(kPR), cx, cy, radius, -135.f, angle, nullptr, 3.f);
+    
+    // Draw pointer
+    g.DrawRadialLine(GetColor(kFR), cx, cy, angle, 
+                     radius * 0.2f, radius * 0.9f, nullptr, 2.f);
+  }
+  
+  void OnResize() override {
+    SetTargetRECT(MakeRects(mRECT));  // IVectorBase helper
+    SetDirty(false);
+  }
+};
+```
+
+<Info>
+**IVectorBase benefits:**
+- Automatic label/value rendering
+- Consistent styling with `IVStyle`
+- Helper methods for layout (`MakeRects()`, `GetWidgetBounds()`, etc.)
+- Color management with `GetColor(EVColor)`
+</Info>
+
+## Mouse Interaction Patterns
+
+### Drag Value Control
+
+```cpp
+class MyDragControl : public IControl {
+public:
+  MyDragControl(const IRECT& bounds, int paramIdx)
+  : IControl(bounds, paramIdx)
+  {}
+  
+  void OnMouseDown(float x, float y, const IMouseMod& mod) override {
+    mMouseDownValue = GetValue();
+  }
+  
+  void OnMouseDrag(float x, float y, float dX, float dY, const IMouseMod& mod) override {
+    // Vertical drag to change value
+    double delta = -dY / mRECT.H();  // Negative because Y increases downward
+    
+    // Apply gearing/sensitivity
+    const double gearing = 0.5;  // Slower = finer control
+    delta *= gearing;
+    
+    // Modifier keys for fine/coarse adjustment
+    if (mod.S)  // Shift key
+      delta *= 0.1;  // Fine adjustment
+    if (mod.C)  // Ctrl/Cmd key
+      delta *= 10.0; // Coarse adjustment
+    
+    double newValue = Clip(mMouseDownValue + delta, 0.0, 1.0);
+    SetValue(newValue);
+    SetDirty(true);
+  }
+  
+private:
+  double mMouseDownValue = 0.0;
+};
+```
+
+### Click Position Control
+
+```cpp
+void OnMouseDown(float x, float y, const IMouseMod& mod) override {
+  // Set value based on click position
+  SnapToMouse(x, y, EDirection::Vertical, mRECT.GetPadded(-10));
+  SetDirty(true);
+}
+```
+
+<Note>
+`SnapToMouse()` is a built-in IControl helper that converts mouse position to a normalized value.
+</Note>
+
+### Double-Click for Text Entry
+
+```cpp
+void OnMouseDblClick(float x, float y, const IMouseMod& mod) override {
+  if (GetParamIdx() > kNoParameter) {
+    PromptUserInput();  // Opens text entry or popup menu
+  }
+}
+```
+
+## Drawing Patterns
+
+### Using Layers for Performance
+
+Layers cache static content to avoid redrawing every frame:
+
+```cpp
+class MyLayeredControl : public IControl {
+public:
+  void Draw(IGraphics& g) override {
+    // Draw static background to layer
+    if (!mLayer || g.CheckLayer(mLayer)) {
+      g.StartLayer(this, mRECT);
+      
+      // Draw expensive static content once
+      g.FillRect(COLOR_BLACK, mRECT);
+      DrawGrid(g);
+      DrawLabels(g);
+      
+      mLayer = g.EndLayer();
+    }
+    
+    // Draw the cached layer
+    g.DrawLayer(mLayer);
+    
+    // Draw dynamic content on top
+    DrawWaveform(g);
+  }
+  
+private:
+  ILayerPtr mLayer;
+};
+```
+
+### Path-Based Drawing
+
+For complex shapes, use the path API:
+
+```cpp
+void DrawCustomShape(IGraphics& g) {
+  g.PathClear();
+  g.PathMoveTo(x1, y1);
+  g.PathLineTo(x2, y2);
+  g.PathCubicBezierTo(c1x, c1y, c2x, c2y, x3, y3);
+  g.PathArc(cx, cy, radius, startAngle, endAngle);
+  g.PathClose();
+  
+  // Fill
+  g.PathFill(IPattern(COLOR_BLUE));
+  
+  // Or stroke
+  // g.PathStroke(IPattern(COLOR_RED), 2.f);
+}
+```
+
+### Gradients and Patterns
+
+```cpp
+void DrawGradient(IGraphics& g) {
+  IRECT bounds = mRECT;
+  
+  // Linear gradient
+  IPattern gradient = IPattern::CreateLinearGradient(
+    bounds.L, bounds.T, bounds.L, bounds.B,
+    {{0.f, COLOR_RED}, {0.5f, COLOR_YELLOW}, {1.f, COLOR_GREEN}}
+  );
+  
+  g.PathRect(bounds);
+  g.PathFill(gradient);
+  
+  // Radial gradient
+  float cx = bounds.MW();
+  float cy = bounds.MH();
+  IPattern radial = IPattern::CreateRadialGradient(
+    cx, cy, 0.f, cx, cy, bounds.W() * 0.5f,
+    {{0.f, COLOR_WHITE}, {1.f, COLOR_BLACK}}
+  );
+}
+```
+
+## Animation
+
+Add smooth animations using the animation system:
+
+```cpp
+class MyAnimatedControl : public IControl {
+public:
+  void OnMouseDown(float x, float y, const IMouseMod& mod) override {
+    // Start animation when clicked
+    SetAnimation([](IControl* pCaller) {
+      auto progress = pCaller->GetAnimationProgress();
+      
+      if (progress > 1.0) {
+        pCaller->OnEndAnimation();  // Cleanup
+        return;
+      }
+      
+      // Update animation state
+      // (will be read in Draw())
+      MyAnimatedControl* pThis = pCaller->As<MyAnimatedControl>();
+      pThis->mAnimValue = static_cast<float>(progress);
+      pCaller->SetDirty(false);
+      
+    }, 500);  // 500ms duration
+  }
+  
+  void Draw(IGraphics& g) override {
+    // Use mAnimValue in rendering
+    float scale = 1.0f + mAnimValue * 0.2f;  // Pulse effect
+    IRECT scaledBounds = mRECT.GetScaledAboutCentre(scale);
+    g.FillRect(COLOR_BLUE, scaledBounds);
+  }
+  
+private:
+  float mAnimValue = 0.f;
+};
+```
+
+## Multi-Touch Support
+
+Handle multiple simultaneous touches:
+
+```cpp
+class MyMultiTouchControl : public IControl {
+public:
+  MyMultiTouchControl(const IRECT& bounds)
+  : IControl(bounds)
+  {
+    SetWantsMultiTouch(true);  // Enable multi-touch
+  }
+  
+  void OnMouseDown(float x, float y, const IMouseMod& mod) override {
+    // mod.touchID identifies which finger/touch this is
+    mTouches[mod.touchID] = {x, y};
+    SetDirty(false);
+  }
+  
+  void OnMouseDrag(float x, float y, float dX, float dY, const IMouseMod& mod) override {
+    mTouches[mod.touchID] = {x, y};
+    SetDirty(false);
+  }
+  
+  void OnMouseUp(float x, float y, const IMouseMod& mod) override {
+    mTouches.erase(mod.touchID);
+    SetDirty(false);
+  }
+  
+  void Draw(IGraphics& g) override {
+    // Draw all active touches
+    for (const auto& [touchID, pos] : mTouches) {
+      g.FillCircle(COLOR_RED, pos.x, pos.y, 20.f);
+    }
+  }
+  
+private:
+  struct TouchPoint { float x, y; };
+  std::unordered_map<int, TouchPoint> mTouches;
+};
+```
+
+## Receiving Data from DSP
+
+For visualization controls that display audio data:
+
+```cpp Plugin.h
+class MyPlugin : public Plugin {
+public:
+  // In ProcessBlock:
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override {
+    // ... process audio ...
+    
+    // Send data to UI control
+    mScopeSender.ProcessBlock(outputs, nFrames, kCtrlTagScope);
+  }
+  
+  void OnIdle() override {
+    mScopeSender.TransmitData(*this);  // Send to UI thread
+  }
+  
+private:
+  ISenderData<1, 512> mScopeSender;  // 1 channel, 512 samples
+};
+```
+
+```cpp MyVisualizerControl.h
+class MyVisualizerControl : public IControl {
+public:
+  void OnMsgFromDelegate(int msgTag, int dataSize, const void* pData) override {
+    if (msgTag == ISenderData<1, 512>::kUpdateMessage) {
+      // Copy audio data
+      ISenderData<1, 512>::FromSenderData msg(dataSize, pData);
+      memcpy(mBuffer, msg.vals, dataSize);
+      SetDirty(false);
+    }
+  }
+  
+  void Draw(IGraphics& g) override {
+    // Draw waveform from mBuffer
+    g.DrawData(COLOR_GREEN, mRECT, mBuffer, 512);
+  }
+  
+private:
+  float mBuffer[512];
+};
+```
+
+<Warning>
+**Thread Safety:** Never call SetDirty(true) from `OnMsgFromDelegate()` as it runs on the audio thread. Always use SetDirty(false) or SetDirty(kNoValIdx).
+</Warning>
+
+## Complete Example: Custom Waveform Selector
+
+Here's a complete custom control:
+
+<CodeGroup>
+```cpp WaveformControl.h
+#pragma once
+#include "IControl.h"
+
+enum class EWaveform { Sine, Triangle, Square, Saw };
+
+class WaveformControl : public IControl {
+public:
+  WaveformControl(const IRECT& bounds, int paramIdx);
+  
+  void Draw(IGraphics& g) override;
+  void OnMouseDown(float x, float y, const IMouseMod& mod) override;
+  void OnMouseOver(float x, float y, const IMouseMod& mod) override;
+  void OnMouseOut() override;
+  
+private:
+  void DrawWaveform(IGraphics& g, EWaveform type, const IRECT& bounds);
+  int GetWaveformAtPoint(float x, float y) const;
+  
+  int mMouseOver = -1;
+  static constexpr int kNumWaveforms = 4;
+};
+```
+
+```cpp WaveformControl.cpp
+#include "WaveformControl.h"
+
+WaveformControl::WaveformControl(const IRECT& bounds, int paramIdx)
+: IControl(bounds, paramIdx) {}
+
+void WaveformControl::Draw(IGraphics& g) {
+  const int selectedIdx = static_cast<int>(GetValue() * (kNumWaveforms - 1));
+  
+  for (int i = 0; i < kNumWaveforms; i++) {
+    IRECT cell = mRECT.GetGridCell(i, 0, kNumWaveforms, 1).GetPadded(-5);
+    
+    // Background
+    IColor bgColor = (i == selectedIdx) ? COLOR_BLUE : COLOR_DARK_GRAY;
+    if (i == mMouseOver)
+      bgColor = bgColor.WithContrast(0.2f);
+    g.FillRoundRect(bgColor, cell, 5.f);
+    
+    // Frame
+    g.DrawRoundRect(COLOR_GRAY, cell, 5.f, nullptr, 1.f);
+    
+    // Waveform
+    DrawWaveform(g, static_cast<EWaveform>(i), cell.GetPadded(-10));
+  }
+}
+
+void WaveformControl::DrawWaveform(IGraphics& g, EWaveform type, const IRECT& bounds) {
+  const int nPoints = 32;
+  float points[nPoints];
+  
+  for (int i = 0; i < nPoints; i++) {
+    float phase = static_cast<float>(i) / nPoints;
+    
+    switch (type) {
+      case EWaveform::Sine:
+        points[i] = 0.5f + 0.4f * std::sin(phase * 2.f * PI);
+        break;
+      case EWaveform::Triangle:
+        points[i] = (phase < 0.5f) ? phase * 2.f : 2.f - phase * 2.f;
+        break;
+      case EWaveform::Square:
+        points[i] = (phase < 0.5f) ? 0.1f : 0.9f;
+        break;
+      case EWaveform::Saw:
+        points[i] = phase;
+        break;
+    }
+  }
+  
+  g.DrawData(COLOR_WHITE, bounds, points, nPoints);
+}
+
+void WaveformControl::OnMouseDown(float x, float y, const IMouseMod& mod) {
+  int waveIdx = GetWaveformAtPoint(x, y);
+  if (waveIdx >= 0) {
+    SetValue(static_cast<double>(waveIdx) / (kNumWaveforms - 1));
+    SetDirty(true);
+  }
+}
+
+void WaveformControl::OnMouseOver(float x, float y, const IMouseMod& mod) {
+  mMouseOver = GetWaveformAtPoint(x, y);
+  IControl::OnMouseOver(x, y, mod);
+  SetDirty(false);
+}
+
+void WaveformControl::OnMouseOut() {
+  mMouseOver = -1;
+  IControl::OnMouseOut();
+  SetDirty(false);
+}
+
+int WaveformControl::GetWaveformAtPoint(float x, float y) const {
+  for (int i = 0; i < kNumWaveforms; i++) {
+    IRECT cell = mRECT.GetGridCell(i, 0, kNumWaveforms, 1);
+    if (cell.Contains(x, y))
+      return i;
+  }
+  return -1;
+}
+```
+</CodeGroup>
+
+## Best Practices
+
+<Tabs>
+  <Tab title="Performance">
+  - Use layers for static content
+  - Avoid expensive operations in Draw()
+  - Only call SetDirty() when necessary
+  - Cache computed values in member variables
+  - Use GetAnimationProgress() for smooth animations
+  </Tab>
+  
+  <Tab title="Thread Safety">
+  - Never allocate in Draw() or ProcessBlock()
+  - Use SetDirty(false) when updating from audio thread
+  - Don't access UI controls from ProcessBlock()
+  - Use ISender to pass data from DSP to UI
+  </Tab>
+  
+  <Tab title="User Experience">
+  - Support double-click for text entry
+  - Implement modifier key combinations (Shift = fine, Ctrl = coarse)
+  - Add tooltips with SetTooltip()
+  - Provide visual feedback for all interactions
+  - Handle edge cases (min/max, wrap-around)
+  </Tab>
+</Tabs>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Controls Library" icon="sliders" href="./controls">
+    Study built-in control implementations
+  </Card>
+  <Card title="Responsive UI" icon="mobile" href="./responsive-ui">
+    Handle resizing in custom controls
+  </Card>
+  <Card title="API Reference" icon="book" href="https://iplug2.github.io/docs">
+    Full IControl API documentation
+  </Card>
+  <Card title="Examples" icon="code" href="https://github.com/iPlug2/iPlug2/tree/master/Examples">
+    Study example projects
+  </Card>
+</CardGroup>

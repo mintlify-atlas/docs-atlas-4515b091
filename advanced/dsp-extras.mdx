@@ -1,0 +1,379 @@
+---
+title: DSP Extras
+description: Built-in DSP utilities for synthesis and effects
+---
+
+iPlug2 includes a collection of optimized DSP building blocks in `IPlug/Extras/`. These utilities provide essential components for audio synthesis and processing.
+
+## Available Components
+
+<CardGroup cols={2}>
+  <Card title="Oscillator" icon="wave-sine">
+    Sine wave oscillators with fast table lookup
+  </Card>
+  
+  <Card title="ADSREnvelope" icon="chart-line">
+    Attack-Decay-Sustain-Release envelopes
+  </Card>
+  
+  <Card title="SVF" icon="filter">
+    State Variable Filter with multiple modes
+  </Card>
+  
+  <Card title="LFO" icon="arrows-spin">
+    Low-frequency oscillator with tempo sync
+  </Card>
+  
+  <Card title="Oversampler" icon="up">
+    HIIR-based oversampling up to 16x
+  </Card>
+  
+  <Card title="Smoothers" icon="wave">
+    Parameter smoothing utilities
+  </Card>
+  
+  <Card title="DCBlocker" icon="ban">
+    DC offset removal filter
+  </Card>
+  
+  <Card title="NoiseGate" icon="door-open">
+    Dynamic noise gate
+  </Card>
+</CardGroup>
+
+## Oscillators
+
+### FastSinOscillator
+
+Fast sine wave oscillator using table lookup based on Miller Puckette's approach from Pure Data:
+
+```cpp title="Using FastSinOscillator"
+#include "Oscillator.h"
+
+class MyVoice : public SynthVoice
+{
+public:
+  void SetSampleRateAndBlockSize(double sampleRate, int blockSize) override
+  {
+    mOSC.SetSampleRate(sampleRate);
+  }
+  
+  void ProcessSamplesAccumulating(sample** inputs, sample** outputs, 
+                                  int nInputs, int nOutputs, 
+                                  int startIdx, int nFrames) override
+  {
+    double freq = 440.0; // A4
+    
+    for(int i = startIdx; i < startIdx + nFrames; i++)
+    {
+      outputs[0][i] += mOSC.Process(freq);
+    }
+  }
+
+private:
+  FastSinOscillator<sample> mOSC;
+};
+```
+
+<Info>
+`FastSinOscillator` uses a 512-sample lookup table with linear interpolation for fast, high-quality sine wave generation.
+</Info>
+
+### SinOscillator
+
+Standard sine oscillator using `std::sin()` - slower but no table memory:
+
+```cpp title="IPlug/Extras/Oscillator.h:66"
+SinOscillator<sample> mOSC;
+mOSC.SetSampleRate(44100.);
+mOSC.SetFreqCPS(440.);
+sample output = mOSC.Process();
+```
+
+## ADSR Envelope
+
+Full-featured ADSR envelope with retriggering and velocity support:
+
+```cpp title="Using ADSREnvelope"
+#include "ADSREnvelope.h"
+
+class MyVoice : public SynthVoice
+{
+public:
+  MyVoice()
+  : mEnv("amp", [this](){ mOSC.Reset(); }) // Reset callback
+  {
+  }
+  
+  void Trigger(double level, bool isRetrigger) override
+  {
+    if(isRetrigger)
+      mEnv.Retrigger(level);
+    else
+      mEnv.Start(level);
+  }
+  
+  void Release() override
+  {
+    mEnv.Release();
+  }
+  
+  bool GetBusy() const override
+  {
+    return mEnv.GetBusy();
+  }
+  
+  void ProcessSamplesAccumulating(sample** inputs, sample** outputs,
+                                  int nInputs, int nOutputs,
+                                  int startIdx, int nFrames) override
+  {
+    for(int i = startIdx; i < startIdx + nFrames; i++)
+    {
+      sample envValue = mEnv.Process(mSustainLevel);
+      outputs[0][i] += mOSC.Process(440.0) * envValue;
+    }
+  }
+  
+  void SetSampleRateAndBlockSize(double sampleRate, int blockSize) override
+  {
+    mOSC.SetSampleRate(sampleRate);
+    mEnv.SetSampleRate(sampleRate);
+    mEnv.SetStageTime(ADSREnvelope<sample>::kAttack, 10.0);  // 10ms
+    mEnv.SetStageTime(ADSREnvelope<sample>::kDecay, 100.0);  // 100ms
+    mEnv.SetStageTime(ADSREnvelope<sample>::kRelease, 500.0); // 500ms
+  }
+
+private:
+  FastSinOscillator<sample> mOSC;
+  ADSREnvelope<sample> mEnv;
+  sample mSustainLevel = 0.7;
+};
+```
+
+### Envelope Features
+
+<Tabs>
+  <Tab title="Retriggering">
+    ```cpp
+    // Smooth retrigger without clicks
+    mEnv.Retrigger(newVelocity);
+    ```
+    Uses a fast 3ms ramp when stealing voices
+  </Tab>
+  
+  <Tab title="Callbacks">
+    ```cpp
+    // Reset oscillator phase when retriggering
+    ADSREnvelope<sample> mEnv("name", [this](){ 
+      mOSC.Reset(); 
+    });
+    ```
+  </Tab>
+  
+  <Tab title="AD Mode">
+    ```cpp
+    // For drums - no sustain stage
+    ADSREnvelope<sample> mEnv("drum", nullptr, false);
+    ```
+  </Tab>
+</Tabs>
+
+## State Variable Filter
+
+Multi-mode filter based on Andy Simper's design:
+
+```cpp title="Using SVF"
+#include "SVF.h"
+
+// Template params: <sample type, num channels>
+SVF<sample, 2> mFilter {SVF<>::kLowPass, 1000.0};
+
+void OnReset() override
+{
+  mFilter.SetSampleRate(GetSampleRate());
+  mFilter.SetFreqCPS(1000.0);
+  mFilter.SetQ(0.707);
+}
+
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  mFilter.ProcessBlock(inputs, outputs, 2, nFrames);
+}
+```
+
+### Filter Modes
+
+```cpp title="IPlug/Extras/SVF.h:32"
+enum EMode
+{
+  kLowPass,
+  kHighPass,
+  kBandPass,
+  kNotch,
+  kPeak,
+  kBell,        // Parametric EQ
+  kLowPassShelf,
+  kHighPassShelf
+};
+```
+
+## LFO
+
+Tempo-syncable LFO with multiple waveforms:
+
+```cpp title="Using LFO"
+#include "LFO.h"
+
+LFO<sample> mLFO;
+sample mLFODepth = 0.5;
+
+void OnReset() override
+{
+  mLFO.SetSampleRate(GetSampleRate());
+  mLFO.SetShape(LFO<>::kSine);
+  mLFO.SetFreqCPS(2.0); // 2 Hz
+  mLFO.SetPolarity(true); // Bipolar (-1 to 1)
+}
+
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  sample lfoBuffer[nFrames];
+  
+  // Process LFO with tempo sync
+  mLFO.ProcessBlock(lfoBuffer, nFrames, 
+                    mTimeInfo.mPPQPos, 
+                    mTimeInfo.mTransportIsRunning, 
+                    mTimeInfo.mTempo);
+  
+  for(int s = 0; s < nFrames; s++)
+  {
+    sample modAmount = lfoBuffer[s] * mLFODepth;
+    // Use modAmount to modulate filter, pitch, etc.
+  }
+}
+```
+
+### LFO Shapes
+
+```cpp title="IPlug/Extras/LFO.h:50"
+enum EShape
+{
+  kTriangle,
+  kSquare,
+  kRampUp,
+  kRampDown,
+  kSine
+};
+```
+
+### Tempo Sync
+
+```cpp
+// Set tempo division
+mLFO.SetQNScalarFromDivision(LFO<>::k8th); // 1/8 note
+mLFO.SetRateMode(true); // Enable sync
+```
+
+## Oversampler
+
+HIIR-based oversampling for nonlinear processing:
+
+```cpp title="Using Oversampler"
+#include "Oversampler.h"
+
+class MyPlugin : public Plugin
+{
+public:
+  MyPlugin(const InstanceInfo& info)
+  : Plugin(info, MakeConfig(kNumParams, kNumPresets))
+  , mOversampler(k4x, true, 2, 2) // 4x, block mode, 2 in, 2 out
+  {
+  }
+  
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+  {
+    // Process with 4x oversampling
+    mOversampler.ProcessBlock(inputs, outputs, nFrames, 2, 2, 
+      [&](sample** osInputs, sample** osOutputs, int osNFrames)
+      {
+        // This lambda runs at 4x sample rate
+        for(int s = 0; s < osNFrames; s++)
+        {
+          for(int c = 0; c < 2; c++)
+          {
+            // Nonlinear processing (distortion, waveshaping, etc.)
+            osOutputs[c][s] = std::tanh(osInputs[c][s] * 10.0);
+          }
+        }
+      });
+  }
+  
+  void OnReset() override
+  {
+    mOversampler.Reset(GetBlockSize());
+  }
+
+private:
+  OverSampler<sample> mOversampler;
+};
+```
+
+<Warning>
+Oversampling multiplies CPU usage. Use only when necessary (e.g., for distortion/saturation that produces aliasing).
+</Warning>
+
+## Parameter Smoothing
+
+Avoid zipper noise with logarithmic parameter smoothing:
+
+```cpp title="Using LogParamSmooth"
+#include "Smoothers.h"
+
+LogParamSmooth<sample> mGainSmoother {5.0}; // 5ms smoothing
+
+void OnReset() override
+{
+  mGainSmoother.SetSmoothTime(5.0, GetSampleRate());
+}
+
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  sample targetGain = GetParam(kParamGain)->Value() / 100.0;
+  
+  for(int s = 0; s < nFrames; s++)
+  {
+    sample smoothedGain = mGainSmoother.Process(targetGain);
+    
+    for(int c = 0; c < 2; c++)
+    {
+      outputs[c][s] = inputs[c][s] * smoothedGain;
+    }
+  }
+}
+```
+
+## DC Blocker
+
+Remove DC offset from audio:
+
+```cpp title="IPlug/Extras/DCBlocker.h:51"
+DCBlocker<sample, 2> mDCBlocker; // 2 channels
+
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  // Process audio...
+  
+  // Remove DC offset
+  mDCBlocker.ProcessBlock(inputs, outputs, 2, nFrames);
+}
+```
+
+## See Also
+
+- [IPlugInstrument Example](@Examples/IPlugInstrument) - Uses LFO, ADSR, smoothers
+- [Synthesis](/synthesis) - Voice management and MidiSynth
+- [Processing Audio](/processing-audio) - ProcessBlock fundamentals
+
+<Tip>
+All DSP utilities are header-only templates, so there's no linking required. Just `#include` and use.
+</Tip>

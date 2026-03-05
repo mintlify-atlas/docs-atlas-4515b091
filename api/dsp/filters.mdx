@@ -1,0 +1,447 @@
+---
+title: "Filters"
+description: "State Variable Filter (SVF) for multi-mode audio filtering"
+---
+
+The filters module provides a high-quality State Variable Filter implementation based on Andy Simper's topology-preserving transform design.
+
+## SVF
+
+Multi-mode state variable filter with 8 filter types. Supports multi-channel processing and smooth coefficient updates.
+
+<Info>
+  Based on Andy Simper's "SVF Linear Trapezoidal Optimised" design. See [Cytomic Technical Papers](http://www.cytomic.com/files/dsp/SvfLinearTrapOptimised2.pdf)
+</Info>
+
+### Template Parameters
+
+<ParamField path="T" type="typename" default="double">
+  Sample type (typically `double` or `float`)
+</ParamField>
+
+<ParamField path="NC" type="int" default="1">
+  Number of channels (max channels the filter can process)
+</ParamField>
+
+### Constructor
+
+```cpp
+SVF(EMode mode = kLowPass, double freqCPS = 1000.)
+```
+
+<ParamField path="mode" type="EMode" default="kLowPass">
+  Filter mode (see [Filter Modes](#filter-modes))
+</ParamField>
+
+<ParamField path="freqCPS" type="double" default="1000.0">
+  Initial cutoff frequency in Hz
+</ParamField>
+
+---
+
+## Filter Modes
+
+### EMode
+
+Enumeration of available filter types:
+
+<CardGroup cols={2}>
+  <Card title="kLowPass" icon="arrow-down-wide-short">
+    Classic low-pass filter, attenuates frequencies above cutoff
+  </Card>
+  <Card title="kHighPass" icon="arrow-up-wide-short">
+    High-pass filter, attenuates frequencies below cutoff
+  </Card>
+  <Card title="kBandPass" icon="wave-pulse">
+    Band-pass filter, passes frequencies near cutoff
+  </Card>
+  <Card title="kNotch" icon="ban">
+    Notch (band-reject) filter, attenuates frequencies near cutoff
+  </Card>
+  <Card title="kPeak" icon="mountain">
+    Peak filter with adjustable Q
+  </Card>
+  <Card title="kBell" icon="bell">
+    Bell/parametric EQ with gain control
+  </Card>
+  <Card title="kLowPassShelf" icon="shapes">
+    Low-pass shelving filter with gain
+  </Card>
+  <Card title="kHighPassShelf" icon="square-up-right">
+    High-pass shelving filter with gain
+  </Card>
+</CardGroup>
+
+### Mode String List
+
+For UI implementations, use the predefined string list:
+
+```cpp
+#define SVFMODES_VALIST "LowPass", "HighPass", "BandPass", "Notch", "Peak", "Bell", "LowPassShelf", "HighPassShelf"
+```
+
+---
+
+## Methods
+
+### SetFreqCPS
+
+```cpp
+void SetFreqCPS(double freqCPS)
+```
+
+Set the filter cutoff frequency.
+
+<ParamField path="freqCPS" type="double">
+  Frequency in Hz (clamped to 10.0 - 20000.0 Hz)
+</ParamField>
+
+### SetQ
+
+```cpp
+void SetQ(double Q)
+```
+
+Set the filter resonance/Q factor.
+
+<ParamField path="Q" type="double">
+  Q factor (clamped to 0.1 - 100.0). Higher values = more resonance.
+</ParamField>
+
+### SetGain
+
+```cpp
+void SetGain(double gainDB)
+```
+
+Set the gain for shelving and bell filters.
+
+<ParamField path="gainDB" type="double">
+  Gain in decibels (clamped to -36.0 to +36.0 dB)
+</ParamField>
+
+<Note>
+  Gain parameter only affects `kBell`, `kLowPassShelf`, and `kHighPassShelf` modes.
+</Note>
+
+### SetMode
+
+```cpp
+void SetMode(EMode mode)
+```
+
+Change the filter mode.
+
+<ParamField path="mode" type="EMode">
+  New filter mode
+</ParamField>
+
+### SetSampleRate
+
+```cpp
+void SetSampleRate(double sampleRate)
+```
+
+Set the sample rate for processing.
+
+<ParamField path="sampleRate" type="double">
+  Sample rate in samples per second
+</ParamField>
+
+### ProcessBlock
+
+```cpp
+void ProcessBlock(T** inputs, T** outputs, int nChans, int nFrames)
+```
+
+Process a block of audio samples.
+
+<ParamField path="inputs" type="T**">
+  Two-dimensional array of input buffers (non-interleaved)
+</ParamField>
+
+<ParamField path="outputs" type="T**">
+  Two-dimensional array of output buffers (non-interleaved)
+</ParamField>
+
+<ParamField path="nChans" type="int">
+  Number of channels to process (must be ≤ NC template parameter)
+</ParamField>
+
+<ParamField path="nFrames" type="int">
+  Number of samples per channel to process
+</ParamField>
+
+### Reset
+
+```cpp
+void Reset()
+```
+
+Clear the filter's internal state (delay elements).
+
+### PlotResponse (static)
+
+```cpp
+static double PlotResponse(double freqCPS, double Q, EMode mode, 
+                          double x, double gain = 0., 
+                          double minHz = 1., double maxHz = 20000)
+```
+
+Calculate the magnitude response at a given frequency for plotting filter curves.
+
+<ParamField path="freqCPS" type="double">
+  Filter cutoff frequency in Hz
+</ParamField>
+
+<ParamField path="Q" type="double">
+  Filter Q factor
+</ParamField>
+
+<ParamField path="mode" type="EMode">
+  Filter mode
+</ParamField>
+
+<ParamField path="x" type="double">
+  Normalized frequency position (0.0 to 1.0)
+</ParamField>
+
+<ParamField path="gain" type="double" default="0.0">
+  Gain in dB (for shelving/bell filters)
+</ParamField>
+
+<ParamField path="minHz" type="double" default="1.0">
+  Minimum frequency for x=0.0
+</ParamField>
+
+<ParamField path="maxHz" type="double" default="20000.0">
+  Maximum frequency for x=1.0
+</ParamField>
+
+**Returns:** Magnitude response in dB
+
+---
+
+## Usage Examples
+
+### Basic Low-Pass Filter
+
+```cpp
+// Create stereo low-pass filter
+SVF<double, 2> filter(SVF<double, 2>::kLowPass, 1000.0);
+filter.SetSampleRate(44100.0);
+filter.SetQ(0.707); // Butterworth response
+
+// Process audio block
+void ProcessBlock(double** inputs, double** outputs, int nFrames) {
+  filter.ProcessBlock(inputs, outputs, 2, nFrames);
+}
+```
+
+### Parameter Modulation
+
+```cpp
+// Sweeping filter with LFO
+SVF<float, 1> filter(SVF<float, 1>::kLowPass, 500.0);
+LFO<float> lfo;
+
+filter.SetSampleRate(44100.0);
+filter.SetQ(2.0); // Resonant filter
+lfo.SetSampleRate(44100.0);
+lfo.SetFreqCPS(0.5); // 0.5 Hz LFO
+
+void ProcessBlock(float** inputs, float** outputs, int nFrames) {
+  for (int i = 0; i < nFrames; i++) {
+    // Modulate filter frequency
+    float lfoValue = lfo.Process();
+    float freq = 500.0 + lfoValue * 2000.0; // 500-2500 Hz sweep
+    filter.SetFreqCPS(freq);
+    
+    // Process per-sample for smooth modulation
+    float in[1] = { inputs[0][i] };
+    float out[1];
+    float* inPtr[1] = { in };
+    float* outPtr[1] = { out };
+    
+    filter.ProcessBlock(inPtr, outPtr, 1, 1);
+    outputs[0][i] = out[0];
+  }
+}
+```
+
+<Warning>
+  Setting parameters per-sample can be expensive. For performance-critical code, update parameters less frequently or use smoothing.
+</Warning>
+
+### Multi-Mode Filter Plugin
+
+```cpp
+class FilterPlugin : public Plugin {
+private:
+  SVF<double, 2> mFilter;
+  
+public:
+  enum EParams {
+    kMode,
+    kFreq,
+    kQ,
+    kGain,
+    kNumParams
+  };
+  
+  FilterPlugin(const InstanceInfo& info) : Plugin(info, MakeConfig(kNumParams, 0)) {
+    GetParam(kMode)->InitEnum("Mode", SVF<double>::kLowPass, SVF<double>::kNumModes, "", 
+                             IParam::kFlagsNone, "", SVFMODES_VALIST);
+    GetParam(kFreq)->InitDouble("Frequency", 1000.0, 10.0, 20000.0, 0.01, "Hz");
+    GetParam(kFreq)->SetShape(2.0); // Logarithmic
+    GetParam(kQ)->InitDouble("Q", 0.707, 0.1, 10.0, 0.01);
+    GetParam(kGain)->InitDouble("Gain", 0.0, -36.0, 36.0, 0.1, "dB");
+    
+    mFilter.SetSampleRate(GetSampleRate());
+  }
+  
+  void OnParamChange(int paramIdx) override {
+    switch (paramIdx) {
+      case kMode:
+        mFilter.SetMode((SVF<double>::EMode) GetParam(kMode)->Int());
+        break;
+      case kFreq:
+        mFilter.SetFreqCPS(GetParam(kFreq)->Value());
+        break;
+      case kQ:
+        mFilter.SetQ(GetParam(kQ)->Value());
+        break;
+      case kGain:
+        mFilter.SetGain(GetParam(kGain)->Value());
+        break;
+    }
+  }
+  
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override {
+    mFilter.ProcessBlock(inputs, outputs, 2, nFrames);
+  }
+  
+  void OnReset() override {
+    mFilter.SetSampleRate(GetSampleRate());
+    mFilter.Reset();
+  }
+};
+```
+
+### Plotting Filter Response
+
+```cpp
+// Draw filter frequency response curve
+void DrawFilterCurve(IGraphics* pGraphics, IRECT rect) {
+  const int numPoints = 200;
+  std::vector<float> points;
+  
+  for (int i = 0; i < numPoints; i++) {
+    float x = (float)i / (numPoints - 1);
+    
+    double magnitude = SVF<double>::PlotResponse(
+      1000.0,  // 1kHz cutoff
+      2.0,     // Q=2
+      SVF<double>::kLowPass,
+      x,       // 0.0 to 1.0
+      0.0,     // No gain
+      20.0,    // 20Hz minimum
+      20000.0  // 20kHz maximum
+    );
+    
+    // Convert dB to pixel height
+    float y = rect.B - ((magnitude + 60.0) / 60.0) * rect.H();
+    points.push_back(y);
+  }
+  
+  // Draw curve...
+}
+```
+
+---
+
+## Implementation Details
+
+### Algorithm
+
+The SVF uses a topology-preserving transform (TPT) structure:
+
+- **Linear trapezoidal integration** for stability
+- **Zero-delay feedback** topology
+- **Optimized coefficient calculations** for efficiency
+
+### Coefficient Updates
+
+The filter uses a lazy coefficient update strategy:
+
+1. Parameters are stored in `mNewState`
+2. On `ProcessBlock()`, if `mState != mNewState`, coefficients are recalculated
+3. This allows parameter changes without recalculating every time a setter is called
+
+### State Variables
+
+The filter maintains per-channel state:
+
+- `mIc1eq[NC]` - First integrator state
+- `mIc2eq[NC]` - Second integrator state
+- `mV1[NC]`, `mV2[NC]`, `mV3[NC]` - Intermediate values
+
+### Performance Characteristics
+
+<CardGroup cols={2}>
+  <Card title="Per-Sample Cost" icon="gauge">
+    ~10-15 operations per sample per channel
+  </Card>
+  <Card title="Memory" icon="memory">
+    5 doubles per channel + shared coefficients
+  </Card>
+  <Card title="Stability" icon="shield-check">
+    Numerically stable at all frequencies
+  </Card>
+  <Card title="Aliasing" icon="wave-square">
+    No anti-aliasing - use oversampling for high-resonance settings
+  </Card>
+</CardGroup>
+
+---
+
+## Design Considerations
+
+### Q Factor Ranges
+
+- **Q < 0.707**: Gentle slope, no resonance peak
+- **Q = 0.707**: Butterworth response (maximally flat)
+- **Q > 0.707**: Resonance peak at cutoff frequency
+- **Q > 10**: Extreme resonance, can self-oscillate
+
+### Frequency Ranges
+
+The filter clamps frequency to 10-20000 Hz:
+
+- **Below 10 Hz**: Coefficient accuracy issues
+- **Above 20 kHz**: Approaching Nyquist, aliasing artifacts
+
+### Oversampling Recommendation
+
+For high-resonance or modulated filters, consider using with the [OverSampler](/api/dsp/effects#oversampler):
+
+```cpp
+OverSampler<double> oversampler(k2x, true, 2, 2);
+
+oversampler.ProcessBlock(inputs, outputs, nFrames, 2, 2, 
+  [&](double** ins, double** outs, int nFrames) {
+    mFilter.ProcessBlock(ins, outs, 2, nFrames);
+  });
+```
+
+---
+
+## Code Location
+
+Source: `IPlug/Extras/SVF.h:1`
+
+## See Also
+
+- [Oscillators](/api/dsp/oscillators) - Waveform generators
+- [Effects](/api/dsp/effects) - Oversampling and other effects
+- [Envelopes](/api/dsp/envelopes) - For filter modulation

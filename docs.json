@@ -1,122 +1,213 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "iPlug2",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#6B46C1",
+    "light": "#9F7AEA",
+    "dark": "#553C9A"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/iPlug2/iPlug2"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/iPlug2/iPlug2"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Getting Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/architecture",
+              "concepts/plugin-formats",
+              "concepts/parameters",
+              "concepts/audio-processing",
+              "concepts/project-structure"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "IPlug Core",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "iplug/overview",
+              "iplug/plugin-base",
+              "iplug/processor",
+              "iplug/parameters",
+              "iplug/presets",
+              "iplug/midi"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "IGraphics",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "igraphics/overview",
+              "igraphics/getting-started",
+              "igraphics/drawing-backends",
+              "igraphics/controls",
+              "igraphics/custom-controls",
+              "igraphics/responsive-ui"
+            ]
+          },
+          {
+            "group": "Alternative UI Frameworks",
+            "pages": [
+              "ui-frameworks/overview",
+              "ui-frameworks/swiftui",
+              "ui-frameworks/cocoa",
+              "ui-frameworks/webview",
+              "ui-frameworks/svelte"
+            ]
+          },
+          {
+            "group": "Building & Deployment",
+            "pages": [
+              "building/overview",
+              "building/windows",
+              "building/macos",
+              "building/ios",
+              "building/web",
+              "building/cmake"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/creating-plugins",
+              "guides/audio-effect",
+              "guides/instrument",
+              "guides/midi-effect",
+              "guides/sidechain",
+              "guides/surround",
+              "guides/reaper-extensions",
+              "guides/web-audio-modules"
+            ]
+          },
+          {
+            "group": "Advanced Topics",
+            "pages": [
+              "advanced/state-management",
+              "advanced/dsp-extras",
+              "advanced/multibus",
+              "advanced/mpe",
+              "advanced/visualization",
+              "advanced/threading",
+              "advanced/debugging"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Core Classes",
             "pages": [
-              "api-reference/introduction"
+              "api/iplug-plugin-base",
+              "api/iplug-processor",
+              "api/iplug-parameter",
+              "api/iplug-midi"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "IGraphics Classes",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/igraphics",
+              "api/icontrol",
+              "api/igraphics-structs"
+            ]
+          },
+          {
+            "group": "Controls Library",
+            "pages": [
+              "api/controls/overview",
+              "api/controls/knobs-sliders",
+              "api/controls/buttons-switches",
+              "api/controls/displays",
+              "api/controls/menus",
+              "api/controls/special"
+            ]
+          },
+          {
+            "group": "DSP Utilities",
+            "pages": [
+              "api/dsp/oscillators",
+              "api/dsp/envelopes",
+              "api/dsp/filters",
+              "api/dsp/effects"
+            ]
+          },
+          {
+            "group": "Platform APIs",
+            "pages": [
+              "api/platforms/vst3",
+              "api/platforms/auv2",
+              "api/platforms/auv3",
+              "api/platforms/aax",
+              "api/platforms/clap",
+              "api/platforms/wam",
+              "api/platforms/standalone"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Examples",
+        "groups": [
+          {
+            "group": "Template Projects",
+            "pages": [
+              "examples/overview",
+              "examples/iplug-effect",
+              "examples/iplug-instrument",
+              "examples/iplug-controls"
+            ]
+          },
+          {
+            "group": "Specialized Examples",
+            "pages": [
+              "examples/midi-effect",
+              "examples/sidechain",
+              "examples/surround",
+              "examples/drum-synth",
+              "examples/convo-engine",
+              "examples/visualizer"
+            ]
+          },
+          {
+            "group": "UI Examples",
+            "pages": [
+              "examples/responsive-ui",
+              "examples/swiftui",
+              "examples/cocoa-ui",
+              "examples/web-ui",
+              "examples/svelte-ui",
+              "examples/p5js"
+            ]
+          },
+          {
+            "group": "Reaper Integration",
+            "pages": [
+              "examples/reaper-extension",
+              "examples/reaper-plugin"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

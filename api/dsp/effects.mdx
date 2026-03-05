@@ -1,0 +1,793 @@
+---
+title: "Effects"
+description: "DSP effects and utilities including LFO, oversampling, smoothing, and convolution"
+---
+
+The effects module provides various DSP utilities for modulation, oversampling, parameter smoothing, and convolution reverb.
+
+## LFO
+
+Low Frequency Oscillator with tempo synchronization and multiple waveform shapes.
+
+### Template Parameters
+
+<ParamField path="T" type="typename" default="double">
+  Sample type (typically `double` or `float`)
+</ParamField>
+
+### Constructor
+
+```cpp
+LFO()
+```
+
+Inherits from `IOscillator<T>`. Use inherited methods `SetFreqCPS()` and `SetSampleRate()`.
+
+---
+
+## LFO Shapes
+
+### EShape
+
+<CardGroup cols={2}>
+  <Card title="kTriangle" icon="triangle">
+    Triangle wave - smooth linear rise and fall
+  </Card>
+  <Card title="kSquare" icon="square">
+    Square wave - instant transitions
+  </Card>
+  <Card title="kRampUp" icon="arrow-trend-up">
+    Ramp up - linear rise from 0 to 1
+  </Card>
+  <Card title="kRampDown" icon="arrow-trend-down">
+    Ramp down - linear fall from 1 to 0
+  </Card>
+  <Card title="kSine" icon="wave-sine">
+    Sine wave - smooth harmonic oscillation
+  </Card>
+</CardGroup>
+
+### Shape String List
+
+```cpp
+#define LFO_SHAPE_VALIST "Triangle", "Square", "Ramp Up", "Ramp Down", "Sine"
+```
+
+---
+
+## LFO Tempo Division
+
+### ETempoDivison
+
+Musical time divisions for tempo sync:
+
+<CardGroup cols={3}>
+  <Card title="k64th">
+    1/64 note
+  </Card>
+  <Card title="k32nd">
+    1/32 note
+  </Card>
+  <Card title="k16thT">
+    1/16 triplet
+  </Card>
+  <Card title="k16th">
+    1/16 note
+  </Card>
+  <Card title="k16thD">
+    Dotted 1/16
+  </Card>
+  <Card title="k8thT">
+    1/8 triplet
+  </Card>
+  <Card title="k8th">
+    1/8 note
+  </Card>
+  <Card title="k8thD">
+    Dotted 1/8
+  </Card>
+  <Card title="k4th">
+    1/4 note
+  </Card>
+  <Card title="k4thD">
+    Dotted 1/4
+  </Card>
+  <Card title="k2th">
+    1/2 note
+  </Card>
+  <Card title="k1">
+    1 bar (4/4)
+  </Card>
+  <Card title="k2">
+    2 bars
+  </Card>
+  <Card title="k4">
+    4 bars
+  </Card>
+  <Card title="k8">
+    8 bars
+  </Card>
+</CardGroup>
+
+### Tempo Division String List
+
+```cpp
+#define LFO_TEMPODIV_VALIST "1/64", "1/32", "1/16T", "1/16", "1/16D", "1/8T", "1/8", "1/8D", "1/4", "1/4D", "1/2", "1/1", "2/1", "4/1", "8/1"
+```
+
+---
+
+## LFO Methods
+
+### Process
+
+```cpp
+inline T Process(double freqHz) override
+```
+
+Generate the next LFO sample with per-sample frequency modulation.
+
+<ParamField path="freqHz" type="double">
+  Frequency in Hz
+</ParamField>
+
+**Returns:** LFO output value
+
+### ProcessBlock
+
+```cpp
+void ProcessBlock(T* pOutput, int nFrames, 
+                 double qnPos = 0., 
+                 bool transportIsRunning = false, 
+                 double tempo = 120.)
+```
+
+Process a block of samples with optional tempo sync.
+
+<ParamField path="pOutput" type="T*">
+  Output buffer to fill
+</ParamField>
+
+<ParamField path="nFrames" type="int">
+  Number of samples to generate
+</ParamField>
+
+<ParamField path="qnPos" type="double" default="0.0">
+  Current position in quarter notes from the DAW
+</ParamField>
+
+<ParamField path="transportIsRunning" type="bool" default="false">
+  Whether the DAW transport is playing
+</ParamField>
+
+<ParamField path="tempo" type="double" default="120.0">
+  Current tempo in BPM
+</ParamField>
+
+### SetShape
+
+```cpp
+void SetShape(int lfoShape)
+```
+
+Set the LFO waveform shape.
+
+<ParamField path="lfoShape" type="int">
+  Shape index (see EShape)
+</ParamField>
+
+### SetPolarity
+
+```cpp
+void SetPolarity(bool bipolar)
+```
+
+Set output range.
+
+<ParamField path="bipolar" type="bool">
+  If `true`, output is -1.0 to 1.0. If `false`, output is 0.0 to 1.0.
+</ParamField>
+
+### SetScalar
+
+```cpp
+void SetScalar(T scalar)
+```
+
+Set amplitude scaling factor.
+
+<ParamField path="scalar" type="T">
+  Multiplier for output values
+</ParamField>
+
+### SetQNScalarFromDivision
+
+```cpp
+void SetQNScalarFromDivision(int division)
+```
+
+Set tempo division for sync mode.
+
+<ParamField path="division" type="int">
+  Division index (see ETempoDivison)
+</ParamField>
+
+### SetRateMode
+
+```cpp
+void SetRateMode(bool sync)
+```
+
+Switch between free-running and tempo-synced modes.
+
+<ParamField path="sync" type="bool">
+  If `true`, use tempo sync. If `false`, use Hz frequency.
+</ParamField>
+
+### GetQNScalar (static)
+
+```cpp
+static T GetQNScalar(ETempoDivison division)
+```
+
+Get the scalar for a tempo division.
+
+**Returns:** Multiplication factor for quarter note position
+
+### GetQNDisplay (static)
+
+```cpp
+static const char* GetQNDisplay(ETempoDivison division)
+```
+
+Get display string for a tempo division.
+
+**Returns:** String like "1/4" or "1/8D"
+
+---
+
+## OverSampler
+
+High-quality oversampling processor using HIIR (Highly Interpolated IIR) filters.
+
+### Template Parameters
+
+<ParamField path="T" type="typename" default="double">
+  Sample type
+</ParamField>
+
+### Constructor
+
+```cpp
+OverSampler(EFactor factor = kNone, 
+           bool blockProcessing = true,
+           int nInChannels = 1, 
+           int nOutChannels = 1)
+```
+
+<ParamField path="factor" type="EFactor" default="kNone">
+  Oversampling factor: `kNone`, `k2x`, `k4x`, `k8x`, or `k16x`
+</ParamField>
+
+<ParamField path="blockProcessing" type="bool" default="true">
+  If `true`, process blocks. If `false`, process per-sample.
+</ParamField>
+
+<ParamField path="nInChannels" type="int" default="1">
+  Number of input channels
+</ParamField>
+
+<ParamField path="nOutChannels" type="int" default="1">
+  Number of output channels
+</ParamField>
+
+### Oversampling Factors
+
+```cpp
+enum EFactor {
+  kNone = 0,  // No oversampling (1x)
+  k2x,        // 2x oversampling
+  k4x,        // 4x oversampling
+  k8x,        // 8x oversampling
+  k16x        // 16x oversampling
+};
+```
+
+### Factor String List
+
+```cpp
+#define OVERSAMPLING_FACTORS_VA_LIST "None", "2x", "4x", "8x", "16x"
+```
+
+---
+
+## OverSampler Methods
+
+### ProcessBlock
+
+```cpp
+void ProcessBlock(T** inputs, T** outputs, int nFrames, 
+                 int nInChans, int nOutChans, 
+                 BlockProcessFunc func)
+```
+
+Oversample a block of audio with a processing function.
+
+<ParamField path="inputs" type="T**">
+  Input buffers (non-interleaved)
+</ParamField>
+
+<ParamField path="outputs" type="T**">
+  Output buffers (non-interleaved)
+</ParamField>
+
+<ParamField path="nFrames" type="int">
+  Number of samples per channel at base sample rate
+</ParamField>
+
+<ParamField path="nInChans" type="int">
+  Number of input channels to process
+</ParamField>
+
+<ParamField path="nOutChans" type="int">
+  Number of output channels to process
+</ParamField>
+
+<ParamField path="func" type="BlockProcessFunc">
+  Function to process audio at higher sample rate: `std::function<void(T**, T**, int)>`
+</ParamField>
+
+<Warning>
+  Don't capture variables by reference in the lambda if they could cause allocations. `std::function` can malloc if captures are too large.
+</Warning>
+
+### Process
+
+```cpp
+T Process(T input, std::function<T(T)> func)
+```
+
+Oversample a single sample with a processing function.
+
+<ParamField path="input" type="T">
+  Input sample
+</ParamField>
+
+<ParamField path="func" type="std::function<T(T)>">
+  Function to process the oversampled audio
+</ParamField>
+
+**Returns:** Processed and downsampled output
+
+### ProcessGen
+
+```cpp
+T ProcessGen(std::function<T()> genFunc)
+```
+
+Oversample a synthesis function (no input).
+
+<ParamField path="genFunc" type="std::function<T()>">
+  Function that generates audio samples
+</ParamField>
+
+**Returns:** Downsampled output
+
+### SetOverSampling
+
+```cpp
+void SetOverSampling(EFactor factor)
+```
+
+Change the oversampling factor.
+
+<ParamField path="factor" type="EFactor">
+  New oversampling factor
+</ParamField>
+
+### Reset
+
+```cpp
+void Reset(int blockSize = DEFAULT_BLOCK_SIZE)
+```
+
+Reset internal buffers and clear filter state.
+
+<ParamField path="blockSize" type="int" default="DEFAULT_BLOCK_SIZE">
+  Maximum block size to support
+</ParamField>
+
+### GetRate
+
+```cpp
+int GetRate() const
+```
+
+**Returns:** Current oversampling rate (1, 2, 4, 8, or 16)
+
+---
+
+## Parameter Smoothers
+
+Classes for smoothing parameter changes to avoid discontinuities.
+
+### LogParamSmooth
+
+Logarithmic parameter smoother using a one-pole IIR filter.
+
+#### Template Parameters
+
+<ParamField path="T" type="typename">
+  Sample type
+</ParamField>
+
+<ParamField path="NC" type="int" default="1">
+  Number of channels
+</ParamField>
+
+#### Constructor
+
+```cpp
+LogParamSmooth(double timeMs = 5., T initialValue = 0.)
+```
+
+<ParamField path="timeMs" type="double" default="5.0">
+  Smoothing time constant in milliseconds
+</ParamField>
+
+<ParamField path="initialValue" type="T" default="0.0">
+  Initial output value
+</ParamField>
+
+#### Methods
+
+##### Process
+
+```cpp
+inline T Process(T input)
+```
+
+Smooth a single value (only works for NC=1).
+
+<ParamField path="input" type="T">
+  Target value
+</ParamField>
+
+**Returns:** Smoothed output
+
+##### ProcessBlock
+
+```cpp
+void ProcessBlock(T inputs[NC], T** outputs, int nFrames, int channelOffset = 0)
+```
+
+Smooth multiple channels over a block.
+
+##### SetValue
+
+```cpp
+inline void SetValue(T value)
+```
+
+Instantly set the output value (all channels).
+
+##### SetSmoothTime
+
+```cpp
+void SetSmoothTime(double timeMs, double sampleRate)
+```
+
+Change the smoothing time constant.
+
+### SmoothedGain
+
+Convenience class for smoothing gain values.
+
+#### Template Parameters
+
+<ParamField path="T" type="typename">
+  Sample type
+</ParamField>
+
+#### Constructor
+
+```cpp
+SmoothedGain(double smoothingTime = 5.0)
+```
+
+<ParamField path="smoothingTime" type="double" default="5.0">
+  Smoothing time in milliseconds
+</ParamField>
+
+#### Methods
+
+##### ProcessBlock
+
+```cpp
+void ProcessBlock(T** inputs, T** outputs, int nChans, int nFrames, double gainValue)
+```
+
+Apply smoothed gain to audio.
+
+<ParamField path="inputs" type="T**">
+  Input buffers
+</ParamField>
+
+<ParamField path="outputs" type="T**">
+  Output buffers
+</ParamField>
+
+<ParamField path="nChans" type="int">
+  Number of channels
+</ParamField>
+
+<ParamField path="nFrames" type="int">
+  Number of samples
+</ParamField>
+
+<ParamField path="gainValue" type="double">
+  Target gain value (linear, not dB)
+</ParamField>
+
+---
+
+## Convolution Engine
+
+Fast convolution for reverb and impulse response processing.
+
+### WDL_ImpulseBuffer
+
+Container for impulse response data.
+
+#### Methods
+
+##### GetLength
+
+```cpp
+int GetLength()
+```
+
+**Returns:** Length of impulse in samples
+
+##### SetLength
+
+```cpp
+int SetLength(int samples)
+```
+
+Resize/clear all channels.
+
+**Returns:** Actual size set (0 if error)
+
+##### SetNumChannels
+
+```cpp
+void SetNumChannels(int usench, bool duplicateExisting = true)
+```
+
+Set number of channels.
+
+##### GetNumChannels
+
+```cpp
+int GetNumChannels()
+```
+
+**Returns:** Number of channels
+
+#### Members
+
+<ParamField path="samplerate" type="double">
+  Sample rate of the impulse
+</ParamField>
+
+<ParamField path="impulses" type="struct">
+  Container with impulse buffers. Access via `impulses[channel]`.
+</ParamField>
+
+### WDL_ConvolutionEngine
+
+High-performance convolution processor.
+
+#### Methods
+
+##### SetImpulse
+
+```cpp
+int SetImpulse(WDL_ImpulseBuffer* impulse, 
+              int fft_size = -1,
+              int impulse_sample_offset = 0,
+              int max_imp_size = 0,
+              bool forceBrute = false)
+```
+
+Load an impulse response.
+
+<ParamField path="impulse" type="WDL_ImpulseBuffer*">
+  Impulse buffer to use
+</ParamField>
+
+<ParamField path="fft_size" type="int" default="-1">
+  FFT size (-1 for auto)
+</ParamField>
+
+<ParamField path="impulse_sample_offset" type="int" default="0">
+  Offset into impulse to start
+</ParamField>
+
+<ParamField path="max_imp_size" type="int" default="0">
+  Maximum impulse size to use (0 = all)
+</ParamField>
+
+<ParamField path="forceBrute" type="bool" default="false">
+  Force brute-force convolution (for small impulses)
+</ParamField>
+
+**Returns:** 0 on success
+
+##### GetLatency
+
+```cpp
+int GetLatency()
+```
+
+**Returns:** Latency in samples (FFT size / 2)
+
+##### Reset
+
+```cpp
+void Reset()
+```
+
+Clear internal state.
+
+##### Add
+
+```cpp
+void Add(WDL_FFT_REAL** bufs, int len, int nch)
+```
+
+Add input samples for processing.
+
+##### Avail
+
+```cpp
+int Avail(int wantSamples)
+```
+
+Check how many samples are available.
+
+**Returns:** Number of samples ready
+
+##### Get
+
+```cpp
+WDL_FFT_REAL** Get()
+```
+
+**Returns:** Pointer to output buffers
+
+##### Advance
+
+```cpp
+void Advance(int len)
+```
+
+Consume output samples.
+
+---
+
+## Usage Examples
+
+### LFO with Tempo Sync
+
+```cpp
+LFO<double> lfo;
+lfo.SetSampleRate(44100.0);
+lfo.SetShape(LFO<double>::kSine);
+lfo.SetPolarity(true); // Bipolar
+lfo.SetQNScalarFromDivision(LFO<double>::k4th); // 1/4 notes
+lfo.SetRateMode(true); // Tempo sync on
+
+void ProcessBlock(double** inputs, double** outputs, int nFrames,
+                 double qnPos, bool isPlaying, double tempo) {
+  double lfoOut[512];
+  lfo.ProcessBlock(lfoOut, nFrames, qnPos, isPlaying, tempo);
+  
+  for (int i = 0; i < nFrames; i++) {
+    double modAmount = lfoOut[i] * 500.0; // ±500 Hz
+    filter.SetFreqCPS(1000.0 + modAmount);
+    // ... process audio
+  }
+}
+```
+
+### Oversampled Distortion
+
+```cpp
+OverSampler<double> oversampler(k4x, true, 2, 2);
+
+void ProcessBlock(double** inputs, double** outputs, int nFrames) {
+  oversampler.ProcessBlock(inputs, outputs, nFrames, 2, 2,
+    [&](double** ins, double** outs, int frames) {
+      for (int c = 0; c < 2; c++) {
+        for (int i = 0; i < frames; i++) {
+          // Nonlinear processing at 4x sample rate
+          outs[c][i] = std::tanh(ins[c][i] * 5.0);
+        }
+      }
+    });
+}
+```
+
+### Parameter Smoothing
+
+```cpp
+LogParamSmooth<double, 1> freqSmoother(10.0); // 10ms smoothing
+freqSmoother.SetSmoothTime(10.0, 44100.0);
+
+void OnParamChange(int paramIdx) {
+  // Don't smooth here, just get the value
+}
+
+void ProcessBlock(double** inputs, double** outputs, int nFrames) {
+  double targetFreq = GetParam(kFreq)->Value();
+  
+  for (int i = 0; i < nFrames; i++) {
+    double smoothedFreq = freqSmoother.Process(targetFreq);
+    filter.SetFreqCPS(smoothedFreq);
+    // ... process
+  }
+}
+```
+
+### Convolution Reverb
+
+```cpp
+WDL_ImpulseBuffer impulse;
+WDL_ConvolutionEngine_Div convolver;
+
+void LoadIR(const char* filename) {
+  // Load impulse response into impulse buffer
+  // ... (load audio file into impulse.impulses[0])
+  
+  impulse.SetLength(irLength);
+  impulse.SetNumChannels(2);
+  impulse.samplerate = 44100.0;
+  
+  convolver.SetImpulse(&impulse, 8192, 0, 0, 0, 2048);
+}
+
+void ProcessBlock(WDL_FFT_REAL** inputs, WDL_FFT_REAL** outputs, 
+                 int nFrames, int nChans) {
+  convolver.Add(inputs, nFrames, nChans);
+  
+  if (convolver.Avail(nFrames) >= nFrames) {
+    WDL_FFT_REAL** wetSignal = convolver.Get();
+    
+    // Mix wet and dry
+    for (int c = 0; c < nChans; c++) {
+      for (int i = 0; i < nFrames; i++) {
+        outputs[c][i] = inputs[c][i] * 0.7 + wetSignal[c][i] * 0.3;
+      }
+    }
+    
+    convolver.Advance(nFrames);
+  }
+}
+```
+
+---
+
+## Code Locations
+
+- LFO: `IPlug/Extras/LFO.h:1`
+- OverSampler: `IPlug/Extras/Oversampler.h:1`
+- Smoothers: `IPlug/Extras/Smoothers.h:1`
+- Convolution: `WDL/convoengine.h:1`
+
+## See Also
+
+- [Oscillators](/api/dsp/oscillators) - Waveform generators
+- [Filters](/api/dsp/filters) - Audio filtering
+- [Envelopes](/api/dsp/envelopes) - ADSR envelopes

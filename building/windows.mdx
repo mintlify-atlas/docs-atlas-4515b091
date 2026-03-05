@@ -1,0 +1,423 @@
+---
+title: 'Building for Windows'
+description: 'Build iPlug2 audio plugins for Windows using Visual Studio'
+---
+
+iPlug2 supports building Windows audio plugins using Visual Studio 2019 or 2022, targeting both x64 and ARM64EC architectures.
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install Visual Studio 2019 or 2022">
+    Download from [visualstudio.microsoft.com](https://visualstudio.microsoft.com/downloads/)
+    
+    Required workload:
+    - **Desktop development with C++**
+  </Step>
+  
+  <Step title="Install ARM64EC build tools (optional)">
+    For ARM64 Windows support:
+    
+    1. Open **Visual Studio Installer**
+    2. Click **Modify** on your installation
+    3. Go to **Individual Components**
+    4. Search for "ARM64EC" and install:
+       - **MSVC v143 - VS 2022 C++ ARM64EC build tools (Latest)**
+  </Step>
+  
+  <Step title="Download SDKs (optional)">
+    If building VST3, AAX, or other formats:
+    
+    ```bash
+    cd iPlug2\Dependencies
+    download-iplug-sdks.sh  # Requires Git Bash or WSL
+    ```
+  </Step>
+</Steps>
+
+## Supported Architectures
+
+<CardGroup cols={2}>
+  <Card title="x64" icon="microchip">
+    Standard 64-bit Intel/AMD processors
+    
+    **Default architecture** for Windows plugins
+  </Card>
+  <Card title="ARM64EC" icon="microchip">
+    ARM64 with x64 emulation compatibility
+    
+    Native ARM64 performance, compatible with x64 hosts
+  </Card>
+</CardGroup>
+
+<Info>
+**ARM64EC** allows ARM64 plugins to run natively on ARM64 Windows devices while remaining compatible with x64 DAWs running under emulation.
+</Info>
+
+## Project Structure
+
+Each plugin has a Visual Studio solution (`.sln`) containing multiple projects:
+
+```
+MyPlugin/
+├── MyPlugin.sln                    # Main solution file
+├── config/
+│   └── MyPlugin-win.props         # Shared build properties
+└── projects/
+    ├── MyPlugin-app.vcxproj       # Standalone app
+    ├── MyPlugin-vst3.vcxproj      # VST3 plugin
+    ├── MyPlugin-vst2.vcxproj      # VST2 plugin (deprecated)
+    ├── MyPlugin-clap.vcxproj      # CLAP plugin
+    └── MyPlugin-aax.vcxproj       # AAX plugin (requires SDK)
+```
+
+## Building with Visual Studio
+
+### Opening the Project
+
+<Steps>
+  <Step title="Open the solution">
+    Double-click `MyPlugin.sln` or:
+    
+    ```bash
+    start MyPlugin.sln
+    ```
+  </Step>
+  
+  <Step title="Select configuration">
+    Choose from the toolbar:
+    - **Debug** - Development with full debug symbols
+    - **Release** - Optimized for distribution
+    - **Tracer** - Performance profiling
+  </Step>
+  
+  <Step title="Select platform">
+    Choose architecture:
+    - **x64** - Standard 64-bit
+    - **ARM64EC** - ARM64 with x64 compatibility
+  </Step>
+  
+  <Step title="Build">
+    **Build > Build Solution** or press `Ctrl+Shift+B`
+  </Step>
+</Steps>
+
+### Building from Command Line
+
+<Tabs>
+  <Tab title="MSBuild">
+    ```bash
+    # Build entire solution (x64, Release)
+    msbuild MyPlugin.sln /p:Configuration=Release /p:Platform=x64
+    
+    # Build specific project
+    msbuild MyPlugin.sln /t:MyPlugin-vst3 /p:Configuration=Release /p:Platform=x64
+    
+    # Build ARM64EC
+    msbuild MyPlugin.sln /p:Configuration=Release /p:Platform=ARM64EC
+    
+    # Parallel build (faster)
+    msbuild MyPlugin.sln /p:Configuration=Release /p:Platform=x64 /m
+    ```
+  </Tab>
+  
+  <Tab title="Developer Command Prompt">
+    Use **Developer Command Prompt for VS 2022**:
+    
+    ```bash
+    # Initialize ARM64EC cross-compilation environment
+    call "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat" amd64_arm64
+    
+    # Then build
+    msbuild MyPlugin.sln /p:Configuration=Release /p:Platform=ARM64EC
+    ```
+  </Tab>
+</Tabs>
+
+## Build Output
+
+Built plugins are placed in `build-win/` with platform-specific naming:
+
+### x64 Output
+
+```
+MyPlugin/build-win/
+├── MyPlugin_x64.exe               # Standalone app
+├── MyPlugin_x64.dll               # VST2
+├── MyPlugin.vst3/
+│   └── Contents/
+│       └── x86_64-win/
+│           └── MyPlugin.vst3      # VST3
+├── MyPlugin.clap                  # CLAP
+└── MyPlugin.aaxplugin/
+    └── Contents/
+        └── x64/
+            └── MyPlugin.aaxplugin # AAX
+```
+
+### ARM64EC Output
+
+```
+MyPlugin/build-win/
+├── MyPlugin_ARM64EC.exe
+├── MyPlugin_ARM64EC.dll
+├── MyPlugin.vst3/
+│   └── Contents/
+│       └── arm64ec-win/
+│           └── MyPlugin.vst3
+├── MyPlugin.clap
+└── MyPlugin.aaxplugin/
+    └── Contents/
+        └── ARM64EC/
+            └── MyPlugin.aaxplugin
+```
+
+<Note>
+VST3 bundles can contain both x64 and ARM64EC binaries in a single `.vst3` folder.
+</Note>
+
+## Deployment Paths
+
+Plugins are automatically copied to standard locations after building:
+
+| Format | Default Path | Notes |
+|--------|-------------|-------|
+| **VST3** | `%LOCALAPPDATA%\Programs\Common\VST3` | Per-user, no admin required |
+| **VST2** | `%PROGRAMFILES%\VstPlugins` | System-wide |
+| **CLAP** | `%LOCALAPPDATA%\Programs\Common\CLAP` | Per-user, no admin required |
+| **AAX** | `%COMMONPROGRAMFILES%\Avid\Audio\Plug-Ins` | System-wide |
+
+<Tip>
+Per-user paths (`%LOCALAPPDATA%`) don't require administrator privileges and are **recommended for development**.
+</Tip>
+
+### Customizing Deployment
+
+Edit `common-win.props` to change deployment paths:
+
+```xml
+<VST3_X64_PATH>C:\MyCustomPath\VST3</VST3_X64_PATH>
+<VST3_ARM64EC_PATH>C:\MyCustomPath\VST3</VST3_ARM64EC_PATH>
+```
+
+## Debugging
+
+### Setting Up Debugger
+
+The debugger is automatically configured to launch a host application.
+
+<Steps>
+  <Step title="Configure debug host">
+    Edit `common-win.props`:
+    
+    ```xml
+    <VST3_X64_HOST_PATH>C:\Program Files\REAPER (x64)\reaper.exe</VST3_X64_HOST_PATH>
+    <CLAP_X64_HOST_PATH>C:\Program Files\Bitwig Studio\Bitwig Studio.exe</CLAP_X64_HOST_PATH>
+    ```
+  </Step>
+  
+  <Step title="Start debugging">
+    Press **F5** or **Debug > Start Debugging**
+    
+    Visual Studio will:
+    1. Build the plugin
+    2. Copy it to the deployment path
+    3. Launch your DAW
+    4. Attach the debugger
+  </Step>
+  
+  <Step title="Load the plugin">
+    In your DAW, load the plugin on a track
+    
+    Breakpoints in Visual Studio will now trigger
+  </Step>
+</Steps>
+
+<Warning>
+Ensure your plugin is built with **Debug** configuration. Release builds have limited debug symbols.
+</Warning>
+
+### Debug Host Variables
+
+| Variable | Description | Example |
+|----------|-------------|----------|
+| `VST3_X64_HOST_PATH` | VST3 debug host (x64) | REAPER, Ableton Live |
+| `VST3_ARM64EC_HOST_PATH` | VST3 debug host (ARM64EC) | REAPER (ARM64) |
+| `CLAP_X64_HOST_PATH` | CLAP debug host (x64) | Bitwig Studio |
+| `CLAP_ARM64EC_HOST_PATH` | CLAP debug host (ARM64EC) | Bitwig (ARM64) |
+
+<Tip>
+If REAPER is installed at the default path, it's automatically set as the debug host.
+</Tip>
+
+## Common Build Configurations
+
+### Runtime Library
+
+All iPlug2 projects use **static runtime** to avoid DLL dependencies:
+
+- **Release**: `/MT` (Multi-threaded)
+- **Debug**: `/MTd` (Multi-threaded Debug)
+
+<Info>
+Static runtime means plugins don't require redistributable packages (e.g., `vcredist_x64.exe`).
+</Info>
+
+### Preprocessor Defines
+
+Common defines (from `common-win.props`):
+
+```cpp
+WIN32                    // Windows platform
+NOMINMAX                 // Disable min/max macros
+_CRT_SECURE_NO_DEPRECATE // Disable secure CRT warnings
+
+// Format-specific
+VST3_API                 // VST3 plugin
+CLAP_API                 // CLAP plugin
+AAX_API                  // AAX plugin
+APP_API                  // Standalone app
+
+// IPlug defines
+IPLUG_EDITOR=1           // Has UI
+IPLUG_DSP=1              // Has DSP
+```
+
+### Include Paths
+
+Automatically configured from `common-win.props`:
+
+```
+$(WDL_PATH)                      # WDL library
+$(IPLUG_PATH)                    # IPlug core
+$(IGRAPHICS_PATH)                # IGraphics
+$(VST3_SDK)                      # VST3 SDK
+$(CLAP_SDK)\include              # CLAP SDK
+$(AAX_SDK)\Interfaces            # AAX SDK
+```
+
+## ARM64EC Support
+
+### What is ARM64EC?
+
+ARM64EC (ARM64 Emulation Compatible) allows:
+- **Native ARM64 performance** on Windows ARM devices
+- **Compatibility with x64 hosts** running under emulation
+- **Gradual migration** from x64 to ARM64
+
+<CardGroup cols={2}>
+  <Card title="Native Speed" icon="gauge-high">
+    ARM64EC code runs at full native speed on ARM64 processors
+  </Card>
+  <Card title="x64 Compatible" icon="link">
+    Can be loaded by x64 DAWs running under emulation
+  </Card>
+</CardGroup>
+
+### Building ARM64EC
+
+<Steps>
+  <Step title="Verify ARM64EC tools">
+    ```powershell
+    & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+      -latest -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64EC `
+      -property installationPath
+    ```
+  </Step>
+  
+  <Step title="Build with ARM64EC platform">
+    ```bash
+    msbuild MyPlugin.sln /p:Configuration=Release /p:Platform=ARM64EC
+    ```
+  </Step>
+  
+  <Step title="Deploy to ARM64 paths">
+    Plugins are automatically copied to ARM64EC-specific paths
+  </Step>
+</Steps>
+
+### Limitations
+
+<Warning>
+- **Skia graphics**: Not yet supported for ARM64EC (use NanoVG)
+- **Testing**: Requires ARM64 Windows hardware (cannot run on x64 machines)
+- **AAX**: ARM64EC support depends on Avid's SDK
+</Warning>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Link errors: unresolved external symbols">
+    **Cause**: Missing SDK or library
+    
+    **Solution**:
+    - Verify SDKs are downloaded: `Dependencies\IPlug\VST3_SDK`, etc.
+    - Check include paths in `common-win.props`
+    - Ensure all projects use the same runtime library (`/MT` vs `/MD`)
+  </Accordion>
+  
+  <Accordion title="Plugin not loading in DAW">
+    **Cause**: Architecture mismatch or missing dependencies
+    
+    **Solution**:
+    - Ensure DAW architecture matches plugin (x64 DAW needs x64 plugin)
+    - Check plugin is copied to correct path
+    - Use [Dependency Walker](http://www.dependencywalker.com/) to check for missing DLLs
+  </Accordion>
+  
+  <Accordion title="Debugger not attaching">
+    **Cause**: Incorrect debug host path or permissions
+    
+    **Solution**:
+    - Verify `VST3_X64_HOST_PATH` points to valid executable
+    - Run Visual Studio as Administrator if needed
+    - Check Windows Defender isn't blocking the debugger
+  </Accordion>
+  
+  <Accordion title="ARM64EC build fails">
+    **Cause**: ARM64EC build tools not installed
+    
+    **Solution**:
+    - Install ARM64EC build tools via Visual Studio Installer
+    - Verify installation with `vswhere` command above
+    - Note: Skia graphics not supported for ARM64EC
+  </Accordion>
+</AccordionGroup>
+
+## Build Scripts
+
+Example batch script for automated builds:
+
+```batch build.bat
+@echo off
+setlocal
+
+set SOLUTION=MyPlugin.sln
+set CONFIG=Release
+
+echo Building x64...
+msbuild %SOLUTION% /p:Configuration=%CONFIG% /p:Platform=x64 /m
+
+echo Building ARM64EC...
+msbuild %SOLUTION% /p:Configuration=%CONFIG% /p:Platform=ARM64EC /m
+
+echo Build complete!
+pause
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Code Signing" icon="file-signature" href="/deploying/code-signing">
+    Sign plugins for distribution
+  </Card>
+  <Card title="Installer Creation" icon="box" href="/deploying/installers">
+    Create Windows installers
+  </Card>
+  <Card title="CMake Build" icon="gear" href="/building/cmake">
+    Alternative build system
+  </Card>
+  <Card title="Debugging Guide" icon="bug" href="/debugging/visual-studio">
+    Advanced debugging techniques
+  </Card>
+</CardGroup>

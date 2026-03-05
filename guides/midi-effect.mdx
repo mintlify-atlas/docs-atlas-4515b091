@@ -1,0 +1,572 @@
+---
+title: Building MIDI Effect Plugins
+description: Create MIDI processors that transform, generate, or filter MIDI messages
+---
+
+## Overview
+
+MIDI effect plugins process MIDI messages without generating audio. They're used for arpeggiators, chord generators, transposers, MIDI monitors, and more.
+
+## IPlugMidiEffect Template
+
+The `IPlugMidiEffect` example demonstrates:
+
+- MIDI pass-through processing
+- MIDI message generation from UI
+- Zero audio channels (MIDI-only)
+- Button to trigger chords
+
+### Project Configuration
+
+```cpp config.h
+#define PLUG_TYPE 2              // 2 = MIDI Effect
+#define PLUG_DOES_MIDI_IN 1
+#define PLUG_DOES_MIDI_OUT 1
+#define PLUG_DOES_MPE 1
+
+#define PLUG_CHANNEL_IO "0-0"    // No audio I/O
+
+#define VST3_SUBCATEGORY "Instrument|Synth"  // VST3 uses Instrument category
+#define AAX_PLUG_CATEGORY_STR "Effect"
+```
+
+<Note>
+**MIDI Effect Configuration:**
+- `PLUG_TYPE 2` identifies it as MIDI effect
+- `PLUG_CHANNEL_IO "0-0"` = no audio input or output
+- Still needs `PLUG_DOES_MIDI_IN` and `PLUG_DOES_MIDI_OUT`
+</Note>
+
+<Warning>
+VST3 doesn't have a dedicated MIDI effect category. Use `"Instrument|Synth"` for proper host routing.
+</Warning>
+
+## Basic Structure
+
+<Tabs>
+<Tab title="Header">
+```cpp IPlugMidiEffect.h
+#pragma once
+
+#include "IPlug_include_in_plug_hdr.h"
+
+enum EParams
+{
+  kParamGain = 0,
+  kNumParams
+};
+
+using namespace iplug;
+using namespace igraphics;
+
+class IPlugMidiEffect final : public Plugin
+{
+public:
+  IPlugMidiEffect(const InstanceInfo& info);
+
+#if IPLUG_DSP
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  void ProcessMidiMsg(const IMidiMsg& msg) override;
+#endif
+};
+```
+</Tab>
+
+<Tab title="MIDI Processing">
+```cpp IPlugMidiEffect.cpp
+void IPlugMidiEffect::ProcessMidiMsg(const IMidiMsg& msg)
+{
+  TRACE;
+  
+  int status = msg.StatusMsg();
+  
+  switch (status)
+  {
+    case IMidiMsg::kNoteOn:
+    case IMidiMsg::kNoteOff:
+    case IMidiMsg::kPolyAftertouch:
+    case IMidiMsg::kControlChange:
+    case IMidiMsg::kProgramChange:
+    case IMidiMsg::kChannelAftertouch:
+    case IMidiMsg::kPitchWheel:
+    {
+      goto handle;
+    }
+    default:
+      return;
+  }
+  
+handle:
+  SendMidiMsg(msg);  // Pass through
+}
+```
+
+**Key Points:**
+- `ProcessMidiMsg()` receives all MIDI input
+- Call `SendMidiMsg()` to output messages
+- Return without calling `SendMidiMsg()` to filter messages
+</Tab>
+
+<Tab title="UI Trigger">
+```cpp
+mLayoutFunc = [&](IGraphics* pGraphics) {
+  auto actionFunc = [&](IControl* pCaller) {
+    static bool onoff = false;
+    onoff = !onoff;
+    IMidiMsg msg;
+    constexpr int pitches[3] = {60, 65, 67};  // C, F, G
+    
+    for (int i = 0; i < 3; i++)
+    {
+      if (onoff)
+        msg.MakeNoteOnMsg(pitches[i], 60, 0);
+      else
+        msg.MakeNoteOffMsg(pitches[i], 0);
+    
+      SendMidiMsgFromUI(msg);  // Send from UI thread
+    }
+    
+    SplashClickActionFunc(pCaller);
+  };
+  
+  pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
+  pGraphics->AttachPanelBackground(COLOR_GRAY);
+  pGraphics->AttachControl(
+    new IVButtonControl(pGraphics->GetBounds().GetPadded(-10), 
+                        actionFunc, "Trigger Chord"));
+};
+```
+
+**UI to DSP:**
+- Use `SendMidiMsgFromUI()` to send MIDI from UI thread
+- Messages are queued and processed in `ProcessBlock`
+</Tab>
+</Tabs>
+
+## Creating a MIDI Effect
+
+<Steps>
+
+### Duplicate Template
+
+```bash
+cd iPlug2/Examples
+python duplicate.py IPlugMidiEffect MyArpeggiator MyCompany
+cd MyArpeggiator
+```
+
+### Configure Plugin
+
+Verify `config.h`:
+
+```cpp config.h
+#define PLUG_TYPE 2
+#define PLUG_DOES_MIDI_IN 1
+#define PLUG_DOES_MIDI_OUT 1
+#define PLUG_CHANNEL_IO "0-0"
+
+// Some MIDI effects may want a tail for note-offs
+#define PLUG_TAIL_SIZE 4410000  // ~100 seconds at 44.1kHz
+```
+
+### Define Parameters
+
+```cpp MyArpeggiator.h
+enum EParams
+{
+  kArpMode = 0,        // Up, Down, Up/Down, Random
+  kArpRate,            // Note rate
+  kArpGate,            // Note length
+  kArpOctaves,         // Octave range
+  kArpSwing,           // Timing swing
+  kNumParams
+};
+```
+
+### Initialize Parameters
+
+```cpp
+MyArpeggiator::MyArpeggiator(const InstanceInfo& info)
+: Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kArpMode)->InitEnum("Mode", 0, 
+    {"Up", "Down", "Up/Down", "Random"});
+  
+  GetParam(kArpRate)->InitEnum("Rate", 2, 
+    {"1/32", "1/16", "1/8", "1/4", "1/2", "1/1"});
+  
+  GetParam(kArpGate)->InitPercentage("Gate", 80.);
+  
+  GetParam(kArpOctaves)->InitInt("Octaves", 1, 1, 4);
+  
+  GetParam(kArpSwing)->InitPercentage("Swing", 0.);
+  
+#if IPLUG_DSP
+  SetTailSize(4410000);  // Allow long tail for note-offs
+#endif
+}
+```
+
+### Implement MIDI Logic
+
+```cpp MyArpeggiator.cpp
+class Arpeggiator
+{
+public:
+  void NoteOn(int note, int velocity) {
+    // Add to held notes
+    if (std::find(mHeldNotes.begin(), mHeldNotes.end(), note) == mHeldNotes.end()) {
+      mHeldNotes.push_back(note);
+      SortNotes();
+    }
+  }
+  
+  void NoteOff(int note) {
+    // Remove from held notes
+    auto it = std::find(mHeldNotes.begin(), mHeldNotes.end(), note);
+    if (it != mHeldNotes.end()) {
+      mHeldNotes.erase(it);
+    }
+  }
+  
+  void ProcessBlock(int nFrames, double tempo, double ppqPos, bool playing) {
+    if (!playing || mHeldNotes.empty()) return;
+    
+    // Calculate note rate based on tempo
+    const double beatsPerSample = (tempo / 60.0) / mSampleRate;
+    const double noteRate = GetNoteRate();  // e.g., 0.25 for 1/4 note
+    
+    for (int s = 0; s < nFrames; s++) {
+      mPhase += beatsPerSample;
+      
+      if (mPhase >= noteRate) {
+        mPhase -= noteRate;
+        
+        // Stop previous note
+        if (mCurrentNote >= 0) {
+          IMidiMsg noteOff;
+          noteOff.MakeNoteOffMsg(mCurrentNote, 0, s);
+          mOutputQueue.push(noteOff);
+        }
+        
+        // Start next note
+        mCurrentNote = GetNextNote();
+        IMidiMsg noteOn;
+        noteOn.MakeNoteOnMsg(mCurrentNote, mCurrentVelocity, 0, s);
+        mOutputQueue.push(noteOn);
+      }
+      
+      // Calculate gate (note-off timing)
+      const double gatePhase = mPhase + (noteRate * mGate);
+      if (gatePhase >= noteRate && mCurrentNote >= 0) {
+        IMidiMsg noteOff;
+        noteOff.MakeNoteOffMsg(mCurrentNote, 0, s);
+        mOutputQueue.push(noteOff);
+        mCurrentNote = -1;
+      }
+    }
+  }
+  
+  int GetNextNote() {
+    switch (mMode) {
+      case kUp:
+        mCurrentIndex = (mCurrentIndex + 1) % mHeldNotes.size();
+        break;
+      case kDown:
+        mCurrentIndex = (mCurrentIndex - 1 + mHeldNotes.size()) % mHeldNotes.size();
+        break;
+      case kRandom:
+        mCurrentIndex = rand() % mHeldNotes.size();
+        break;
+    }
+    return mHeldNotes[mCurrentIndex];
+  }
+  
+private:
+  std::vector<int> mHeldNotes;
+  int mCurrentIndex = 0;
+  int mCurrentNote = -1;
+  int mCurrentVelocity = 100;
+  double mPhase = 0.0;
+  double mGate = 0.8;
+  int mMode = 0;
+  double mSampleRate = 44100.0;
+  std::queue<IMidiMsg> mOutputQueue;
+};
+```
+
+### Process Messages
+
+```cpp
+void MyArpeggiator::ProcessMidiMsg(const IMidiMsg& msg)
+{
+  switch (msg.StatusMsg()) {
+    case IMidiMsg::kNoteOn:
+      if (msg.Velocity() > 0) {
+        mArp.NoteOn(msg.NoteNumber(), msg.Velocity());
+      } else {
+        mArp.NoteOff(msg.NoteNumber());
+      }
+      break;
+      
+    case IMidiMsg::kNoteOff:
+      mArp.NoteOff(msg.NoteNumber());
+      break;
+      
+    default:
+      // Pass through other messages
+      SendMidiMsg(msg);
+      break;
+  }
+}
+
+void MyArpeggiator::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  // Generate arpeggio notes
+  mArp.ProcessBlock(nFrames, mTimeInfo.mTempo, 
+                    mTimeInfo.mPPQPos, 
+                    mTimeInfo.mTransportIsRunning);
+  
+  // Output queued messages
+  while (!mArp.mOutputQueue.empty()) {
+    SendMidiMsg(mArp.mOutputQueue.front());
+    mArp.mOutputQueue.pop();
+  }
+}
+```
+
+</Steps>
+
+## MIDI Message Types
+
+### Creating Messages
+
+```cpp
+IMidiMsg msg;
+
+// Note On/Off
+msg.MakeNoteOnMsg(60, 100, 0);      // Middle C, velocity 100, channel 0
+msg.MakeNoteOffMsg(60, 0);          // Note off with offset in block
+
+// Control Change
+msg.MakeControlChangeMsg(IMidiMsg::kModWheel, 64, 0);
+
+// Pitch Bend
+msg.MakePitchWheelMsg(0.5);         // +50% bend
+
+// Program Change
+msg.MakeProgramChangeMsg(0, 0);     // Program 0, channel 0
+
+// Channel Aftertouch
+msg.MakeChannelATMsg(100, 0);
+
+// Poly Aftertouch (MPE)
+msg.MakePolyATMsg(60, 64, 0);       // Note 60, pressure 64
+```
+
+### Reading Messages
+
+```cpp
+void ProcessMidiMsg(const IMidiMsg& msg)
+{
+  const int status = msg.StatusMsg();
+  const int channel = msg.Channel();
+  
+  if (status == IMidiMsg::kNoteOn) {
+    const int note = msg.NoteNumber();
+    const int velocity = msg.Velocity();
+    // ...
+  }
+  
+  if (status == IMidiMsg::kControlChange) {
+    const int cc = msg.ControlChangeIdx();
+    const int value = msg.ControlChange(cc);
+    // ...
+  }
+  
+  if (status == IMidiMsg::kPitchWheel) {
+    const double bend = msg.PitchWheel();  // -1.0 to +1.0
+    // ...
+  }
+}
+```
+
+## Common MIDI Effect Patterns
+
+### Note Transpose
+
+```cpp
+void ProcessMidiMsg(const IMidiMsg& msg)
+{
+  IMidiMsg outMsg = msg;
+  
+  if (msg.StatusMsg() == IMidiMsg::kNoteOn || 
+      msg.StatusMsg() == IMidiMsg::kNoteOff) {
+    
+    const int transpose = GetParam(kTranspose)->Int();
+    const int newNote = std::clamp(msg.NoteNumber() + transpose, 0, 127);
+    
+    if (msg.StatusMsg() == IMidiMsg::kNoteOn) {
+      outMsg.MakeNoteOnMsg(newNote, msg.Velocity(), msg.Channel());
+    } else {
+      outMsg.MakeNoteOffMsg(newNote, msg.Channel());
+    }
+  }
+  
+  SendMidiMsg(outMsg);
+}
+```
+
+### Velocity Curve
+
+```cpp
+void ProcessMidiMsg(const IMidiMsg& msg)
+{
+  if (msg.StatusMsg() == IMidiMsg::kNoteOn && msg.Velocity() > 0) {
+    const double curve = GetParam(kVelocityCurve)->Value();
+    const double normalized = msg.Velocity() / 127.0;
+    const double shaped = std::pow(normalized, curve);
+    const int newVelocity = static_cast<int>(shaped * 127.0);
+    
+    IMidiMsg outMsg;
+    outMsg.MakeNoteOnMsg(msg.NoteNumber(), newVelocity, msg.Channel());
+    SendMidiMsg(outMsg);
+  } else {
+    SendMidiMsg(msg);
+  }
+}
+```
+
+### MIDI Monitor
+
+```cpp
+class MidiMonitor : public Plugin
+{
+public:
+  void ProcessMidiMsg(const IMidiMsg& msg) override {
+    // Log to UI
+    WDL_String str;
+    str.SetFormatted(64, "Status: %02X, Data1: %d, Data2: %d",
+                     msg.mStatus, msg.mData1, msg.mData2);
+    
+    mMidiLog.push_back(str.Get());
+    if (mMidiLog.size() > 100) {
+      mMidiLog.erase(mMidiLog.begin());
+    }
+    
+    // Pass through
+    SendMidiMsg(msg);
+  }
+  
+private:
+  std::vector<std::string> mMidiLog;
+};
+```
+
+### Chord Generator
+
+```cpp
+void ProcessMidiMsg(const IMidiMsg& msg)
+{
+  if (msg.StatusMsg() == IMidiMsg::kNoteOn && msg.Velocity() > 0) {
+    const int root = msg.NoteNumber();
+    const int chordType = GetParam(kChordType)->Int();
+    
+    // Define intervals for chord types
+    const int intervals[][4] = {
+      {0, 4, 7, -1},      // Major
+      {0, 3, 7, -1},      // Minor
+      {0, 4, 7, 11},      // Maj7
+      {0, 3, 7, 10},      // Min7
+    };
+    
+    for (int i = 0; i < 4 && intervals[chordType][i] >= 0; i++) {
+      IMidiMsg chordNote;
+      chordNote.MakeNoteOnMsg(root + intervals[chordType][i], 
+                              msg.Velocity(), msg.Channel());
+      SendMidiMsg(chordNote);
+    }
+  }
+  else if (msg.StatusMsg() == IMidiMsg::kNoteOff) {
+    // Send note-offs for all chord notes
+    // (need to track which notes are active)
+  }
+}
+```
+
+## Timing and Tempo Sync
+
+Access host timing information:
+
+```cpp
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double tempo = mTimeInfo.mTempo;           // BPM
+  const double ppqPos = mTimeInfo.mPPQPos;         // Position in quarter notes
+  const bool playing = mTimeInfo.mTransportIsRunning;
+  const double sampleRate = GetSampleRate();
+  
+  if (playing) {
+    // Calculate samples per beat
+    const double samplesPerBeat = (60.0 / tempo) * sampleRate;
+    
+    // Calculate samples per 16th note
+    const double samplesPerSixteenth = samplesPerBeat / 4.0;
+  }
+}
+```
+
+## Message Offset
+
+For sample-accurate timing within a block:
+
+```cpp
+IMidiMsg msg;
+msg.MakeNoteOnMsg(60, 100, 0, 32);  // Trigger at sample 32 in block
+SendMidiMsg(msg);
+```
+
+## Tail Size
+
+Set tail size to prevent note-offs from being cut:
+
+```cpp config.h
+// Allow ~100 seconds of tail for hanging notes
+#define PLUG_TAIL_SIZE 4410000  // samples at 44.1kHz
+```
+
+```cpp
+SetTailSize(4410000);  // Can also set in constructor
+```
+
+## Testing
+
+<Note>
+**Testing MIDI Effects:**
+- Use a MIDI monitor plugin after your effect
+- Test with different DAWs (Logic, Ableton, Reaper)
+- Verify note-offs are sent correctly
+- Check timing accuracy with metronome
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="MIDI Reference" href="/reference/midi">
+Complete IMidiMsg API documentation
+</Card>
+
+<Card title="Timing" href="/reference/timing">
+Host tempo and transport information
+</Card>
+
+<Card title="Testing" href="/guides/testing">
+Validate MIDI processing in hosts
+</Card>
+
+<Card title="Examples" href="/examples">
+Browse more MIDI effect examples
+</Card>
+
+</CardGroup>

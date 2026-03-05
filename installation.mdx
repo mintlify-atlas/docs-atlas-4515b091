@@ -1,0 +1,674 @@
+---
+title: 'Installation'
+description: 'Set up your development environment for building iPlug2 audio plugins'
+---
+
+iPlug2 supports cross-platform audio plugin development for macOS, Windows, iOS, visionOS, and Web. Follow the instructions for your target platform(s) below.
+
+## System Requirements
+
+<CardGroup cols={3}>
+  <Card title="macOS" icon="apple">
+    - macOS 10.15 or later
+    - Xcode 12.0 or later
+    - 4GB RAM minimum
+    - 10GB disk space
+  </Card>
+  
+  <Card title="Windows" icon="windows">
+    - Windows 10 or later
+    - Visual Studio 2019/2022
+    - 8GB RAM minimum
+    - 15GB disk space
+  </Card>
+  
+  <Card title="iOS/visionOS" icon="mobile">
+    - macOS 13.0 or later
+    - Xcode 15.0 or later
+    - iOS 15+ or visionOS 26+
+    - Apple Developer account
+  </Card>
+</CardGroup>
+
+## macOS Installation
+
+<Steps>
+  <Step title="Install Xcode">
+    Download and install Xcode from the Mac App Store or [Apple Developer](https://developer.apple.com/xcode/).
+
+    ```bash
+    # Install Xcode Command Line Tools
+    xcode-select --install
+    ```
+
+    <Info>
+    Xcode Command Line Tools are required even if you plan to use CMake exclusively.
+    </Info>
+  </Step>
+
+  <Step title="Install CMake and Ninja">
+    Install CMake and Ninja using Homebrew:
+
+    ```bash
+    # Install Homebrew if not already installed
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+    # Install CMake and Ninja
+    brew install cmake ninja
+    ```
+
+    Verify the installation:
+
+    ```bash
+    cmake --version  # Should be 3.14 or later
+    ninja --version
+    ```
+  </Step>
+
+  <Step title="Clone iPlug2">
+    Clone the iPlug2 repository:
+
+    ```bash
+    git clone https://github.com/iPlug2/iPlug2.git
+    cd iPlug2
+    ```
+  </Step>
+
+  <Step title="Download Plugin SDKs">
+    Download the free, publicly available SDKs:
+
+    ```bash
+    cd Dependencies/IPlug
+    ./download-iplug-sdks.sh
+    cd ../..
+    ```
+
+    This downloads:
+    - **VST3 SDK** from Steinberg
+    - **CLAP SDK** from the CLAP project
+    - **WAM SDK** for Web Audio Modules
+
+    <Note>
+    AUv2 and AUv3 (Audio Units) require no additional SDKs on macOS.
+    </Note>
+  </Step>
+
+  <Step title="Optional: Download Skia Graphics Backend">
+    If you plan to use the Skia graphics backend (instead of the default NanoVG), download prebuilt Skia libraries:
+
+    ```bash
+    cd Dependencies
+    ./download-prebuilt-libs.sh
+    cd ..
+    ```
+
+    For iOS development:
+
+    ```bash
+    cd Dependencies
+    ./download-prebuilt-libs.sh ios
+    cd ..
+    ```
+
+    <Info>
+    NanoVG is the default and requires no additional downloads. It's faster and lighter than Skia but has fewer features.
+    </Info>
+  </Step>
+
+  <Step title="Verify Installation">
+    Build and run the IPlugEffect example:
+
+    ```bash
+    cd Examples/IPlugEffect
+    mkdir build && cd build
+    cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ..
+    ninja
+    ```
+
+    The plugin should build successfully and be deployed to `~/Library/Audio/Plug-Ins/VST3/`.
+
+    <Tip>
+    Test the plugin by opening it in a DAW like REAPER, Logic Pro, or Ableton Live.
+    </Tip>
+  </Step>
+</Steps>
+
+### macOS AAX SDK Setup (Pro Tools)
+
+<Warning>
+AAX plugins require the AAX SDK from Avid, which must be downloaded manually.
+</Warning>
+
+<Steps>
+  <Step title="Get an Avid Developer Account">
+    Sign up for a free developer account at [Avid Developer](https://www.avid.com/alliance-partner-program/audio-plugins).
+  </Step>
+
+  <Step title="Download AAX SDK">
+    Download **AAX_SDK_2p3p2.zip** (or later) from the Avid Developer portal.
+  </Step>
+
+  <Step title="Extract to Dependencies">
+    Extract the SDK to `iPlug2/Dependencies/IPlug/AAX_SDK/`:
+
+    ```bash
+    cd iPlug2/Dependencies/IPlug
+    unzip ~/Downloads/AAX_SDK_2p3p2.zip
+    mv AAX_SDK_2p3p2 AAX_SDK
+    ```
+  </Step>
+
+  <Step title="Configure SDK Settings">
+    Modify the AAX SDK settings for compatibility:
+
+    1. Open `AAX_SDK/ExamplePlugIns/Common/Mac/CommonDebugSettings.xcconfig`
+    2. Set the following:
+
+    ```text
+    GCC_VERSION = com.apple.compilers.llvm.clang
+    SDKROOT = macosx
+    MACOSX_DEPLOYMENT_TARGET = 10.15
+    ARCHS = x86_64 arm64
+    ```
+
+    3. Repeat for `CommonReleaseSettings.xcconfig`
+  </Step>
+</Steps>
+
+## Windows Installation
+
+<Steps>
+  <Step title="Install Visual Studio">
+    Download and install **Visual Studio 2019** or **2022** (Community Edition is free):
+
+    [Download Visual Studio](https://visualstudio.microsoft.com/downloads/)
+
+    During installation, select the **"Desktop development with C++"** workload.
+
+    <Warning>
+    Ensure you install the C++ build tools. The default Visual Studio installation may not include them.
+    </Warning>
+  </Step>
+
+  <Step title="Install CMake">
+    CMake can be installed via:
+
+    <Tabs>
+      <Tab title="Visual Studio Installer">
+        CMake is included with Visual Studio. Enable it in:
+        
+        **Visual Studio Installer → Modify → Individual Components → CMake tools for Windows**
+      </Tab>
+      
+      <Tab title="Standalone Installer">
+        Download from [cmake.org](https://cmake.org/download/) and add to PATH.
+      </Tab>
+      
+      <Tab title="winget">
+        ```bash
+        winget install Kitware.CMake
+        ```
+      </Tab>
+    </Tabs>
+
+    Verify the installation:
+
+    ```bash
+    cmake --version  # Should be 3.14 or later
+    ```
+  </Step>
+
+  <Step title="Install Ninja (Optional)">
+    Ninja is a fast build system alternative to MSBuild:
+
+    <Tabs>
+      <Tab title="winget">
+        ```bash
+        winget install Ninja-build.Ninja
+        ```
+      </Tab>
+      
+      <Tab title="Manual Download">
+        1. Download from [ninja-build.org](https://ninja-build.org/)
+        2. Extract `ninja.exe` to a folder
+        3. Add folder to system PATH
+      </Tab>
+    </Tabs>
+
+    <Info>
+    Ninja is optional but recommended for faster builds. You can use Visual Studio's MSBuild instead.
+    </Info>
+  </Step>
+
+  <Step title="Install Git">
+    Download and install Git from [git-scm.com](https://git-scm.com/download/win).
+
+    Or use winget:
+
+    ```bash
+    winget install Git.Git
+    ```
+  </Step>
+
+  <Step title="Clone iPlug2">
+    Open Git Bash or Command Prompt and clone the repository:
+
+    ```bash
+    git clone https://github.com/iPlug2/iPlug2.git
+    cd iPlug2
+    ```
+  </Step>
+
+  <Step title="Download Plugin SDKs">
+    Run the SDK download script in Git Bash:
+
+    ```bash
+    cd Dependencies/IPlug
+    ./download-iplug-sdks.sh
+    cd ../..
+    ```
+
+    Or manually download each SDK:
+
+    - **VST3**: [Steinberg VST3 SDK](https://www.steinberg.net/en/company/developer.html)
+    - **CLAP**: [CLAP SDK](https://github.com/free-audio/clap)
+    - **WAM**: [Web Audio Modules](https://github.com/webaudiomodules/api)
+
+    Extract each to `Dependencies/IPlug/[SDK_NAME]/`
+  </Step>
+
+  <Step title="Optional: Download Skia Graphics Backend">
+    If using the Skia backend:
+
+    ```bash
+    cd Dependencies
+    ./download-prebuilt-libs.sh win
+    cd ..
+    ```
+  </Step>
+
+  <Step title="Verify Installation">
+    Build the IPlugEffect example:
+
+    <Tabs>
+      <Tab title="Using Ninja">
+        ```bash
+        cd Examples/IPlugEffect
+        mkdir build && cd build
+        cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ..
+        ninja
+        ```
+      </Tab>
+      
+      <Tab title="Using Visual Studio">
+        ```bash
+        cd Examples/IPlugEffect
+        mkdir build && cd build
+        cmake -G "Visual Studio 17 2022" -A x64 ..
+        cmake --build . --config Release
+        ```
+      </Tab>
+    </Tabs>
+
+    The plugin should build and deploy to `%LOCALAPPDATA%\Programs\Common\VST3\`
+  </Step>
+</Steps>
+
+### Windows AAX SDK Setup (Pro Tools)
+
+<Steps>
+  <Step title="Download AAX SDK">
+    Download **AAX_SDK_2p3p2.zip** from [Avid Developer](https://www.avid.com/alliance-partner-program/audio-plugins).
+  </Step>
+
+  <Step title="Extract to Dependencies">
+    Extract to `iPlug2\Dependencies\IPlug\AAX_SDK\`
+  </Step>
+
+  <Step title="Build AAXLibrary">
+    1. Open `AAX_SDK\msvc\AAX_SDK.sln` in Visual Studio
+    2. Agree to retarget the solution to your current VS version
+    3. Right-click **AAXLibrary** project → Properties
+    4. Navigate to: **Configuration Properties → C/C++ → Code Generation → Runtime Library**
+    5. Set:
+       - **Debug/x64**: Multi-threaded Debug (/MTd)
+       - **Release/x64**: Multi-threaded (/MT)
+    6. Build both Debug and Release configurations
+  </Step>
+</Steps>
+
+### Windows ARM64EC Support
+
+To build for Windows ARM devices (Surface Pro X, etc.):
+
+```bash
+cmake -G "Visual Studio 17 2022" -A ARM64EC ..
+cmake --build . --config Release
+```
+
+<Info>
+ARM64EC provides native ARM64 performance while maintaining compatibility with x64 plugin hosts.
+</Info>
+
+## iOS Installation
+
+<Steps>
+  <Step title="Install Xcode 15+">
+    iOS development requires Xcode 15.0 or later with iOS SDK:
+
+    ```bash
+    xcode-select --install
+    ```
+
+    Open Xcode and install additional components when prompted.
+  </Step>
+
+  <Step title="Download iOS Dependencies">
+    If using Skia graphics on iOS:
+
+    ```bash
+    cd Dependencies
+    ./download-prebuilt-libs.sh ios
+    cd ..
+    ```
+  </Step>
+
+  <Step title="Configure iOS Build">
+    Create an iOS build:
+
+    ```bash
+    cd Examples/IPlugEffect
+    mkdir build-ios && cd build-ios
+    cmake -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DIPLUG2_IOS_PLATFORM=OS ..
+    ```
+
+    Open the generated Xcode project:
+
+    ```bash
+    open IPlugEffect.xcodeproj
+    ```
+  </Step>
+
+  <Step title="Configure Code Signing">
+    In Xcode:
+    1. Select the project in the navigator
+    2. Select a target (e.g., IPlugEffect-app)
+    3. Go to **Signing & Capabilities**
+    4. Select your Apple Developer team
+    5. Ensure a valid provisioning profile is selected
+  </Step>
+
+  <Step title="Build and Run">
+    1. Select an iOS device or simulator from the scheme menu
+    2. Click **Run** (⌘R) to build and deploy
+  </Step>
+</Steps>
+
+<Note>
+iOS plugins use the AUv3 (Audio Unit v3) format, which is embedded in a standalone app.
+</Note>
+
+## visionOS Installation
+
+<Steps>
+  <Step title="Install Xcode 15+">
+    visionOS requires Xcode 15.0 or later with visionOS SDK installed.
+
+    Check available SDKs:
+
+    ```bash
+    xcodebuild -showsdks
+    ```
+
+    If `xros` SDK is not listed, install it via **Xcode → Settings → Platforms**.
+  </Step>
+
+  <Step title="Configure visionOS Build">
+    Create a visionOS build:
+
+    ```bash
+    cd Examples/IPlugEffect
+    mkdir build-visionos && cd build-visionos
+    cmake -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DIPLUG2_IOS_PLATFORM=VISIONOS ..
+    open IPlugEffect.xcodeproj
+    ```
+  </Step>
+
+  <Step title="Configure Code Signing">
+    Set up signing in Xcode as described in the iOS section.
+  </Step>
+
+  <Step title="Build and Run">
+    Select "Apple Vision Pro" or "Apple Vision Pro Simulator" from the scheme menu and click Run.
+  </Step>
+</Steps>
+
+<Info>
+visionOS support is experimental. Not all IGraphics features may work as expected.
+</Info>
+
+## Web/Emscripten Installation
+
+<Steps>
+  <Step title="Install Emscripten SDK">
+    Clone and activate the Emscripten SDK:
+
+    ```bash
+    git clone https://github.com/emscripten-core/emsdk.git
+    cd emsdk
+    ./emsdk install latest
+    ./emsdk activate latest
+    source ./emsdk_env.sh  # On Windows: emsdk_env.bat
+    ```
+  </Step>
+
+  <Step title="Download WAM SDK">
+    Return to the iPlug2 directory and download the Web Audio Module SDK:
+
+    ```bash
+    cd ../iPlug2/Dependencies/IPlug
+    ./download-wam-sdk.sh
+    cd ../..
+    ```
+  </Step>
+
+  <Step title="Build WAM Plugin">
+    ```bash
+    cd Examples/IPlugEffect
+    mkdir build-wasm && cd build-wasm
+    emcmake cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ..
+    ninja IPlugEffect-wam-dist
+    ```
+
+    Output will be in `build/out/IPlugEffect/`
+  </Step>
+
+  <Step title="Test Locally">
+    WAM plugins require HTTPS with specific headers. Use `emrun`:
+
+    ```bash
+    cd ../build/out/IPlugEffect
+    emrun --no_emrun_detect index.html
+    ```
+
+    Open the provided URL in your browser.
+  </Step>
+</Steps>
+
+<Warning>
+Web Audio Modules require SharedArrayBuffer, which requires HTTPS and specific COOP/COEP headers. Local testing requires a properly configured server.
+</Warning>
+
+## VST3 SDK Manual Installation
+
+If the automatic download script fails:
+
+<Steps>
+  <Step title="Download SDK">
+    Download the latest VST3 SDK from [Steinberg's website](https://www.steinberg.net/en/company/developer.html).
+  </Step>
+
+  <Step title="Extract">
+    Extract the SDK to `Dependencies/IPlug/VST3_SDK/` so the structure looks like:
+
+    ```
+    Dependencies/IPlug/VST3_SDK/
+    ├── base/
+    ├── pluginterfaces/
+    ├── public.sdk/
+    └── README.md
+    ```
+  </Step>
+</Steps>
+
+## Dependency Overview
+
+<Note>
+Below is a summary of required and optional dependencies:
+</Note>
+
+| Component | Required | Platforms | Notes |
+|-----------|----------|-----------|-------|
+| **VST3 SDK** | For VST3 | macOS, Windows | Free from Steinberg |
+| **CLAP SDK** | For CLAP | macOS, Windows | Free, open source |
+| **WAM SDK** | For WAM | Web | Free, auto-downloaded |
+| **AAX SDK** | For AAX | macOS, Windows | Requires Avid account |
+| **AUv2/AUv3** | For AU | macOS, iOS | Built into Apple SDKs |
+| **Skia** | Optional | All | High-quality graphics backend |
+| **NanoVG** | Default | All | Included in iPlug2 |
+
+## Verification
+
+Verify your installation by checking these paths:
+
+<Tabs>
+  <Tab title="macOS">
+    ```bash
+    # Check SDKs
+    ls Dependencies/IPlug/VST3_SDK/
+    ls Dependencies/IPlug/CLAP_SDK/
+    ls Dependencies/IPlug/WAM_SDK/
+
+    # Check Skia (optional)
+    ls Dependencies/Build/mac/
+
+    # Verify CMake
+    cmake --version
+
+    # Verify Ninja
+    ninja --version
+    ```
+  </Tab>
+  
+  <Tab title="Windows">
+    ```bash
+    # Check SDKs
+    dir Dependencies\IPlug\VST3_SDK\
+    dir Dependencies\IPlug\CLAP_SDK\
+    dir Dependencies\IPlug\WAM_SDK\
+
+    # Check Skia (optional)
+    dir Dependencies\Build\win\
+
+    # Verify CMake
+    cmake --version
+
+    # Verify Ninja (optional)
+    ninja --version
+    ```
+  </Tab>
+</Tabs>
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="download-iplug-sdks.sh fails on Windows">
+    Use Git Bash instead of Command Prompt or PowerShell:
+
+    ```bash
+    "C:\Program Files\Git\bin\bash.exe" download-iplug-sdks.sh
+    ```
+
+    Or manually download each SDK from the links above.
+  </Accordion>
+
+  <Accordion title="CMake can't find Visual Studio">
+    Ensure Visual Studio is properly installed with C++ tools:
+
+    ```bash
+    cmake -G "Visual Studio 17 2022" -A x64 ..
+    ```
+
+    If this fails, verify Visual Studio installation via **Visual Studio Installer**.
+  </Accordion>
+
+  <Accordion title="Xcode Command Line Tools not found">
+    Install or reset the tools:
+
+    ```bash
+    xcode-select --install
+    sudo xcode-select --reset
+    ```
+  </Accordion>
+
+  <Accordion title="AAXLibrary build fails">
+    - Ensure you retargeted the solution to your Visual Studio version
+    - Verify runtime library settings are correct (/MT for Release, /MTd for Debug)
+    - Check that both x64 and ARM64 configurations are set
+  </Accordion>
+
+  <Accordion title="Emscripten not found">
+    Activate the Emscripten environment:
+
+    ```bash
+    source /path/to/emsdk/emsdk_env.sh
+    ```
+
+    On Windows:
+
+    ```bash
+    C:\path\to\emsdk\emsdk_env.bat
+    ```
+  </Accordion>
+
+  <Accordion title="iOS build fails with code signing error">
+    - Ensure you have a valid Apple Developer account
+    - Select your team in Xcode's Signing & Capabilities
+    - Use automatic signing for development
+    - Try building for simulator first (no signing required)
+  </Accordion>
+</AccordionGroup>
+
+## Out-of-Source Setup (Recommended for 2025)
+
+For new projects, consider using [iPlug2OOS (Out-Of-Source)](https://github.com/iPlug2/iPlug2OOS) which keeps your plugin code separate from the iPlug2 framework:
+
+```bash
+git clone https://github.com/iPlug2/iPlug2OOS.git
+cd iPlug2OOS
+git submodule update --init --recursive
+```
+
+<Info>
+iPlug2OOS is the recommended starting point for new projects in 2025, providing better separation and easier updates.
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+    Build your first plugin in minutes with our quickstart tutorial.
+  </Card>
+  
+  <Card title="API Documentation" icon="book" href="https://iplug2.github.io/docs">
+    Explore the complete API reference.
+  </Card>
+  
+  <Card title="Examples" icon="code" href="https://github.com/iPlug2/iPlug2/tree/master/Examples">
+    Browse example plugins for effects, instruments, and more.
+  </Card>
+  
+  <Card title="Wiki" icon="book-open" href="https://github.com/iPlug2/iPlug2/wiki">
+    Read in-depth guides and tutorials on the iPlug2 Wiki.
+  </Card>
+</CardGroup>

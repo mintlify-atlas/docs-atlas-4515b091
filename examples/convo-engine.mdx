@@ -1,0 +1,503 @@
+---
+title: "Convolution Engine Example"
+description: "Build a convolution reverb using WDL's fast convolution engine with impulse response resampling"
+---
+
+## Overview
+
+The **IPlugConvoEngine** example demonstrates how to implement a convolution-based audio effect using WDL's efficient `WDL_ConvolutionEngine`. This example shows:
+- Loading and using impulse responses
+- Resampling IRs to match the session sample rate
+- Proper latency reporting
+- Dry/wet mixing
+
+<Info>
+Convolution is used for reverb, cabinet simulation, and other effects that model real acoustic spaces or equipment.
+</Info>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Fast Convolution" icon="bolt">
+    Uses WDL's optimized FFT-based convolution
+  </Card>
+  <Card title="IR Resampling" icon="arrows-rotate">
+    Adapts impulse responses to any sample rate
+  </Card>
+  <Card title="Multiple Resamplers" icon="wrench">
+    Supports WDL Resampler, r8brain, or linear interpolation
+  </Card>
+  <Card title="Latency Compensation" icon="clock">
+    Automatically reports engine latency to host
+  </Card>
+</CardGroup>
+
+## Plugin Configuration
+
+```cpp
+#define PLUG_NAME "IPlugConvoEngine"
+#define PLUG_CHANNEL_IO "1-1"  // Mono processing
+
+// Choose resampler library
+#define USE_WDL_RESAMPLER  // or USE_R8BRAIN
+
+#ifdef SAMPLE_TYPE_FLOAT
+  #define WDL_FFT_REALSIZE 4
+#else
+  #define WDL_FFT_REALSIZE 8
+#endif
+```
+
+<Note>
+`WDL_FFT_REALSIZE` must be defined before including `convoengine.h`. It tells WDL whether you're using float (4 bytes) or double (8 bytes) samples.
+</Note>
+
+## Implementation
+
+### Plugin Class
+
+```cpp
+class IPlugConvoEngine final : public Plugin
+{
+public:
+  IPlugConvoEngine(const InstanceInfo& info);
+
+#if IPLUG_DSP
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  void OnReset() override;
+  
+private:
+  inline int ResampleLength(int srcLength, double srcRate, double destRate) const
+  {
+    return int(destRate / srcRate * (double)srcLength + 0.5);
+  }
+
+  template <class I, class O> 
+  void Resample(const I* pSrc, int srcLength, double srcRate, 
+                O* pDst, int dstLength, double dstRate);
+  
+  static const float mIR[512];      // Embedded impulse response
+
+  WDL_ImpulseBuffer mImpulse;
+  WDL_ConvolutionEngine mEngine;    // or WDL_ConvolutionEngine_Div for low latency
+  
+  static constexpr int mBlockLength = 64;
+
+  #if defined USE_WDL_RESAMPLER
+  WDL_Resampler mResampler;
+  #elif defined USE_R8BRAIN
+  std::unique_ptr<CDSPResampler16IR> mResampler;
+  #endif
+
+  double mSampleRate = 0.0;
+#endif
+};
+```
+
+### Initialization
+
+```cpp
+IPlugConvoEngine::IPlugConvoEngine(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kParamDry)->InitDouble("Dry", 0., 0., 1., 0.001);
+  GetParam(kParamWet)->InitDouble("Wet", 1., 0., 1., 0.001);
+}
+```
+
+## Impulse Response Setup
+
+### Embedding the IR
+
+The IR is embedded as a C array:
+
+```cpp
+const float IPlugConvoEngine::mIR[] =
+{
+  #include "ir.h"  // Contains comma-separated sample values
+};
+```
+
+### Resampling on Reset
+
+When sample rate changes, resample the IR:
+
+```cpp
+void IPlugConvoEngine::OnReset()
+{
+  if (GetSampleRate() != mSampleRate)
+  {
+    mSampleRate = GetSampleRate();
+
+    static constexpr int irLength = sizeof(mIR) / sizeof(mIR[0]);
+    static constexpr double irSampleRate = 44100.;
+    mImpulse.SetNumChannels(1);
+
+#if defined USE_WDL_RESAMPLER
+    mResampler.SetMode(false, 0, true);  // Sinc, default size
+    mResampler.SetFeedMode(true);        // Input driven
+#elif defined USE_R8BRAIN
+    mResampler = std::make_unique<CDSPResampler16IR>(
+      irSampleRate, mSampleRate, mBlockLength
+    );
+#endif
+
+    // Resample the impulse response
+    auto len = mImpulse.SetLength(
+      ResampleLength(irLength, irSampleRate, mSampleRate)
+    );
+    if (len)
+    {
+      Resample(mIR, irLength, irSampleRate, 
+               mImpulse.impulses[0].Get(), len, mSampleRate);
+    }
+    
+    // Tie the impulse response to the convolution engine
+    mEngine.SetImpulse(&mImpulse);
+    
+    // Report latency to host
+    SetLatency(mEngine.GetLatency());
+  }
+}
+```
+
+<Steps>
+  <Step title="Detect sample rate change">
+    Only resample when the sample rate actually changes
+  </Step>
+  <Step title="Set up impulse buffer">
+    Calculate new length and allocate space
+  </Step>
+  <Step title="Resample IR">
+    Convert IR from original rate to session rate
+  </Step>
+  <Step title="Attach to engine">
+    Tell convolution engine to use the new impulse
+  </Step>
+  <Step title="Report latency">
+    Inform host of processing delay
+  </Step>
+</Steps>
+
+## Resampling Implementation
+
+### Using WDL Resampler
+
+```cpp
+template <class I, class O>
+void IPlugConvoEngine::Resample(const I* pSrc, int srcLength, double srcRate, 
+                                 O* pDst, int dstLength, double dstRate)
+{
+  if (dstLength == srcLength)
+  {
+    // No resampling needed, just copy
+    for (int i = 0; i < dstLength; ++i) 
+      *pDst++ = (O)*pSrc++;
+    return;
+  }
+
+#if defined USE_WDL_RESAMPLER
+  mResampler.SetRates(srcRate, dstRate);
+  double scale = srcRate / dstRate;
+  
+  while (dstLength > 0)
+  {
+    WDL_ResampleSample* p;
+    int n = mResampler.ResamplePrepare(mBlockLength, 1, &p);
+    int m = n;
+    
+    // Copy input samples
+    if (n > srcLength) n = srcLength;
+    for (int i = 0; i < n; ++i) 
+      *p++ = (WDL_ResampleSample)*pSrc++;
+    if (n < m) 
+      memset(p, 0, (m - n) * sizeof(WDL_ResampleSample));
+    srcLength -= n;
+
+    // Get output samples
+    WDL_ResampleSample buf[mBlockLength];
+    n = mResampler.ResampleOut(buf, m, m, 1);
+    if (n > dstLength) n = dstLength;
+    p = buf;
+    for (int i = 0; i < n; ++i) 
+      *pDst++ = (O)(scale * *p++);
+    dstLength -= n;
+  }
+  mResampler.Reset();
+```
+
+### Using r8brain
+
+```cpp
+#elif defined USE_R8BRAIN
+  double scale = srcRate / dstRate;
+  
+  while (dstLength > 0)
+  {
+    double buf[mBlockLength], *p = buf;
+    int n = mBlockLength;
+    if (n > srcLength) n = srcLength;
+    
+    // Convert to double
+    for (int i = 0; i < n; ++i) 
+      *p++ = (double)*pSrc++;
+    if (n < mBlockLength) 
+      memset(p, 0, (mBlockLength - n) * sizeof(double));
+    srcLength -= n;
+
+    // Process through resampler
+    n = mResampler->process(buf, mBlockLength, p);
+    if (n > dstLength) n = dstLength;
+    for (int i = 0; i < n; ++i) 
+      *pDst++ = (O)(scale * *p++);
+    dstLength -= n;
+  }
+  mResampler->clear();
+```
+
+### Linear Interpolation Fallback
+
+```cpp
+#else
+  // Simple linear interpolation
+  double pos = 0.;
+  double delta = srcRate / dstRate;
+  
+  for (int i = 0; i < dstLength; ++i)
+  {
+    int idx = int(pos);
+    if (idx < srcLength)
+    {
+      double frac = pos - floor(pos);
+      double interp = (1. - frac) * pSrc[idx];
+      if (++idx < srcLength) 
+        interp += frac * pSrc[idx];
+      pos += delta;
+      *pDst++ = (O)(delta * interp);
+    }
+    else
+    {
+      *pDst++ = 0;
+    }
+  }
+#endif
+}
+```
+
+<Tip>
+WDL Resampler provides good quality with minimal dependencies. r8brain offers higher quality but requires an external library. Linear interpolation is simple but lower quality.
+</Tip>
+
+## Audio Processing
+
+### Convolution with Dry/Wet Mix
+
+```cpp
+void IPlugConvoEngine::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  sample* inputL = inputs[0];
+  sample* outputL = outputs[0];
+  
+  // Add input to convolution engine
+  mEngine.Add(inputs, nFrames, 1);
+
+  int nAvailableSamples = std::min(mEngine.Avail(nFrames), nFrames);
+
+  const sample dryGain = GetParam(kParamDry)->Value();
+  const sample wetGain = GetParam(kParamWet)->Value();
+
+  // If not enough samples available yet, output only dry
+  for (auto i = 0; i < nFrames - nAvailableSamples; ++i)
+  {
+    *outputL++ = dryGain * *inputL++;
+  }
+
+  // Output mixed dry/wet
+  if (nAvailableSamples > 0)
+  {
+    WDL_FFT_REAL* pWetSignal = mEngine.Get()[0];
+    for (auto i = 0; i < nAvailableSamples; ++i)
+    {
+      *outputL++ = dryGain * *inputL++ + wetGain * *pWetSignal++;
+    }
+
+    // Remove processed samples from engine
+    mEngine.Advance(nAvailableSamples);
+  }
+}
+```
+
+<Steps>
+  <Step title="Add input">
+    Send input samples to the convolution engine
+  </Step>
+  <Step title="Check availability">
+    See how many convolved samples are ready
+  </Step>
+  <Step title="Output dry">
+    For initial latency period, output only dry signal
+  </Step>
+  <Step title="Mix dry/wet">
+    Once convolution is ready, mix dry and processed signals
+  </Step>
+  <Step title="Advance engine">
+    Tell engine we've consumed the samples
+  </Step>
+</Steps>
+
+## Latency Considerations
+
+### Why Convolution Has Latency
+
+FFT-based convolution processes audio in blocks. The engine needs to accumulate enough samples before it can output processed audio.
+
+```cpp
+SetLatency(mEngine.GetLatency());
+```
+
+This tells the host to compensate by delaying other tracks.
+
+### Low-Latency Alternative
+
+For lower latency, use the partitioned version:
+
+```cpp
+WDL_ConvolutionEngine_Div mEngine;  // Lower latency, slightly more CPU
+```
+
+<Warning>
+Don't change the impulse response during playback without proper fade-out/fade-in. It can cause clicks and pops.
+</Warning>
+
+## Loading External IRs
+
+### From WAV File
+
+```cpp
+void LoadImpulseFromFile(const char* path)
+{
+  // Use your preferred audio file loader
+  // WDL_FileRead, libsndfile, etc.
+  
+  // Load samples into buffer
+  std::vector<float> irSamples;
+  double irSampleRate;
+  // ... load file ...
+  
+  // Resample if needed
+  mImpulse.SetNumChannels(1);
+  auto len = mImpulse.SetLength(
+    ResampleLength(irSamples.size(), irSampleRate, GetSampleRate())
+  );
+  
+  if (len)
+  {
+    Resample(irSamples.data(), irSamples.size(), irSampleRate,
+             mImpulse.impulses[0].Get(), len, GetSampleRate());
+  }
+  
+  mEngine.SetImpulse(&mImpulse);
+  SetLatency(mEngine.GetLatency());
+}
+```
+
+### Stereo IRs
+
+For stereo impulse responses:
+
+```cpp
+mImpulse.SetNumChannels(2);
+
+// Load left channel
+Resample(leftIR, irLength, irSampleRate, 
+         mImpulse.impulses[0].Get(), len, mSampleRate);
+
+// Load right channel
+Resample(rightIR, irLength, irSampleRate, 
+         mImpulse.impulses[1].Get(), len, mSampleRate);
+```
+
+## Optimizations
+
+### Block Size
+
+```cpp
+static constexpr int mBlockLength = 64;  // Adjust for latency/CPU tradeoff
+```
+
+Smaller blocks = lower latency but more CPU. Typical values: 32-128.
+
+### Impulse Response Length
+
+Longer IRs sound more realistic but use more CPU:
+
+```cpp
+// Truncate very long IRs
+const int maxIRLength = GetSampleRate() * 3;  // 3 seconds max
+if (irLength > maxIRLength)
+  irLength = maxIRLength;
+```
+
+## Building a Convolution Plugin
+
+<Steps>
+  <Step title="Include WDL convolution">
+    Define `WDL_FFT_REALSIZE` and include `convoengine.h`
+  </Step>
+  <Step title="Choose resampler">
+    Select WDL Resampler, r8brain, or implement your own
+  </Step>
+  <Step title="Embed or load IR">
+    Either embed IR in code or load from external file
+  </Step>
+  <Step title="Resample in OnReset">
+    Convert IR to session sample rate when needed
+  </Step>
+  <Step title="Process with engine">
+    Add input, get output, mix dry/wet
+  </Step>
+  <Step title="Report latency">
+    Call `SetLatency()` after setting up the engine
+  </Step>
+</Steps>
+
+## Common Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Reverb" icon="building">
+    Load room/hall impulse responses for realistic reverb
+  </Card>
+  <Card title="Cabinet Simulation" icon="guitar">
+    Model guitar/bass cabinets and microphones
+  </Card>
+  <Card title="EQ Modeling" icon="sliders">
+    Capture EQ curves from analog hardware
+  </Card>
+  <Card title="Time-Based Effects" icon="clock">
+    Create complex delay patterns
+  </Card>
+</CardGroup>
+
+## Related Examples
+
+<CardGroup cols={2}>
+  <Card title="Visualizer" icon="chart-line" href="/examples/visualizer">
+    FFT and frequency domain processing
+  </Card>
+  <Card title="Sidechain" icon="arrow-right-to-bracket" href="/examples/sidechain">
+    Multi-channel processing
+  </Card>
+</CardGroup>
+
+## Source Files
+
+- `Examples/IPlugConvoEngine/IPlugConvoEngine.h`
+- `Examples/IPlugConvoEngine/IPlugConvoEngine.cpp`
+- `Examples/IPlugConvoEngine/ir.h`
+- `Examples/IPlugConvoEngine/config.h`
+
+## References
+
+- [WDL ConvolutionEngine Documentation](https://github.com/justinfrankel/wdl)
+- [r8brain-free-src](https://github.com/avaneev/r8brain-free-src)
+- [Convolution Reverb Theory](https://en.wikipedia.org/wiki/Convolution_reverb)

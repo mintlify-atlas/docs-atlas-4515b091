@@ -1,0 +1,729 @@
+---
+title: 'Plugin Formats'
+description: 'Comprehensive guide to all plugin formats supported by iPlug2: VST3, AUv2, AUv3, AAX, CLAP, and WAM'
+icon: 'plug'
+---
+
+## Supported Formats
+
+iPlug2 supports all major plugin formats through a unified API abstraction. Write your code once, compile to multiple formats.
+
+<CardGroup cols={3}>
+  <Card title="VST3" icon="circle-dot">
+    Steinberg's modern standard
+  </Card>
+  <Card title="AUv2" icon="apple">
+    macOS/iOS (legacy)
+  </Card>
+  <Card title="AUv3" icon="apple">
+    macOS/iOS (modern)
+  </Card>
+  <Card title="AAX" icon="volume-high">
+    Avid Pro Tools
+  </Card>
+  <Card title="CLAP" icon="plug-circle-bolt">
+    Modern open standard
+  </Card>
+  <Card title="WAM" icon="globe">
+    Web Audio Modules
+  </Card>
+</CardGroup>
+
+<Note>
+VST2 is also supported but deprecated due to licensing. Not recommended for new projects.
+</Note>
+
+## Format Comparison
+
+| Feature | VST3 | AUv2 | AUv3 | AAX | CLAP | WAM |
+|---------|------|------|------|-----|------|-----|
+| **Windows** | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ |
+| **macOS** | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **iOS** | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| **Linux** | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| **Web** | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+| **Sidechain** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **MIDI I/O** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Multi-bus** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Sample Accurate** | ✅ | ⚠️ | ✅ | ⚠️ | ✅ | ✅ |
+| **Open Standard** | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ |
+
+## VST3
+
+<Info>
+Implemented in [IPlugVST3.h](https://github.com/iPlug2/iPlug2/blob/master/IPlug/VST3/IPlugVST3.h)
+</Info>
+
+Steinberg's VST3 is the most widely supported plugin format across DAWs.
+
+### Architecture
+
+VST3 uses a **separated processor/controller** architecture:
+
+```cpp
+class IPlugVST3 : public IPlugAPIBase,
+                  public IPlugVST3ProcessorBase,     // Audio processing
+                  public IPlugVST3ControllerBase,    // UI/parameters
+                  public Steinberg::Vst::SingleComponentEffect
+```
+
+<Tabs>
+  <Tab title="Features">
+    **VST3 Capabilities**
+    
+    - Sample-accurate automation
+    - Multiple input/output buses
+    - Sidechain support
+    - Context menus in host
+    - Channel context information
+    - Preset management
+    - MIDI mapping
+    
+    ```cpp
+    // VST3-specific: MIDI CC mapping
+    Steinberg::tresult getMidiControllerAssignment(
+      Steinberg::int32 busIndex, 
+      Steinberg::int16 channel,
+      Steinberg::Vst::CtrlNumber midiCCNumber, 
+      Steinberg::Vst::ParamID& tag
+    );
+    ```
+  </Tab>
+  
+  <Tab title="Platform Support">
+    **Platforms**
+    - ✅ Windows (64-bit)
+    - ✅ macOS (Intel & Apple Silicon)
+    - ✅ Linux
+    
+    **File Extensions**
+    - `.vst3` - VST3 bundle (all platforms)
+    
+    **Installation Paths**
+    - Windows: `C:\Program Files\Common Files\VST3\`
+    - macOS: `/Library/Audio/Plug-Ins/VST3/`
+    - Linux: `~/.vst3/`
+  </Tab>
+  
+  <Tab title="Configuration">
+    ```cpp config.h
+    #define VST3_SUBCATEGORY "Fx"
+    // Options: "Fx", "Instrument", "Analyzer", etc.
+    
+    #define PLUG_CHANNEL_IO "1-1 2-2"
+    // Mono-to-mono and stereo-to-stereo
+    
+    #define PLUG_LATENCY 0
+    // Report latency in samples
+    ```
+    
+    See VST3 categories: `Fx`, `Instrument`, `Spatial`, `Analyzer`, `Delay`, `Distortion`, `Dynamics`, `EQ`, `Filter`, `Mastering`, `Modulation`, `Restoration`, `Reverb`, `Surround`, `Tools`
+  </Tab>
+</Tabs>
+
+### VST3 Specifics
+
+<Warning>
+VST3 has a **separated state** model. Use `SerializeVST3CtrlrState()` and `UnserializeVST3CtrlrState()` for UI-only state if needed (rare).
+</Warning>
+
+```cpp
+// Usually you only need this
+virtual bool SerializeState(IByteChunk& chunk) const {
+  return SerializeParams(chunk);
+}
+
+// VST3-specific controller state (rare)
+virtual bool SerializeVST3CtrlrState(IByteChunk& chunk) const {
+  return true;  // Usually not needed
+}
+```
+
+## Audio Unit v2 (AUv2)
+
+<Info>
+Implemented in [IPlugAU.h](https://github.com/iPlug2/iPlug2/blob/master/IPlug/AUv2/IPlugAU.h)
+</Info>
+
+Apple's legacy Audio Unit format for macOS. Still widely used but being replaced by AUv3.
+
+### Architecture
+
+```cpp
+class IPlugAU : public IPlugAPIBase,
+                public IPlugProcessor
+```
+
+<Tabs>
+  <Tab title="Features">
+    **AUv2 Capabilities**
+    
+    - macOS native format
+    - Parameter units (dB, Hz, etc.)
+    - Preset management
+    - Factory preset support
+    - Multi-bus I/O
+    - Sidechain inputs
+    
+    ```cpp
+    // AUv2 parameter units affect host display
+    GetParam(kFreq)->InitFrequency("Frequency", 1000., 20., 20000.);
+    // Automatically sets EParamUnit::kUnitFrequency
+    ```
+    
+    **Parameter Units**
+    ```cpp
+    enum EParamUnit {
+      kUnitPercentage, kUnitSeconds, kUnitMilliseconds,
+      kUnitDB, kUnitFrequency, kUnitCents, kUnitMIDINote,
+      kUnitBPM, kUnitPan, kUnitPhase, kUnitDegrees,
+      kUnitLinearGain, kUnitOctaves, kUnitRate,
+      kUnitCustom  // Use custom label
+    };
+    ```
+  </Tab>
+  
+  <Tab title="Platform Support">
+    **Platforms**
+    - ✅ macOS only (Intel & Apple Silicon)
+    - ❌ iOS (use AUv3)
+    
+    **File Extensions**
+    - `.component` - AUv2 bundle
+    
+    **Installation Paths**
+    - macOS: `/Library/Audio/Plug-Ins/Components/`
+    - User: `~/Library/Audio/Plug-Ins/Components/`
+    
+    <Note>
+    AUv2 plugins must be signed and notarized for macOS 10.15+ (Catalina and later).
+    </Note>
+  </Tab>
+  
+  <Tab title="Configuration">
+    ```cpp config.h
+    #define PLUG_TYPE 0
+    // 0 = Effect, 1 = Instrument, 2 = MIDI Effect
+    
+    #define AUV2_ENTRY IPlugEffect_Entry
+    #define AUV2_ENTRY_STR "IPlugEffect_Entry"
+    #define AUV2_FACTORY IPlugEffect_Factory
+    #define AUV2_VIEW_CLASS IPlugEffect_View
+    #define AUV2_VIEW_CLASS_STR "IPlugEffect_View"
+    ```
+    
+    **AUv2 Types** (derived from `PLUG_TYPE`):
+    - `'aufx'` - Audio effect
+    - `'aumu'` - Music device (instrument)
+    - `'aumf'` - MIDI effect
+    - `'augn'` - Generator (no input)
+  </Tab>
+</Tabs>
+
+### AUv2 Specifics
+
+```cpp
+// Get track name (AUv2 & AAX support this)
+void GetTrackName(WDL_String& str) override;
+
+// AUv2 uses component manager on older macOS
+static OSStatus IPlugAUEntry(ComponentParameters* pParams, void* pPlug);
+```
+
+## Audio Unit v3 (AUv3)
+
+<Info>
+Implemented in [IPlugAUv3.h](https://github.com/iPlug2/iPlug2/blob/master/IPlug/AUv3/IPlugAUv3.h)
+</Info>
+
+Apple's modern Audio Unit format for macOS and iOS with app extensions.
+
+### Architecture
+
+```cpp
+class IPlugAUv3 : public IPlugAPIBase,
+                  public IPlugProcessor
+```
+
+<Tabs>
+  <Tab title="Features">
+    **AUv3 Capabilities**
+    
+    - App extension architecture (sandbox)
+    - iOS support (iPad/iPhone)
+    - Sample-accurate parameter events
+    - Inter-app audio
+    - State saving/restoration
+    - SwiftUI integration possible
+    
+    ```cpp
+    // AUv3 uses event-based processing
+    void ProcessWithEvents(
+      AudioTimeStamp const* timestamp,
+      uint32_t frameCount,
+      AURenderEvent const* events,
+      ITimeInfo& timeInfo
+    );
+    ```
+  </Tab>
+  
+  <Tab title="Platform Support">
+    **Platforms**
+    - ✅ macOS 10.11+ (Intel & Apple Silicon)
+    - ✅ iOS 9+
+    - ❌ Windows, Linux
+    
+    **Distribution**
+    - Requires host app (container)
+    - Distributed via App Store or direct
+    - Can include iOS app with AUv3
+    
+    **Example: AUv3 on iPad**
+    ```
+    MyPlugin.app/
+      PlugIns/
+        MyPluginAU.appex  ← AUv3 extension
+    ```
+  </Tab>
+  
+  <Tab title="Configuration">
+    ```cpp config.h
+    #define APP_COPY_AUV3 1
+    // Copy AUv3 to app bundle
+    
+    #define BUNDLE_NAME "IPlugEffect"
+    #define BUNDLE_MFR "AcmeInc"
+    #define BUNDLE_DOMAIN "com"
+    // Bundle ID: com.AcmeInc.IPlugEffect
+    ```
+    
+    **AUv3 requires:**
+    - App entitlements
+    - Audio component description in Info.plist
+    - Code signing
+    - Sandboxing (on iOS)
+  </Tab>
+</Tabs>
+
+### AUv3 Specifics
+
+<Warning>
+AUv3 uses **parameter addresses** instead of indices. iPlug2 handles the mapping automatically.
+</Warning>
+
+```cpp
+// Internal mapping between param indices and AU addresses
+void AddParamAddress(int paramIdx, uint64_t paramAddress);
+uint64_t GetParamAddress(int paramIdx);
+int GetParamIdx(uint64_t paramAddress);
+```
+
+## AAX
+
+<Info>
+Implemented in [IPlugAAX.h](https://github.com/iPlug2/iPlug2/blob/master/IPlug/AAX/IPlugAAX.h)
+</Info>
+
+Avid's plugin format for Pro Tools. Requires AAX SDK (free registration required).
+
+### Architecture
+
+```cpp
+class IPlugAAX : public IPlugAPIBase,
+                 public IPlugProcessor,
+                 public AAX_CIPlugParameters
+```
+
+<Tabs>
+  <Tab title="Features">
+    **AAX Capabilities**
+    
+    - Native Pro Tools integration
+    - AudioSuite (offline processing)
+    - Stem formats (multi-channel)
+    - Track naming
+    - Pro Tools automation
+    - Parameter highlighting
+    
+    ```cpp
+    // AAX-specific: parameter highlighting in Pro Tools
+    AAX_Result SetControlHighlightInfo(
+      AAX_CParamID iParameterID,
+      AAX_CBoolean iIsHighlighted,
+      AAX_EHighlightColor iColor
+    );
+    ```
+  </Tab>
+  
+  <Tab title="Platform Support">
+    **Platforms**
+    - ✅ Windows (64-bit)
+    - ✅ macOS (Intel & Apple Silicon)
+    - ❌ iOS, Linux
+    
+    **File Extensions**
+    - `.aaxplugin` - AAX bundle
+    
+    **Installation Paths**
+    - Windows: `C:\Program Files\Common Files\Avid\Audio\Plug-Ins\`
+    - macOS: `/Library/Application Support/Avid/Audio/Plug-Ins/`
+    
+    <Warning>
+    AAX plugins must be signed by Avid (PACE iLok). Development signing available for testing.
+    </Warning>
+  </Tab>
+  
+  <Tab title="Configuration">
+    ```cpp config.h
+    #define AAX_TYPE_IDS 'IEF1', 'IEF2'
+    #define AAX_TYPE_IDS_AUDIOSUITE 'IEA1', 'IEA2'
+    #define AAX_PLUG_MFR_STR "Acme"
+    #define AAX_PLUG_NAME_STR "IPlugEffect\nIPEF"
+    #define AAX_PLUG_CATEGORY_STR "Effect"
+    #define AAX_DOES_AUDIOSUITE 1
+    ```
+    
+    **AAX Categories:**
+    `EQ`, `Dynamics`, `PitchShift`, `Reverb`, `Delay`, `Modulation`, `Harmonic`, `NoiseReduction`, `Dither`, `SoundField`, `Effect`
+  </Tab>
+</Tabs>
+
+### AAX Specifics
+
+```cpp
+// AAX parameter IDs are offset by 1
+const int kAAXParamIdxOffset = 1;
+
+// AAX processing is page-table based
+// iPlug2 handles this automatically
+
+// Get track name (works in Pro Tools)
+void GetTrackName(WDL_String& str) override;
+```
+
+## CLAP
+
+<Info>
+Implemented in [IPlugCLAP.h](https://github.com/iPlug2/iPlug2/blob/master/IPlug/CLAP/IPlugCLAP.h)
+</Info>
+
+CLever Audio Plug-in - modern open-source plugin standard created by the u-he team.
+
+### Architecture
+
+```cpp
+class IPlugCLAP : public IPlugAPIBase,
+                  public IPlugProcessor,
+                  public ClapPluginHelper
+```
+
+<Tabs>
+  <Tab title="Features">
+    **CLAP Capabilities**
+    
+    - Sample-accurate parameter automation
+    - Modern C++ design
+    - Open standard (no licensing)
+    - Note expressions (MPE-like)
+    - Polyphonic modulation
+    - Voice info/management
+    - Extensible architecture
+    
+    ```cpp
+    // CLAP uses event-based parameter changes
+    struct ParamToHost {
+      enum class Type { Begin, Value, End };
+      Type mType;
+      int mIdx;
+      double mValue;
+    };
+    ```
+    
+    <Tip>
+    CLAP has the most modern feature set: note expressions, polyphonic modulation, and flexible extension mechanism.
+    </Tip>
+  </Tab>
+  
+  <Tab title="Platform Support">
+    **Platforms**
+    - ✅ Windows (64-bit)
+    - ✅ macOS (Intel & Apple Silicon)
+    - ✅ Linux
+    - ❌ iOS, Web
+    
+    **File Extensions**
+    - `.clap` - CLAP bundle (all platforms)
+    
+    **Installation Paths**
+    - Windows: `C:\Program Files\Common Files\CLAP\`
+    - macOS: `/Library/Audio/Plug-Ins/CLAP/`
+    - Linux: `~/.clap/` or `/usr/lib/clap/`
+    
+    **Host Support**
+    - Bitwig Studio (full support)
+    - Reaper (full support)
+    - FL Studio (in development)
+    - Many more adopting
+  </Tab>
+  
+  <Tab title="Configuration">
+    ```cpp config.h
+    #define CLAP_MANUAL_URL "https://example.com/manual.pdf"
+    #define CLAP_SUPPORT_URL "https://example.com/support"
+    #define CLAP_DESCRIPTION "A simple audio effect"
+    #define CLAP_FEATURES "audio-effect"
+    // Features: "audio-effect", "instrument", "synthesizer",
+    //           "delay", "reverb", "distortion", etc.
+    ```
+    
+    See full feature list: [CLAP features](https://github.com/free-audio/clap/blob/main/include/clap/plugin-features.h)
+  </Tab>
+</Tabs>
+
+### CLAP Specifics
+
+```cpp
+// CLAP uses parameter gestures (begin/change/end)
+void BeginInformHostOfParamChange(int idx) override;
+void InformHostOfParamChange(int idx, double normalizedValue) override;
+void EndInformHostOfParamChange(int idx) override;
+
+// CLAP tail size is dynamic
+void SetTailSize(int tailSize) override;
+```
+
+## WAM (Web Audio Modules)
+
+<Info>
+Implemented in [IPlugWAM.h](https://github.com/iPlug2/iPlug2/blob/master/IPlug/WEB/IPlugWAM.h)
+</Info>
+
+Web Audio Modules run in browsers using WebAssembly. Perfect for demos and web-based DAWs.
+
+### Architecture
+
+```cpp
+class IPlugWAM : public IPlugAPIBase,
+                 public IPlugProcessor,
+                 public WAM::Processor  // WebAssembly processor
+```
+
+<Tabs>
+  <Tab title="Features">
+    **WAM Capabilities**
+    
+    - Runs in web browsers
+    - WebAssembly (WASM) compilation
+    - Web Audio API integration
+    - Real-time audio in browser
+    - MIDI support
+    - SysEx support
+    - Message passing (JS ↔ C++)
+    
+    ```cpp
+    // WAM-specific message handling
+    void onMessage(char* verb, char* res, double data) override;
+    void onMessage(char* verb, char* res, char* data) override;
+    void onParam(uint32_t idparam, double value) override;
+    ```
+  </Tab>
+  
+  <Tab title="Platform Support">
+    **Platforms**
+    - ✅ Web browsers (Chrome, Firefox, Safari, Edge)
+    - ✅ All desktop platforms via browser
+    - ✅ Mobile browsers (iOS Safari, Chrome Mobile)
+    - ❌ Native (use other formats)
+    
+    **Deployment**
+    - Static web hosting
+    - CDN distribution
+    - Embedded in web apps
+    
+    **Web DAWs supporting WAM:**
+    - WebAudioModules.org hosts
+    - AudioMass
+    - Amped Studio (planned)
+  </Tab>
+  
+  <Tab title="Configuration">
+    ```cpp config.h
+    // Same config as other formats
+    #define PLUG_NAME "IPlugEffect"
+    #define PLUG_CHANNEL_IO "2-2"
+    
+    // WAM compiles to WebAssembly
+    // Build with Emscripten:
+    // emcc -O3 -s WASM=1 ...
+    ```
+    
+    **UI Options for WAM:**
+    - IGraphics (compiled to WebGL)
+    - Web UI (HTML/CSS/JavaScript)
+    - Canvas-based custom UI
+  </Tab>
+</Tabs>
+
+### WAM Specifics
+
+<Warning>
+WAM runs in AudioWorkletGlobalScope (sandboxed). Limited access to system resources.
+</Warning>
+
+```cpp
+// WAM lifecycle
+const char* init(uint32_t bufsize, uint32_t sr, void* pDesc) override;
+void terminate() override;
+void resize(uint32_t bufsize) override;
+
+// WAM uses different message system (no direct MIDI send)
+void SetLatency(int samples) override {}  // Not supported
+bool SendMidiMsg(const IMidiMsg& msg) override { return false; }
+```
+
+## Choosing a Format
+
+<CardGroup cols={2}>
+  <Card title="Maximum Compatibility" icon="users">
+    **VST3 + AUv2**
+    
+    Covers Windows, macOS, and most DAWs.
+  </Card>
+  <Card title="Pro Tools" icon="music">
+    **AAX + VST3 + AUv2**
+    
+    Adds Pro Tools support (requires AAX SDK and signing).
+  </Card>
+  <Card title="Modern/Future" icon="rocket">
+    **CLAP + VST3**
+    
+    CLAP has best features, VST3 for compatibility.
+  </Card>
+  <Card title="iOS/Mobile" icon="mobile">
+    **AUv3**
+    
+    Only option for iOS. Can include in app.
+  </Card>
+  <Card title="Web/Demos" icon="globe">
+    **WAM**
+    
+    Share plugins via URL, no installation.
+  </Card>
+  <Card title="Everything" icon="star">
+    **All Formats**
+    
+    iPlug2 can compile to all formats from same code!
+  </Card>
+</CardGroup>
+
+## Multi-Format Build System
+
+iPlug2 uses duplicate projects for each format:
+
+```
+MyPlugin/
+  MyPlugin.cpp
+  MyPlugin.h
+  config.h
+  
+  projects/
+    MyPlugin-app.vcxproj         (Standalone)
+    MyPlugin-vst3.vcxproj        (VST3)
+    MyPlugin-au.xcodeproj        (AUv2)
+    MyPlugin-auv3.xcodeproj      (AUv3)
+    MyPlugin-aax.vcxproj         (AAX)
+    MyPlugin-clap.vcxproj        (CLAP)
+    MyPlugin-wam.vcxproj         (WAM)
+```
+
+<Tip>
+The duplicate.py script creates these projects automatically from templates. Run it once, then build any format.
+</Tip>
+
+## Platform-Specific Notes
+
+<Tabs>
+  <Tab title="Windows">
+    **Available Formats:**
+    - VST3
+    - AAX
+    - CLAP
+    - Standalone App
+    
+    **Visual Studio Required:**
+    - VS 2019 or later
+    - Windows 10 SDK
+    
+    **Code Signing:**
+    - Recommended for distribution
+    - Not required for development
+  </Tab>
+  
+  <Tab title="macOS">
+    **Available Formats:**
+    - VST3
+    - AUv2
+    - AUv3
+    - AAX
+    - CLAP
+    - Standalone App
+    
+    **Xcode Required:**
+    - Xcode 12+ (for Apple Silicon)
+    - Command Line Tools
+    
+    **Code Signing:**
+    - Required for distribution (App Store or notarization)
+    - Developer ID or App Store signing
+    
+    <Warning>
+    macOS 10.15+ requires notarization for plugins.
+    </Warning>
+  </Tab>
+  
+  <Tab title="iOS">
+    **Available Formats:**
+    - AUv3 only
+    
+    **Requirements:**
+    - Xcode 12+
+    - iOS Deployment Target: iOS 9+
+    - App wrapper (AUv3 is extension)
+    
+    **Distribution:**
+    - App Store (requires Apple Developer account)
+    - TestFlight for beta testing
+  </Tab>
+  
+  <Tab title="Linux">
+    **Available Formats:**
+    - VST3
+    - CLAP
+    - Standalone App
+    
+    **Build Tools:**
+    - GCC 9+ or Clang 10+
+    - CMake or Make
+    
+    **Dependencies:**
+    - X11, ALSA, or JACK
+    - GTK3 (for file dialogs)
+  </Tab>
+</Tabs>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="building" href="/concepts/architecture">
+    Understand the plugin architecture and lifecycle
+  </Card>
+  <Card title="Parameters" icon="sliders" href="/concepts/parameters">
+    Learn parameter types and automation
+  </Card>
+  <Card title="Audio Processing" icon="waveform" href="/concepts/audio-processing">
+    Master ProcessBlock and real-time audio
+  </Card>
+  <Card title="Project Structure" icon="folder-tree" href="/concepts/project-structure">
+    Explore config.h and project organization
+  </Card>
+</CardGroup>

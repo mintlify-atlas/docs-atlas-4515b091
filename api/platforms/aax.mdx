@@ -1,0 +1,489 @@
+---
+title: AAX Platform API
+description: AAX API implementation for iPlug2 plugins in Pro Tools
+---
+
+# AAX Platform API
+
+The AAX (Avid Audio eXtension) implementation provides complete integration with Pro Tools and other Avid hosts through the AAX SDK.
+
+## Overview
+
+The `IPlugAAX` class implements the AAX API, inheriting from Avid's `AAX_CIPlugParameters` class to provide seamless integration with Pro Tools' parameter system, automation, and rendering architecture.
+
+<Info>
+AAX is the native plugin format for Pro Tools 11 and later. It replaced RTAS and supports modern features like 64-bit processing, extended channel configurations, and Pro Tools HDX.
+</Info>
+
+## Core Classes
+
+### IPlugAAX
+
+Defined in: `IPlug/AAX/IPlugAAX.h`
+
+```cpp
+class IPlugAAX : public IPlugAPIBase
+               , public IPlugProcessor
+               , public AAX_CIPlugParameters
+```
+
+The main AAX plugin class, handling:
+- Parameter synchronization
+- Audio rendering with Pro Tools' algorithm callback
+- State management (chunks)
+- MIDI I/O
+- Track context information
+
+### AAX_CEffectGUI_IPLUG
+
+```cpp
+class AAX_CEffectGUI_IPLUG : public AAX_CEffectGUI
+```
+
+AAX GUI wrapper class that bridges iPlug's editor with Pro Tools' view system.
+
+**Key Methods:**
+- `Create()` - Factory method to create GUI instances
+- `SetControlHighlightInfo()` - Handles control highlighting from Pro Tools
+- `GetViewSize()` - Returns editor dimensions
+- `ParameterUpdated()` - Handles parameter updates from host
+
+## Key Methods
+
+### Host Communication
+
+#### BeginInformHostOfParamChange
+```cpp
+void BeginInformHostOfParamChange(int idx) override;
+```
+Notifies Pro Tools that a parameter gesture is beginning.
+
+**Parameters:**
+- `idx` - Parameter index
+
+#### InformHostOfParamChange
+```cpp
+void InformHostOfParamChange(int idx, double normalizedValue) override;
+```
+Informs Pro Tools of a parameter value change.
+
+**Parameters:**
+- `idx` - Parameter index
+- `normalizedValue` - Normalized parameter value (0.0 to 1.0)
+
+#### EndInformHostOfParamChange
+```cpp
+void EndInformHostOfParamChange(int idx) override;
+```
+Notifies Pro Tools that a parameter gesture has ended.
+
+**Parameters:**
+- `idx` - Parameter index
+
+### Editor
+
+#### EditorResize
+```cpp
+bool EditorResize(int viewWidth, int viewHeight) override;
+```
+Requests an editor size change.
+
+**Parameters:**
+- `viewWidth` - New width in pixels
+- `viewHeight` - New height in pixels
+
+**Returns:** `true` if resize was accepted
+
+<Warning>
+Pro Tools has restrictions on when plugins can resize. Dynamic resizing during playback may not be supported in all versions.
+</Warning>
+
+### Track Information
+
+#### GetTrackName
+```cpp
+void GetTrackName(WDL_String& str) override;
+```
+Retrieves the name of the track the plugin is inserted on.
+
+**Parameters:**
+- `str` - String to receive track name
+
+<Info>
+Pro Tools provides detailed track context information including track name, color, and position in the session.
+</Info>
+
+### Processing
+
+#### SetLatency
+```cpp
+void SetLatency(int samples) override;
+```
+Sets the plugin's processing latency.
+
+**Parameters:**
+- `samples` - Latency in samples
+
+<Note>
+AAX latency must be declared at initialization and cannot be changed dynamically. Set latency in your plugin's `EffectInit()` method.
+</Note>
+
+### MIDI
+
+#### SendMidiMsg
+```cpp
+bool SendMidiMsg(const IMidiMsg& msg) override;
+```
+Sends a MIDI message from the plugin to Pro Tools.
+
+**Parameters:**
+- `msg` - MIDI message to send
+
+**Returns:** `true` if message was sent successfully
+
+<Info>
+MIDI output requires configuring the output MIDI node in your AAX descriptor during registration.
+</Info>
+
+## AAX-Specific Methods
+
+### EffectInit
+```cpp
+AAX_Result EffectInit() override;
+```
+Initializes the AAX effect. Called once when the plugin is loaded.
+
+**Returns:** `AAX_SUCCESS` on successful initialization
+
+**Usage:**
+This is where you should:
+- Register parameters
+- Configure algorithm processing IDs
+- Set up MIDI nodes
+- Declare latency
+
+**Example:**
+```cpp
+AAX_Result MyPlugin::EffectInit()
+{
+  AAX_Result result = IPlugAAX::EffectInit();
+  
+  // Additional AAX-specific initialization
+  
+  return result;
+}
+```
+
+### RenderAudio
+```cpp
+void RenderAudio(
+    AAX_SIPlugRenderInfo* ioRenderInfo,
+    const TParamValPair* inSynchronizedParamValues[],
+    int32_t inNumSynchronizedParamValues) override;
+```
+Main audio rendering callback.
+
+**Parameters:**
+- `ioRenderInfo` - Render context with buffers, MIDI, meters
+- `inSynchronizedParamValues` - Array of synchronized parameter changes
+- `inNumSynchronizedParamValues` - Number of parameter changes
+
+<Warning>
+RenderAudio runs on the Pro Tools audio thread. It must be real-time safe: no allocations, no locks, no system calls.
+</Warning>
+
+### UpdateParameterNormalizedValue
+```cpp
+AAX_Result UpdateParameterNormalizedValue(
+    AAX_CParamID iParameterID,
+    double iValue,
+    AAX_EUpdateSource iSource) override;
+```
+Handles parameter updates from Pro Tools.
+
+**Parameters:**
+- `iParameterID` - AAX parameter ID (string)
+- `iValue` - Normalized value (0.0 to 1.0)
+- `iSource` - Update source (UI, automation, etc.)
+
+**Returns:** `AAX_SUCCESS` on success
+
+## State Management
+
+AAX supports chunk-based state storage for plugins with complex state or non-parameter data.
+
+### GetChunkIDFromIndex
+```cpp
+AAX_Result GetChunkIDFromIndex(int32_t index, AAX_CTypeID* pChunkID) const override;
+```
+Returns the chunk ID for a given index.
+
+**Parameters:**
+- `index` - Chunk index (0-based)
+- `pChunkID` - Receives chunk type ID
+
+**Returns:** `AAX_SUCCESS` on success
+
+### GetChunkSize
+```cpp
+AAX_Result GetChunkSize(AAX_CTypeID chunkID, uint32_t* pChunkSize) const override;
+```
+Returns the size of a chunk.
+
+**Parameters:**
+- `chunkID` - Chunk type ID
+- `pChunkSize` - Receives chunk size in bytes
+
+**Returns:** `AAX_SUCCESS` on success
+
+### GetChunk
+```cpp
+AAX_Result GetChunk(AAX_CTypeID chunkID, AAX_SPlugInChunk* pChunk) const override;
+```
+Saves chunk data.
+
+**Parameters:**
+- `chunkID` - Chunk type ID
+- `pChunk` - Chunk structure to fill
+
+**Returns:** `AAX_SUCCESS` on success
+
+### SetChunk
+```cpp
+AAX_Result SetChunk(AAX_CTypeID chunkID, const AAX_SPlugInChunk* pChunk) override;
+```
+Restores chunk data.
+
+**Parameters:**
+- `chunkID` - Chunk type ID
+- `pChunk` - Chunk data to restore
+
+**Returns:** `AAX_SUCCESS` on success
+
+### CompareActiveChunk
+```cpp
+AAX_Result CompareActiveChunk(
+    const AAX_SPlugInChunk* pChunk,
+    AAX_CBoolean* pIsEqual) const override;
+```
+Compares chunk data with current state for Pro Tools' compare light.
+
+**Parameters:**
+- `pChunk` - Chunk to compare
+- `pIsEqual` - Receives comparison result
+
+**Returns:** `AAX_SUCCESS` on success
+
+<Info>
+The compare light in Pro Tools indicates when the plugin's current state differs from the saved state. Implement proper comparison for accurate feedback.
+</Info>
+
+### DirtyPTCompareState
+```cpp
+void DirtyPTCompareState();
+```
+Marks the plugin state as changed for the Pro Tools compare light.
+
+**Usage:**
+```cpp
+// After changing non-indexed parameters or internal state
+DirtyPTCompareState();
+```
+
+<Note>
+Call this when your plugin's state changes in a way that's not captured by indexed parameters (e.g., custom data, imported samples, etc.).
+</Note>
+
+### NotificationReceived
+```cpp
+AAX_Result NotificationReceived(
+    AAX_CTypeID type,
+    const void* data,
+    uint32_t size) override;
+```
+Handles notifications from Pro Tools.
+
+**Parameters:**
+- `type` - Notification type ID
+- `data` - Notification data
+- `size` - Data size in bytes
+
+**Returns:** `AAX_SUCCESS` on success
+
+## Configuration
+
+### AAX Setup Structure
+
+Defined in: `IPlug/AAX/IPlugAAX_Parameters.h`
+
+```cpp
+struct AAX_SIPlugSetupInfo
+{
+  // MIDI configuration
+  bool mNeedsGlobalMIDI;
+  const char* mGlobalMIDINodeName;
+  uint32_t mGlobalMIDIEventMask;
+  bool mNeedsInputMIDI;
+  const char* mInputMIDINodeName;
+  uint32_t mInputMIDIChannelMask;
+  bool mNeedsOutputMIDI;
+  const char* mOutputMIDINodeName;
+  
+  // Transport
+  bool mNeedsTransport;
+  
+  // Metering
+  int32_t mNumMeters;
+  const AAX_CTypeID* mMeterIDs;
+  
+  // Audio I/O
+  AAX_EStemFormat mInputStemFormat;
+  AAX_EStemFormat mOutputStemFormat;
+  
+  // Identifiers
+  AAX_CTypeID mManufacturerID;
+  AAX_CTypeID mProductID;
+  AAX_CTypeID mPluginID;
+  
+  // Configuration
+  bool mCanBypass;
+  int32_t mLatency;
+  // ...
+};
+```
+
+### Common Stem Formats
+
+<CardGroup cols={2}>
+  <Card title="Mono/Stereo" icon="waveform">
+    ```cpp
+    AAX_eStemFormat_Mono     // 1 channel
+    AAX_eStemFormat_Stereo   // 2 channels
+    ```
+  </Card>
+  
+  <Card title="Surround" icon="circle-nodes">
+    ```cpp
+    AAX_eStemFormat_5_0      // 5.0 surround
+    AAX_eStemFormat_5_1      // 5.1 surround
+    AAX_eStemFormat_7_0_DTS  // 7.0 surround
+    AAX_eStemFormat_7_1_DTS  // 7.1 surround
+    ```
+  </Card>
+  
+  <Card title="Immersive" icon="sphere">
+    ```cpp
+    AAX_eStemFormat_7_0_2    // 7.0.2 Atmos
+    AAX_eStemFormat_7_1_2    // 7.1.2 Atmos
+    AAX_eStemFormat_Ambi_1_ACN // Ambisonics
+    ```
+  </Card>
+  
+  <Card title="Special" icon="gear">
+    ```cpp
+    AAX_eStemFormat_INT32_IN // Aux input
+    AAX_eStemFormat_None     // No audio
+    ```
+  </Card>
+</CardGroup>
+
+### Plugin Configuration
+
+Set in your plugin's `config.h`:
+
+```cpp
+#define PLUG_TYPE 0 // 0=effect, 1=instrument
+#define PLUG_MFR_ID 'Acme'
+#define PLUG_UNIQUE_ID 'Plug'
+#define PLUG_LATENCY 0
+
+// AAX-specific
+#define AAX_TYPE_IDS 'EFN1', 'EFN2' // Native processing IDs
+#define AAX_PLUG_MFR_STR "Acme"
+#define AAX_PLUG_NAME_STR "MyPlugin"
+#define AAX_PLUG_CATEGORY_STR "Effect"
+#define AAX_DOES_AUDIOSUITE 1
+```
+
+## Factory Function
+
+### Create
+```cpp
+static AAX_CEffectParameters* AAX_CALLBACK Create();
+```
+AAX factory method to create plugin instances.
+
+**Returns:** Pointer to new `AAX_CEffectParameters` instance (your plugin class)
+
+**Example:**
+```cpp
+AAX_CEffectParameters* AAX_CALLBACK IPlugAAX::Create()
+{
+  InstanceInfo info;
+  return MakePlug(info);
+}
+```
+
+### MakePlug
+```cpp
+IPlugAAX* MakePlug(const InstanceInfo& info);
+```
+Your plugin factory function.
+
+**Parameters:**
+- `info` - Instance information (empty for AAX)
+
+**Returns:** Pointer to plugin instance
+
+**Example:**
+```cpp
+IPlugAAX* MakePlug(const InstanceInfo& info)
+{
+  return new MyPlugin(info, MakeConfig(kNumParams, kNumPresets));
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Parameter IDs" icon="hashtag">
+    AAX uses string-based parameter IDs. iPlug2 handles conversion automatically, but parameters use an offset of `kAAXParamIdxOffset`.
+  </Card>
+  
+  <Card title="Chunk State" icon="cubes">
+    Use chunks for complex state. Always implement `CompareActiveChunk()` properly for the compare light to work correctly.
+  </Card>
+  
+  <Card title="MIDI Setup" icon="keyboard">
+    Configure MIDI nodes during descriptor registration, not in `EffectInit()`. Declare all MIDI needs upfront.
+  </Card>
+  
+  <Card title="Latency" icon="hourglass">
+    AAX latency is fixed at initialization. For variable latency algorithms, declare the maximum possible latency.
+  </Card>
+</CardGroup>
+
+## Common Issues
+
+<Warning>
+**DSP Thread**: Pro Tools' audio callback runs on a high-priority thread. Any blocking call will cause audio dropouts or crash Pro Tools.
+</Warning>
+
+<Warning>
+**Parameter Updates**: Parameter updates in `RenderAudio` must be processed sample-accurately using the synchronized parameter values.
+</Warning>
+
+<Tip>
+**Signing**: AAX plugins must be code-signed with a certificate from Avid (PACE). Contact Avid to join the AAX developer program.
+</Tip>
+
+<Info>
+**AudioSuite**: Set `AAX_DOES_AUDIOSUITE 1` to create an offline processing version of your plugin for Pro Tools' AudioSuite menu.
+</Info>
+
+## Related Documentation
+
+- [IPlugAPIBase](/api/core/iplugapibase) - Base API functionality
+- [IPlugProcessor](/api/core/iplugprocessor) - Audio processing interface
+- [Plugin Configuration](/guides/configuration) - Plugin configuration options
+- [AAX SDK Documentation](https://www.avid.com/alliance-partner-program) - Official AAX documentation (requires developer account)

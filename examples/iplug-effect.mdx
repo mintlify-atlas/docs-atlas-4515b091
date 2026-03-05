@@ -1,0 +1,357 @@
+---
+title: IPlugEffect Example
+description: A basic audio effect plugin demonstrating volume control and fundamental iPlug2 concepts
+---
+
+IPlugEffect is the simplest iPlug2 example - a volume control effect that demonstrates the core concepts of parameter handling, audio processing, and UI construction.
+
+## What You'll Learn
+
+<CardGroup cols={2}>
+  <Card title="Parameter Definition" icon="list">
+    How to declare and initialize plugin parameters
+  </Card>
+  <Card title="Audio Processing" icon="waveform">
+    Implementing realtime-safe ProcessBlock method
+  </Card>
+  <Card title="UI Construction" icon="paintbrush">
+    Building a simple interface with IGraphics
+  </Card>
+  <Card title="Plugin Configuration" icon="gear">
+    Setting up plugin metadata and formats
+  </Card>
+</CardGroup>
+
+## Project Structure
+
+The IPlugEffect example consists of three core files:
+
+```
+Examples/IPlugEffect/
+├── IPlugEffect.h         # Plugin class and parameter declarations
+├── IPlugEffect.cpp       # Implementation and UI layout
+├── config.h              # Plugin metadata and settings
+└── resources/            # Fonts and assets
+```
+
+## Plugin Header (IPlugEffect.h)
+
+The header defines the parameter enum and plugin class:
+
+```cpp IPlugEffect.h
+#pragma once
+
+#include "IPlug_include_in_plug_hdr.h"
+
+const int kNumPresets = 1;
+
+enum EParams
+{
+  kGain = 0,
+  kNumParams
+};
+
+using namespace iplug;
+using namespace igraphics;
+
+class IPlugEffect final : public Plugin
+{
+public:
+  IPlugEffect(const InstanceInfo& info);
+
+#if IPLUG_DSP
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+#endif
+};
+```
+
+<Info>
+Parameters are defined as an enum starting at 0. The `kNumParams` entry automatically counts the total number of parameters.
+</Info>
+
+## Plugin Implementation
+
+### Constructor and Parameter Initialization
+
+The constructor initializes parameters and builds the UI:
+
+```cpp IPlugEffect.cpp
+#include "IPlugEffect.h"
+#include "IPlug_include_in_plug_src.h"
+#include "IControls.h"
+
+IPlugEffect::IPlugEffect(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  // Initialize the gain parameter
+  GetParam(kGain)->InitDouble("Gain", 0., 0., 100.0, 0.01, "%");
+
+#if IPLUG_EDITOR
+  mMakeGraphicsFunc = [&]() {
+    return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS, 
+                        GetScaleForScreen(PLUG_WIDTH, PLUG_HEIGHT));
+  };
+  
+  mLayoutFunc = [&](IGraphics* pGraphics) {
+    pGraphics->AttachCornerResizer(EUIResizerMode::Scale, false);
+    pGraphics->AttachPanelBackground(COLOR_GRAY);
+    pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
+    
+    const IRECT bounds = pGraphics->GetBounds();
+    const IRECT innerBounds = bounds.GetPadded(-10.f);
+    
+    // Title text
+    pGraphics->AttachControl(new ITextControl(
+      innerBounds.GetMidVPadded(50), 
+      "Hello iPlug 2!", 
+      IText(50)
+    ));
+    
+    // Gain knob
+    pGraphics->AttachControl(new IVKnobControl(
+      innerBounds.GetCentredInside(100).GetVShifted(-100), 
+      kGain
+    ));
+    
+    // Version info
+    const IRECT versionBounds = innerBounds.GetFromTRHC(300, 20);
+    WDL_String buildInfoStr;
+    GetBuildInfoStr(buildInfoStr, __DATE__, __TIME__);
+    pGraphics->AttachControl(new ITextControl(
+      versionBounds, 
+      buildInfoStr.Get(), 
+      DEFAULT_TEXT.WithAlign(EAlign::Far)
+    ));
+  };
+#endif
+}
+```
+
+<Steps>
+  <Step title="Initialize Parameters">
+    Call `GetParam(index)->InitDouble()` or similar methods to set parameter properties
+  </Step>
+  <Step title="Create Graphics">
+    Use `mMakeGraphicsFunc` lambda to instantiate the IGraphics interface
+  </Step>
+  <Step title="Build UI Layout">
+    Use `mLayoutFunc` lambda to attach controls to specific screen regions
+  </Step>
+</Steps>
+
+### Parameter Initialization Methods
+
+The `InitDouble` method accepts these parameters:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| name | `const char*` | Display name for the parameter |
+| defaultVal | `double` | Initial value |
+| minVal | `double` | Minimum value |
+| maxVal | `double` | Maximum value |
+| step | `double` | Increment step for fine control |
+| label | `const char*` | Unit label (e.g., "%", "dB", "Hz") |
+
+### Audio Processing
+
+The `ProcessBlock` method implements realtime audio processing:
+
+```cpp IPlugEffect.cpp
+#if IPLUG_DSP
+void IPlugEffect::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  // Get the current parameter value (0-100)
+  const double gain = GetParam(kGain)->Value() / 100.;
+  const int nChans = NOutChansConnected();
+  
+  // Process each sample
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+}
+#endif
+```
+
+<Warning>
+`ProcessBlock` must be realtime-safe:
+- No memory allocations
+- No mutex locks
+- No file I/O
+- No system calls
+</Warning>
+
+### Understanding the Processing Loop
+
+<Steps>
+  <Step title="Get Parameter Value">
+    Retrieve the current gain value using `GetParam(kGain)->Value()`
+  </Step>
+  <Step title="Determine Channel Count">
+    Use `NOutChansConnected()` to handle flexible I/O configurations
+  </Step>
+  <Step title="Process Samples">
+    Iterate through frames and channels, applying the gain multiplier
+  </Step>
+</Steps>
+
+## Plugin Configuration (config.h)
+
+The config file defines plugin metadata and format settings:
+
+```cpp config.h
+#define PLUG_NAME "IPlugEffect"
+#define PLUG_MFR "AcmeInc"
+#define PLUG_VERSION_HEX 0x00010000
+#define PLUG_VERSION_STR "1.0.0"
+#define PLUG_UNIQUE_ID 'Ipef'
+#define PLUG_MFR_ID 'Acme'
+#define PLUG_URL_STR "https://iplug2.github.io"
+#define PLUG_EMAIL_STR "spam@me.com"
+#define PLUG_COPYRIGHT_STR "Copyright 2025 Acme Inc"
+#define PLUG_CLASS_NAME IPlugEffect
+
+#define BUNDLE_NAME "IPlugEffect"
+#define BUNDLE_MFR "AcmeInc"
+#define BUNDLE_DOMAIN "com"
+
+// Audio I/O configuration
+#define PLUG_CHANNEL_IO "1-1 2-2"  // Mono->Mono, Stereo->Stereo
+
+// Plugin characteristics
+#define PLUG_LATENCY 0
+#define PLUG_TYPE 0                 // 0=Effect, 1=Instrument
+#define PLUG_DOES_MIDI_IN 0
+#define PLUG_DOES_MIDI_OUT 0
+#define PLUG_DOES_MPE 0
+#define PLUG_DOES_STATE_CHUNKS 0
+#define PLUG_HAS_UI 1
+#define PLUG_WIDTH 600
+#define PLUG_HEIGHT 600
+#define PLUG_FPS 60
+#define PLUG_SHARED_RESOURCES 0
+#define PLUG_HOST_RESIZE 0
+
+// VST3 specific
+#define VST3_SUBCATEGORY "Fx"
+
+// CLAP specific
+#define CLAP_DESCRIPTION "A simple audio effect for modifying gain"
+#define CLAP_FEATURES "audio-effect"
+
+#define ROBOTO_FN "Roboto-Regular.ttf"
+```
+
+<Tip>
+Change `PLUG_UNIQUE_ID` and `PLUG_MFR_ID` to unique 4-character codes for your own plugins. These must be registered with Apple for AudioUnit distribution.
+</Tip>
+
+## Key Configuration Options
+
+### Channel I/O Format
+
+The `PLUG_CHANNEL_IO` string defines supported configurations:
+
+```cpp
+"1-1 2-2"      // Mono or Stereo
+"2-2"          // Stereo only
+"0-2"          // Generator (no input)
+"1-1 2-2 4-4"  // Mono, Stereo, or Quad
+```
+
+### Plugin Type
+
+```cpp
+#define PLUG_TYPE 0  // Effect
+#define PLUG_TYPE 1  // Instrument
+```
+
+## Building the UI
+
+### Common IGraphics Controls
+
+The example uses several standard controls:
+
+| Control | Purpose | Example |
+|---------|---------|----------|
+| `IVKnobControl` | Rotary knob | Gain control |
+| `ITextControl` | Static text | Title and version |
+| `AttachPanelBackground` | Background color | Gray panel |
+| `AttachCornerResizer` | Resize handle | Scale UI |
+
+### IRECT Layout System
+
+iPlug2 uses `IRECT` for positioning controls:
+
+```cpp
+const IRECT bounds = pGraphics->GetBounds();           // Full window
+const IRECT padded = bounds.GetPadded(-10.f);          // Inset 10px
+const IRECT centered = padded.GetCentredInside(100);   // 100x100 center
+const IRECT shifted = centered.GetVShifted(-100);      // Move up 100px
+```
+
+<CardGroup cols={2}>
+  <Card title="GetBounds()" icon="border-all">
+    Returns the full control area
+  </Card>
+  <Card title="GetPadded(px)" icon="compress">
+    Insets by specified pixels (negative values)
+  </Card>
+  <Card title="GetCentredInside(w, h)" icon="bullseye">
+    Creates centered rectangle of given size
+  </Card>
+  <Card title="GetVShifted(dy)" icon="arrows-up-down">
+    Moves vertically by dy pixels
+  </Card>
+</CardGroup>
+
+## Running the Example
+
+<Steps>
+  <Step title="Navigate to the example">
+    ```bash
+    cd Examples/IPlugEffect
+    ```
+  </Step>
+  <Step title="Build the standalone app">
+    Open the appropriate project file for your platform:
+    - **macOS**: `IPlugEffect-macOS.xcodeproj`
+    - **Windows**: `IPlugEffect.sln`
+    - **Linux**: Use the included makefiles
+  </Step>
+  <Step title="Run and test">
+    Build and launch the standalone app. Adjust the gain knob to hear the effect on generated audio or input signals.
+  </Step>
+</Steps>
+
+## Customization Ideas
+
+<CardGroup cols={2}>
+  <Card title="Add More Parameters" icon="plus">
+    Add pan, mix, or filter parameters to the `EParams` enum
+  </Card>
+  <Card title="Different Processing" icon="wand-magic-sparkles">
+    Implement EQ, delay, or distortion in `ProcessBlock`
+  </Card>
+  <Card title="Enhanced UI" icon="palette">
+    Add meters, graphs, or custom graphics
+  </Card>
+  <Card title="Stereo Processing" icon="left-right">
+    Implement stereo-specific effects like width control
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="IPlugInstrument" icon="arrow-right" href="/examples/iplug-instrument">
+    Build a synthesizer with MIDI input
+  </Card>
+  <Card title="IPlugControls" icon="arrow-right" href="/examples/iplug-controls">
+    Explore all available UI controls
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/plugin">
+    Dive into the Plugin class documentation
+  </Card>
+</CardGroup>

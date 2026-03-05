@@ -1,0 +1,230 @@
+---
+title: "Controls Overview"
+description: "Introduction to the iPlug2 IGraphics controls library"
+---
+
+## What Are Controls?
+
+Controls are interactive UI elements in iPlug2's IGraphics system. They handle user input (mouse, touch, keyboard, MIDI) and visual rendering.
+
+## Control Categories
+
+<CardGroup cols={2}>
+  <Card title="Knobs & Sliders" icon="sliders" href="/api/controls/knobs-sliders">
+    Rotary knobs, linear sliders, range sliders, and XY pads
+  </Card>
+  <Card title="Buttons & Switches" icon="toggle-on" href="/api/controls/buttons-switches">
+    Momentary buttons, switches, toggles, tabs, and radio buttons
+  </Card>
+  <Card title="Displays & Meters" icon="chart-line" href="/api/controls/displays">
+    Meters, scopes, displays, and visualization controls
+  </Card>
+  <Card title="Menus & Text" icon="bars" href="/api/controls/menus">
+    Pop-up menus, text entry, number boxes
+  </Card>
+  <Card title="Special Controls" icon="star" href="/api/controls/special">
+    Keyboards, color pickers, LED indicators, and more
+  </Card>
+</CardGroup>
+
+## Vector vs Bitmap Controls
+
+iPlug2 provides two rendering approaches:
+
+### Vector Controls (IV*)
+
+Drawn using graphics primitives (paths, shapes). Start with `IV` prefix.
+
+**Advantages:**
+- Scale perfectly to any size
+- Styleable via `IVStyle`
+- Lightweight, no image assets
+- Works with NanoVG backend (no dependencies needed)
+
+**Example:**
+```cpp
+pGraphics->AttachControl(new IVKnobControl(bounds, kGain, "Gain"));
+```
+
+### Bitmap Controls (IB*)
+
+Use pre-rendered images. Start with `IB` prefix.
+
+**Advantages:**
+- Pixel-perfect custom designs
+- Can use complex artwork
+- Consistent with traditional plugin UIs
+
+**Example:**
+```cpp
+const IBitmap knob = pGraphics->LoadBitmap("knob.png", 60); // 60 frames
+pGraphics->AttachControl(new IBKnobControl(bounds, knob, kGain));
+```
+
+### SVG Controls (ISVG*)
+
+Use SVG vector graphics. Start with `ISVG` prefix.
+
+**Advantages:**
+- Scalable like vector controls
+- Can import designs from graphic design tools
+- Supports color replacement
+
+**Example:**
+```cpp
+ISVG svg = pGraphics->LoadSVG("knob.svg");
+pGraphics->AttachControl(new ISVGKnobControl(bounds, svg, kGain));
+```
+
+## Basic Control Concepts
+
+### Linking to Parameters
+
+Most controls link to a parameter by index:
+
+```cpp
+enum EParams { kGain, kFreq, kNumParams };
+
+// In UI setup
+pGraphics->AttachControl(new IVKnobControl(knobBounds, kGain, "Gain"));
+```
+
+The control automatically:
+- Updates when parameter changes (automation, presets)
+- Sends parameter changes from user interaction
+- Displays parameter values and labels
+
+### Action Functions
+
+Controls without parameters use action functions:
+
+```cpp
+pGraphics->AttachControl(
+  new IVButtonControl(bounds, [](IControl* pControl) {
+    // Handle button click
+    DBGMSG("Button clicked!\n");
+  }, "Click Me")
+);
+```
+
+### Styling
+
+Vector controls use `IVStyle` for visual customization:
+
+```cpp
+IVStyle customStyle = DEFAULT_STYLE
+  .WithColor(kFG, COLOR_BLUE)
+  .WithColor(kPR, COLOR_RED)
+  .WithRoundness(0.5f)
+  .WithFrameThickness(2.f);
+
+pGraphics->AttachControl(
+  new IVKnobControl(bounds, kGain, "Gain", customStyle)
+);
+```
+
+## Control Bounds
+
+All controls require an `IRECT` defining their position and size:
+
+```cpp
+// Absolute positioning
+IRECT knobBounds(100, 100, 200, 200); // L, T, R, B
+
+// Using helpers
+IRECT knobBounds = IRECT(100, 100, 100, 100); // x, y, w, h
+IRECT centered = bounds.GetCentredInside(80, 80);
+IRECT padded = bounds.GetPadded(-10); // Shrink by 10px
+```
+
+## Common Control Patterns
+
+### Read-Only Display
+
+```cpp
+auto* pLabel = new IVLabelControl(bounds, "Output Level");
+pLabel->SetDisabled(true); // Disable interaction
+pGraphics->AttachControl(pLabel);
+```
+
+### Custom Gearing (Sensitivity)
+
+```cpp
+// Higher = finer control, slower movement
+pGraphics->AttachControl(
+  new IVKnobControl(bounds, kGain, "Fine Tune", DEFAULT_STYLE,
+                    false, false, -135.f, 135.f, -135.f,
+                    EDirection::Vertical, 4.0) // 4x slower
+);
+```
+
+### Grouping Controls
+
+```cpp
+// Add controls to a named group
+pGraphics->AttachControl(knob, kCtrlTagFilter, "filterGroup");
+pGraphics->AttachControl(slider, kCtrlTagFilter, "filterGroup");
+
+// Hide/show entire group
+pGraphics->HideControlGroup("filterGroup", true);
+```
+
+## Data Visualization
+
+Many controls receive real-time data from the audio thread using `ISender`:
+
+```cpp
+// In plugin header
+IPeakAvgSender<2> mMeterSender; // 2 channels
+
+// In plugin constructor
+mMeterSender.SetControl(meterTag);
+
+// In ProcessBlock
+mMeterSender.ProcessBlock(inputs, nFrames, kCtrlTagMeter);
+
+// In UI setup
+pGraphics->AttachControl(
+  new IVPeakAvgMeterControl<2>(bounds, "Meter"),
+  kCtrlTagMeter
+);
+```
+
+## Control Hierarchy
+
+```
+IControl (base class)
+├── IKnobControlBase
+│   ├── IVKnobControl (vector)
+│   ├── IBKnobControl (bitmap)
+│   └── ISVGKnobControl (SVG)
+├── ISliderControlBase
+│   ├── IVSliderControl (vector)
+│   ├── IBSliderControl (bitmap)
+│   └── ISVGSliderControl (SVG)
+├── IButtonControlBase
+│   ├── IVButtonControl (vector)
+│   ├── IBButtonControl (bitmap)
+│   └── ISVGButtonControl (SVG)
+├── ISwitchControlBase
+│   ├── IVSwitchControl (vector)
+│   └── IBSwitchControl (bitmap)
+└── (many more specialized controls)
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Knobs & Sliders" href="/api/controls/knobs-sliders">
+    Learn about rotary and linear controls
+  </Card>
+  <Card title="IVStyle Reference" href="/api/styling/ivstyle">
+    Customize vector control appearance
+  </Card>
+</CardGroup>
+
+## Source Reference
+
+- **Main Header:** `IGraphics/Controls/IControls.h`
+- **Base Classes:** `IGraphics/IControl.h`
+- **All Controls:** `IGraphics/Controls/`

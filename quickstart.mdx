@@ -1,80 +1,413 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: 'Quickstart'
+description: 'Build your first iPlug2 audio plugin in minutes'
 ---
 
-## Get started in three steps
+Get up and running with iPlug2 by creating a simple audio effect plugin. This guide will walk you through duplicating an example project and building your first plugin.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+Before starting, ensure you have:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+- A C++ development environment (Xcode on macOS or Visual Studio 2019+ on Windows)
+- CMake 3.14 or later
+- Git (for cloning the repository)
+- Basic understanding of C++ and audio programming concepts
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+Make sure you've completed the [installation](/installation) steps before proceeding.
 </Note>
+
+## Create Your First Plugin
+
+<Steps>
+  <Step title="Clone the iPlug2 repository">
+    Start by cloning the iPlug2 repository to your local machine:
+
+    ```bash
+    git clone https://github.com/iPlug2/iPlug2.git
+    cd iPlug2
+    ```
+  </Step>
+
+  <Step title="Download required SDKs">
+    Download the VST3, CLAP, and WAM SDKs (these are free and publicly available):
+
+    ```bash
+    cd Dependencies/IPlug
+    ./download-iplug-sdks.sh
+    cd ../..
+    ```
+
+    <Info>
+    AAX (Pro Tools) requires manually downloading the SDK from Avid's developer portal. AUv2/AUv3 formats are macOS-only and require no additional SDKs.
+    </Info>
+  </Step>
+
+  <Step title="Duplicate the example project">
+    Use the duplicate script to create your plugin from the IPlugEffect template:
+
+    ```bash
+    cd Examples
+    ./duplicate.py IPlugEffect MyGainPlugin YourCompany
+    ```
+
+    This creates a new project at `Examples/MyGainPlugin/` with all files renamed and configured.
+
+    <Tabs>
+      <Tab title="macOS/Linux">
+        ```bash
+        ./duplicate.py IPlugEffect MyGainPlugin YourCompany
+        ```
+      </Tab>
+      <Tab title="Windows">
+        ```bash
+        python duplicate.py IPlugEffect MyGainPlugin YourCompany
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Build with CMake">
+    Build your plugin using CMake:
+
+    <Tabs>
+      <Tab title="macOS">
+        ```bash
+        cd MyGainPlugin
+        mkdir build && cd build
+        cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ..
+        ninja
+        ```
+      </Tab>
+      <Tab title="Windows">
+        ```bash
+        cd MyGainPlugin
+        mkdir build && cd build
+        cmake -G "Visual Studio 17 2022" -A x64 ..
+        cmake --build . --config Release
+        ```
+      </Tab>
+    </Tabs>
+
+    <Info>
+    By default, plugins are automatically deployed to system plugin folders. Find them in:
+    - **macOS**: `~/Library/Audio/Plug-Ins/VST3`, `~/Library/Audio/Plug-Ins/CLAP`
+    - **Windows**: `%LOCALAPPDATA%\Programs\Common\VST3`, `%LOCALAPPDATA%\Programs\Common\CLAP`
+    </Info>
+  </Step>
+
+  <Step title="Test your plugin">
+    Open your DAW (Reaper, Ableton Live, Logic Pro, etc.) and scan for new plugins. Your plugin should appear as "MyGainPlugin" by "YourCompany".
+  </Step>
+</Steps>
+
+## Understanding the Code
+
+Your new plugin consists of three main files:
+
+### config.h
+
+Defines plugin metadata and configuration:
+
+```cpp config.h
+#define PLUG_NAME "MyGainPlugin"
+#define PLUG_MFR "YourCompany"
+#define PLUG_VERSION_HEX 0x00010000
+#define PLUG_UNIQUE_ID 'Mgpl'  // Auto-generated unique 4-char ID
+#define PLUG_MFR_ID 'Ycmp'
+#define PLUG_CHANNEL_IO "1-1 2-2"  // Supports mono and stereo
+```
+
+### MyGainPlugin.h
+
+Declares the plugin class and parameter enum:
+
+```cpp MyGainPlugin.h
+#pragma once
+
+#include "IPlug_include_in_plug_hdr.h"
+
+const int kNumPresets = 1;
+
+enum EParams
+{
+  kGain = 0,
+  kNumParams
+};
+
+using namespace iplug;
+using namespace igraphics;
+
+class MyGainPlugin final : public Plugin
+{
+public:
+  MyGainPlugin(const InstanceInfo& info);
+
+#if IPLUG_DSP
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+#endif
+};
+```
+
+### MyGainPlugin.cpp
+
+Implements the plugin constructor and audio processing:
+
+```cpp MyGainPlugin.cpp
+#include "MyGainPlugin.h"
+#include "IPlug_include_in_plug_src.h"
+#include "IControls.h"
+
+MyGainPlugin::MyGainPlugin(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  // Initialize parameter (name, default, min, max, step, unit)
+  GetParam(kGain)->InitDouble("Gain", 0., 0., 100.0, 0.01, "%");
+
+#if IPLUG_EDITOR
+  mMakeGraphicsFunc = [&]() {
+    return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS, 
+                        GetScaleForScreen(PLUG_WIDTH, PLUG_HEIGHT));
+  };
+  
+  mLayoutFunc = [&](IGraphics* pGraphics) {
+    pGraphics->AttachCornerResizer(EUIResizerMode::Scale, false);
+    pGraphics->AttachPanelBackground(COLOR_GRAY);
+    pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
+    
+    const IRECT bounds = pGraphics->GetBounds();
+    const IRECT innerBounds = bounds.GetPadded(-10.f);
+    
+    // Add title text
+    pGraphics->AttachControl(
+      new ITextControl(innerBounds.GetMidVPadded(50), 
+                       "Hello iPlug 2!", 
+                       IText(50))
+    );
+    
+    // Add gain knob linked to parameter
+    pGraphics->AttachControl(
+      new IVKnobControl(innerBounds.GetCentredInside(100).GetVShifted(-100), 
+                        kGain)
+    );
+  };
+#endif
+}
+
+#if IPLUG_DSP
+void MyGainPlugin::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kGain)->Value() / 100.;
+  const int nChans = NOutChansConnected();
+  
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[c][s] * gain;
+    }
+  }
+}
+#endif
+```
+
+<Note>
+The `ProcessBlock` method must be **realtime-safe**: no memory allocations, no locks, no file I/O, no system calls.
+</Note>
+
+## Key Concepts
+
+<CardGroup cols={2}>
+  <Card title="Parameters" icon="sliders">
+    Parameters are fixed at compile time and indexed by enum. Use non-normalized values (e.g., 0-100 for percentage).
+  </Card>
+  
+  <Card title="ProcessBlock" icon="waveform">
+    The audio processing callback. Must be realtime-safe with no allocations or blocking operations.
+  </Card>
+  
+  <Card title="IGraphics" icon="palette">
+    Optional GUI toolkit with NanoVG (fast) or Skia (high quality) backends. Can be replaced with SwiftUI, WebView, etc.
+  </Card>
+  
+  <Card title="Cross-platform" icon="window">
+    Single codebase targets VST3, CLAP, AUv2, AUv3, AAX, and standalone apps on macOS, Windows, iOS, and Web.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Explore Examples" icon="folder-open" href="https://github.com/iPlug2/iPlug2/tree/master/Examples">
+    Check out IPlugInstrument for a synthesizer template and IPlugControls for UI widgets.
+  </Card>
+  
+  <Card title="API Documentation" icon="book" href="https://iplug2.github.io/docs">
+    Browse the complete API reference with detailed class documentation.
+  </Card>
+  
+  <Card title="Community Forum" icon="users" href="https://iplug2.discourse.group">
+    Join the iPlug2 community for help, tips, and discussion.
+  </Card>
+  
+  <Card title="Discord Server" icon="discord" href="https://discord.gg/7h9HW8N9Ke">
+    Chat with other developers in real-time on the iPlug2 Discord.
+  </Card>
+</CardGroup>
+
+## Customizing Your Plugin
+
+### Add More Parameters
+
+Expand the `EParams` enum and initialize new parameters:
+
+```cpp
+enum EParams
+{
+  kGain = 0,
+  kPan,      // New parameter
+  kNumParams
+};
+
+// In constructor:
+GetParam(kPan)->InitDouble("Pan", 0., -100., 100., 0.01, "%");
+```
+
+### Modify Audio Processing
+
+Implement your DSP algorithm in `ProcessBlock`:
+
+```cpp
+void MyGainPlugin::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kGain)->Value() / 100.;
+  const double pan = GetParam(kPan)->Value() / 100.;  // -1 to 1
+  const int nChans = NOutChansConnected();
+  
+  if (nChans == 2) {
+    // Stereo panning
+    const double leftGain = gain * (pan <= 0 ? 1.0 : 1.0 - pan);
+    const double rightGain = gain * (pan >= 0 ? 1.0 : 1.0 + pan);
+    
+    for (int s = 0; s < nFrames; s++) {
+      outputs[0][s] = inputs[0][s] * leftGain;
+      outputs[1][s] = inputs[1][s] * rightGain;
+    }
+  } else {
+    // Mono processing
+    for (int s = 0; s < nFrames; s++) {
+      for (int c = 0; c < nChans; c++) {
+        outputs[c][s] = inputs[c][s] * gain;
+      }
+    }
+  }
+}
+```
+
+### Add UI Controls
+
+Add more controls in the `mLayoutFunc` lambda:
+
+```cpp
+// Add pan knob
+pGraphics->AttachControl(
+  new IVKnobControl(bounds.GetCentredInside(100).GetVShifted(50), 
+                    kPan, 
+                    "Pan")
+);
+
+// Add ADSR sliders
+pGraphics->AttachControl(
+  new IVSliderControl(bounds.GetGridCell(0, 1, 4), kAttack, "Attack")
+);
+```
+
+<Tip>
+Use `pGraphics->EnableLiveEdit(true)` during development to adjust UI layout in real-time without recompiling.
+</Tip>
+
+## Build Options
+
+### Build Specific Formats
+
+Build only the formats you need:
+
+```bash
+# Build only VST3
+ninja MyGainPlugin-vst3
+
+# Build only standalone app
+ninja MyGainPlugin-app
+
+# Build VST3 and CLAP
+ninja MyGainPlugin-vst3 MyGainPlugin-clap
+```
+
+### Universal Binary (macOS)
+
+Build for both Intel and Apple Silicon:
+
+```bash
+cmake -G Ninja -DIPLUG2_UNIVERSAL=ON -DCMAKE_BUILD_TYPE=Release ..
+ninja
+```
+
+### Debug Build
+
+Build in debug mode for better error messages:
+
+```bash
+cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug ..
+ninja
+```
+
+<Warning>
+Debug builds are much larger and slower. Use Release builds for distribution.
+</Warning>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Plugin doesn't appear in DAW">
+    - Verify the build succeeded without errors
+    - Check the plugin was deployed to the correct folder
+    - Rescan plugins in your DAW
+    - On macOS, you may need to clear the Audio Unit cache:
+    
+    ```bash
+    killall -9 AudioComponentRegistrar
+    ```
+  </Accordion>
+
+  <Accordion title="Build errors about missing SDKs">
+    - Ensure you ran `download-iplug-sdks.sh` in `Dependencies/IPlug/`
+    - Check that `Dependencies/IPlug/VST3_SDK/` exists
+    - For AAX, download the SDK manually from Avid
+  </Accordion>
+
+  <Accordion title="CMake can't find iPlug2">
+    Ensure `IPLUG2_DIR` points to the iPlug2 root directory:
+    
+    ```bash
+    cmake -DIPLUG2_DIR=/path/to/iPlug2 ..
+    ```
+  </Accordion>
+
+  <Accordion title="Audio glitches or clicks">
+    - Ensure `ProcessBlock` is realtime-safe (no allocations)
+    - Check buffer size handling
+    - Use `std::atomic` for thread-safe parameter access
+    - Enable the tracer build to profile performance: `cmake -DIPLUG2_TRACER=ON ..`
+  </Accordion>
+</AccordionGroup>
+
+## Alternative Build Systems
+
+While CMake is recommended, iPlug2 also supports:
+
+- **Xcode projects** (macOS): Open `projects/MyGainPlugin-macOS.xcodeproj`
+- **Visual Studio projects** (Windows): Open `projects/MyGainPlugin-vst3.vcxproj`
+- **Makefiles** (Web/WASM): Use `.mk` files in `projects/`
+
+<Info>
+CMake is the most flexible option and works across all platforms. The Xcode/VS projects are auto-generated and easier for beginners.
+</Info>

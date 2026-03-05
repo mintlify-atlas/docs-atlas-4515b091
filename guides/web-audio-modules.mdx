@@ -1,0 +1,532 @@
+---
+title: Web Audio Modules (WASM)
+description: Build plugins for the web with WebAssembly and Web Audio API
+---
+
+## Overview
+
+iPlug2 can compile plugins to WebAssembly (WASM) to run in web browsers. This enables:
+
+- **Standalone web apps** - Run plugins in browsers without installation
+- **Plugin demos** - Let users try plugins before buying
+- **Educational tools** - Interactive audio DSP learning
+- **Web DAWs** - Integrate into browser-based music production
+
+## Architecture
+
+iPlug2 uses a split DSP/UI architecture for WASM builds:
+
+<CardGroup cols={2}>
+
+<Card title="DSP Module" icon="wave-pulse">
+**AudioWorklet Thread**
+- Real-time audio processing
+- Runs in isolated audio thread
+- Embedded as BASE64 in page
+- Sample-accurate timing
+</Card>
+
+<Card title="UI Module" icon="window">
+**Main Thread**
+- IGraphics rendering
+- User interaction
+- Loads asynchronously
+- Shadow DOM encapsulation
+</Card>
+
+</CardGroup>
+
+### Communication
+
+- **Parameters/MIDI**: `postMessage` (always available)
+- **Visualization**: `SharedArrayBuffer` (requires HTTPS + special headers)
+
+<Note>
+**No WAM SDK Required**
+
+iPlug2's WASM build uses standard Web Audio API directly. For WAM SDK integration, see the legacy `WAM` build targets.
+</Note>
+
+## Prerequisites
+
+### Install Emscripten
+
+```bash
+cd ~
+git clone https://github.com/emscripten-core/emsdk.git
+cd emsdk
+./emsdk install latest
+./emsdk activate latest
+source ./emsdk_env.sh
+```
+
+Add to your shell profile (`.bashrc`, `.zshrc`):
+
+```bash
+source ~/emsdk/emsdk_env.sh
+```
+
+### Server Requirements
+
+For `SharedArrayBuffer` support (needed for low-latency visualization):
+
+```http
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+Without these headers, visualization uses slower `postMessage` fallback.
+
+## Building with Makefile
+
+<Steps>
+
+### Navigate to Project
+
+```bash
+cd Examples/IPlugEffect
+```
+
+### Run Build Script
+
+```bash
+cd scripts
+./makedist-wasm.sh        # Build and launch in Chrome
+./makedist-wasm.sh off    # Build only
+./makedist-wasm.sh on safari  # Launch in Safari
+```
+
+### Build Output
+
+Generated files in `build-web-wasm/`:
+
+```
+build-web-wasm/
+├── index.html                    # Main page
+├── scripts/
+│   ├── IPlugEffect-wasm-dsp.js   # DSP loader (BASE64 embedded)
+│   ├── IPlugEffect-wasm-ui.js    # UI module
+│   └── IPlugWasmBundle.js        # Controller
+├── styles/
+│   └── style.css                 # Default styling
+└── resources/
+    ├── fonts/                    # Embedded fonts
+    └── images/                   # Embedded images
+```
+
+### Test Locally
+
+Use the included Python server with COOP/COEP headers:
+
+```bash
+python3 serve.py 8080
+```
+
+Open: `http://localhost:8080`
+
+</Steps>
+
+## Building with CMake
+
+```bash
+cd Examples/IPlugEffect
+mkdir build && cd build
+cmake .. -DTARGET_WASM=ON -G Ninja
+ninja IPlugEffect-wasm-dist
+```
+
+**CMake Targets:**
+- `IPlugEffect-wasm-dsp` - DSP module only
+- `IPlugEffect-wasm-ui` - UI module only
+- `IPlugEffect-wasm-dist` - Full distribution bundle
+
+## Project Configuration
+
+### Headless Plugins
+
+For plugins without custom UI:
+
+```cpp config.h
+#define PLUG_HAS_UI 0
+```
+
+The template will auto-generate parameter controls.
+
+### Web-Specific Config
+
+Create `config/YourPlugin-wasm.mk` for custom settings:
+
+```makefile
+# Project name
+PLUG_NAME = YourPlugin
+
+# Extra source files
+EXTRA_SRC = $(PROJECT_ROOT)/MyDSP.cpp
+
+# Extra includes
+EXTRA_INCLUDES = -I$(PROJECT_ROOT)/libs
+
+# Compiler flags
+EXTRA_CFLAGS = -DUSE_MY_FEATURE=1 -O3
+
+# Emscripten-specific flags
+EXTRA_LDFLAGS = -s ALLOW_MEMORY_GROWTH=1
+```
+
+## Message Protocol
+
+DSP and UI communicate via typed messages:
+
+### UI → DSP
+
+```javascript
+// Parameter change
+port.postMessage({
+  type: 'param',
+  paramIdx: 0,
+  value: 0.5
+});
+
+// MIDI message
+port.postMessage({
+  type: 'midi',
+  status: 0x90,  // Note On
+  data1: 60,     // Middle C
+  data2: 100     // Velocity
+});
+
+// Custom message
+port.postMessage({
+  type: 'arbitrary',
+  msgTag: 1,
+  ctrlTag: 0,
+  data: new Float32Array([1.0, 2.0, 3.0])
+});
+```
+
+### DSP → UI
+
+```cpp
+// In C++ DSP code:
+
+// Send parameter value
+SendParameterValueFromDelegate(paramIdx, value);
+
+// Send control data (for visualization)
+SendControlValueFromDelegate(ctrlTag, value);
+
+// Send arbitrary message
+SendArbitraryMsgFromDelegate(msgTag, dataSize, pData);
+```
+
+Messages are received in UI via `postMessage` or `SharedArrayBuffer` ring buffer.
+
+## Multi-Instance Support
+
+Multiple plugin instances can run in the same page:
+
+```javascript
+// Create multiple instances
+const instance1 = await createPluginInstance('IPlugEffect');
+const instance2 = await createPluginInstance('IPlugEffect');
+
+// Each has isolated state
+instance1.setParameter(0, 0.5);
+instance2.setParameter(0, 0.8);
+
+// Connect in series
+instance1.audioNode.connect(instance2.audioNode);
+instance2.audioNode.connect(audioContext.destination);
+```
+
+Each instance:
+- Has its own DSP state
+- Uses separate audio buffers
+- Maintains independent parameters
+- Shares WASM module code (efficient)
+
+## Custom HTML Integration
+
+### Embed in Existing Page
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>My Plugin Demo</title>
+  <script src="scripts/IPlugEffect-wasm-dsp.js"></script>
+  <script src="scripts/IPlugEffect-wasm-ui.js"></script>
+  <script src="scripts/IPlugWasmBundle.js"></script>
+</head>
+<body>
+  <div id="plugin-container"></div>
+  
+  <script>
+    const audioContext = new AudioContext();
+    
+    async function loadPlugin() {
+      // Initialize DSP
+      await IPlugEffectWasmDSP();
+      
+      // Create processor
+      await audioContext.audioWorklet.addModule('scripts/IPlugWasmProcessor.js');
+      const pluginNode = new AudioWorkletNode(audioContext, 'IPlugEffect-Processor');
+      
+      // Load UI
+      const container = document.getElementById('plugin-container');
+      await IPlugEffectWasmUI(container, pluginNode.port);
+      
+      // Connect audio
+      pluginNode.connect(audioContext.destination);
+    }
+    
+    loadPlugin();
+  </script>
+</body>
+</html>
+```
+
+### Control from JavaScript
+
+```javascript
+// Set parameter
+pluginNode.port.postMessage({
+  type: 'param',
+  paramIdx: 0,
+  value: 0.75
+});
+
+// Send MIDI
+pluginNode.port.postMessage({
+  type: 'midi',
+  status: 0x90,
+  data1: 60,
+  data2: 100
+});
+
+// Receive parameter changes
+pluginNode.port.onmessage = (event) => {
+  if (event.data.verb === 'SPVFD') {  // Set Parameter Value From DSP
+    console.log(`Param ${event.data.paramIdx} = ${event.data.value}`);
+  }
+};
+```
+
+## Visualization Data
+
+### Using SharedArrayBuffer
+
+For low-latency visualization (meters, scopes, etc.):
+
+```cpp
+// In ProcessBlock
+mMeterSender.ProcessBlock(outputs, nFrames, kCtrlTagMeter);
+
+// In OnIdle
+mMeterSender.TransmitData(*this);
+```
+
+Data is written to `SharedArrayBuffer` ring buffer, polled by UI at 60fps.
+
+### Using postMessage
+
+Fallback when `SharedArrayBuffer` unavailable:
+
+```cpp
+mLFOVisSender.PushData({kCtrlTagLFOVis, {float(mLFO.GetLastOutput())}});
+```
+
+Data sent via `postMessage` when `TransmitData` called.
+
+<Warning>
+**Performance:**
+`postMessage` adds latency (~16ms at 60fps). Use `SharedArrayBuffer` for responsive visualization.
+</Warning>
+
+## Local Development Server
+
+Create `serve.py` with COOP/COEP headers:
+
+```python
+#!/usr/bin/env python3
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+import sys
+
+class CORPHandler(SimpleHTTPRequestHandler):
+    def end_headers(self):
+        self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
+        self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
+        self.send_header('Cache-Control', 'no-cache')
+        super().end_headers()
+    
+    extensions_map = {
+        **SimpleHTTPRequestHandler.extensions_map,
+        '.wasm': 'application/wasm',
+    }
+
+port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+print(f'Serving at http://localhost:{port}')
+HTTPServer(('localhost', port), CORPHandler).serve_forever()
+```
+
+Run:
+```bash
+python3 serve.py 8080
+```
+
+## Debugging
+
+### Browser Console
+
+Both DSP and UI modules log to console:
+
+```
+[IPlugEffect-DSP] Initialized at 48000 Hz
+[IPlugEffect-UI] UI loaded
+[IPlugEffect-DSP] ProcessBlock: 128 frames
+```
+
+### Common Issues
+
+<Accordion title="SharedArrayBuffer is not defined">
+**Cause:** Server missing COOP/COEP headers
+
+**Fix:** Use provided `serve.py` or add headers to your server config
+
+**Fallback:** Plugin will work but use slower `postMessage` for visualization
+</Accordion>
+
+<Accordion title="Module not found in globalThis">
+**Cause:** DSP module failed to load/compile
+
+**Fix:** Check browser console for WASM compilation errors. Verify Emscripten version.
+</Accordion>
+
+<Accordion title="Audio glitches/dropouts">
+**Cause:** DSP too heavy for real-time processing
+
+**Fix:**
+- Profile with Chrome DevTools Performance panel
+- Reduce buffer processing complexity
+- Check for allocations in `ProcessBlock`
+- Disable SIMD if causing issues
+- Increase buffer size (tradeoff: latency)
+</Accordion>
+
+<Accordion title="UI doesn't appear">
+**Cause:** UI module failed to load or incorrect container ID
+
+**Fix:**
+- Verify `scripts/IPlugEffect-wasm-ui.js` exists
+- Check container element ID matches
+- Look for JavaScript errors in console
+</Accordion>
+
+## Performance Optimization
+
+### Compiler Flags
+
+```makefile
+# Optimize for size
+EXTRA_CFLAGS = -Os
+
+# Optimize for speed
+EXTRA_CFLAGS = -O3 -flto
+
+# Enable SIMD (if supported)
+EXTRA_CFLAGS = -msimd128
+
+# Disable exceptions (smaller binary)
+EXTRA_CFLAGS = -fno-exceptions
+```
+
+### Memory Management
+
+```makefile
+# Allow memory growth (flexible but slower)
+EXTRA_LDFLAGS = -s ALLOW_MEMORY_GROWTH=1
+
+# Fixed memory (faster but must set INITIAL_MEMORY)
+EXTRA_LDFLAGS = -s INITIAL_MEMORY=16MB
+```
+
+### Bundle Size
+
+- Use `-Os` for smaller binaries
+- Avoid including unused libraries
+- Use embedded resources sparingly
+- Consider gzip compression on server
+
+## WAM SDK vs Split WASM
+
+| Feature | Split WASM | WAM SDK |
+|---------|------------|----------|
+| SDK dependency | None | WAM SDK required |
+| Architecture | Split DSP/UI | Combined |
+| AudioWorklet | Native | Via SDK |
+| DAW integration | Basic | WAM host support |
+| Deployment | Simple | Standardized |
+
+**Use Split WASM for:**
+- Standalone web apps
+- Plugin demos
+- Simple deployment
+
+**Use WAM SDK for:**
+- Web DAW integration
+- WAM-compatible hosts
+- Standardized plugin format
+
+## Deployment
+
+### Static Hosting
+
+Upload `build-web-wasm/` to any static host:
+
+- GitHub Pages
+- Netlify
+- Vercel
+- AWS S3 + CloudFront
+
+### HTTPS Required
+
+For `SharedArrayBuffer` support:
+- Must use HTTPS (not HTTP)
+- Set COOP/COEP headers
+- Use valid SSL certificate
+
+### CDN Configuration
+
+```nginx
+# Nginx example
+add_header Cross-Origin-Opener-Policy "same-origin";
+add_header Cross-Origin-Embedder-Policy "require-corp";
+add_header Cache-Control "public, max-age=31536000";
+
+location ~ \.(wasm|js)$ {
+    add_header Content-Type application/wasm;
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="WASM Docs" href="/reference/wasm">
+Detailed WASM build documentation
+</Card>
+
+<Card title="Web Audio API" icon="link" href="https://developer.mozilla.org/en-US/docs/Web/API/Web_Audio_API">
+MDN Web Audio reference
+</Card>
+
+<Card title="AudioWorklet" icon="link" href="https://developer.mozilla.org/en-US/docs/Web/API/AudioWorkletProcessor">
+AudioWorklet API documentation
+</Card>
+
+<Card title="Examples" href="/examples">
+Browse web plugin examples
+</Card>
+
+</CardGroup>

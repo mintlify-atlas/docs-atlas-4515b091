@@ -1,0 +1,295 @@
+---
+title: SwiftUI
+description: Build native macOS and iOS plugin interfaces using SwiftUI
+---
+
+The IPlugSwiftUI example demonstrates how to integrate SwiftUI for building modern, native plugin interfaces on Apple platforms. This approach provides access to the full SwiftUI ecosystem while maintaining bidirectional communication with your audio processing code.
+
+## What This Example Demonstrates
+
+- SwiftUI integration with iPlug2
+- Bidirectional parameter synchronization between SwiftUI and C++
+- Real-time audio visualization using Metal (via `OscilloscopeView`)
+- Custom SwiftUI controls (sliders, oscilloscope)
+- State management with `@Published` properties
+- Message passing between UI and audio code
+
+## Architecture Overview
+
+<CardGroup cols={2}>
+  <Card title="C++ Plugin Layer" icon="gear">
+    Audio processing, parameter definitions, DSP code (IPlugSwiftUI.mm)
+  </Card>
+  <Card title="View Controller" icon="window">
+    Bridge between C++ and SwiftUI (IPlugSwiftUIViewController.swift)
+  </Card>
+  <Card title="State Object" icon="database">
+    Observable state container (IPlugSwiftUIState.swift)
+  </Card>
+  <Card title="SwiftUI Views" icon="paintbrush">
+    UI components and layout (ContentView.swift)
+  </Card>
+</CardGroup>
+
+## C++ Plugin Implementation
+
+### Opening the SwiftUI Window
+
+```cpp
+void* IPlugSwiftUI::OpenWindow(void* pParent)
+{
+  PLATFORM_VIEW* platformParent = (PLATFORM_VIEW*) pParent;
+  auto* vc = [[IPlugSwiftUIViewController alloc] 
+    initWithEditorDelegateAndBundleID: this : GetBundleID()];
+  mViewController = vc;
+  vc.view.frame = MAKERECT(0.f, 0.f, (float) PLUG_WIDTH, (float) PLUG_HEIGHT);
+  [platformParent addSubview:vc.view];
+  
+  OnUIOpen();
+  
+  return vc.view;
+}
+```
+
+### Sending Data to SwiftUI
+
+```cpp
+void IPlugSwiftUI::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kParamGain)->Value() / 100.;
+  const int nChans = NOutChansConnected();
+    
+  for (int s = 0; s < nFrames; s++) {
+    for (int c = 0; c < nChans; c++) {
+      outputs[c][s] = inputs[0][s] * gain;
+    }
+  }
+  
+  // Send audio data to SwiftUI for visualization
+  mScopeSender.ProcessBlock(outputs, nFrames, kCtrlTagScope);
+}
+
+void IPlugSwiftUI::OnIdle()
+{
+  mScopeSender.TransmitData(*this);
+}
+```
+
+### Receiving Messages from SwiftUI
+
+```cpp
+bool IPlugSwiftUI::OnMessage(int msgTag, int ctrlTag, int dataSize, const void* pData)
+{
+  if (msgTag == kMsgTagHello)
+  {
+    DBGMSG("MsgTagHello received on C++ side\n");
+    return true;
+  }
+  else if(msgTag == kMsgTagRestorePreset)
+  {
+    RestorePreset(ctrlTag);
+  }
+  
+  return CocoaEditorDelegate::OnMessage(msgTag, ctrlTag, dataSize, pData);
+}
+```
+
+## SwiftUI View Controller
+
+The view controller bridges between C++ and SwiftUI:
+
+```swift
+@objc class IPlugSwiftUIViewController: IPlugCocoaViewController {
+  lazy var state = IPlugSwiftUIState(
+    beginEdit: self.beginInformHostOfParamChangeFromUI,
+    doEdit: self.sendParameterValueFromUI,
+    endEdit: self.endInformHostOfParamChangeFromUI,
+    sendMsg: {
+      self.sendArbitraryMsgFromUI(
+        msgTag: kMsgTagHello, 
+        ctrlTag: kCtrlTagButton, 
+        msg: nil
+      );
+    }
+  )
+  
+  override func viewDidLoad() {
+    super.viewDidLoad()
+      
+    // Populate parameters from C++
+    for idx in 0..<parameterCount() {
+      state.params.append(Param(
+        id: idx,
+        name: getParameterName(idx),
+        defaultValue: getParameterDefault(idx),
+        minValue: getParameterMin(idx),
+        maxValue: getParameterMax(idx),
+        step: getParameterStep(idx),
+        label: getParameterLabel(idx),
+        group: getParameterGroup(idx)
+      ))
+    }
+    
+    let contentView = ContentView().environmentObject(state)
+    let hostingController = PlatformHostingController(rootView: contentView)
+    
+    view.addSubview(hostingController.view)
+    hostingController.view.pinToSuperviewEdges()
+  }
+  
+  // Receive control messages from C++
+  override func sendControlMsgFromDelegate(ctrlTag: Int, msgTag: Int, msg: Data!) {
+    if (ctrlTag == kCtrlTagScope) {
+      msg.withUnsafeBytes { (pointer: UnsafeRawBufferPointer) in
+        let intSize = MemoryLayout<Int32>.size
+        let byteOffset = intSize * 3
+        let floatPointer = pointer.baseAddress!.advanced(by: byteOffset)
+        let floats = UnsafeRawBufferPointer(
+          start: floatPointer, 
+          count: pointer.count - byteOffset
+        ).bindMemory(to: Float.self)
+        let floatArray = Array(floats.prefix(kScopeBufferSize))
+        
+        state.waveform = floatArray
+      }
+    }
+  }
+  
+  // Receive parameter changes from C++
+  override func onParamChangeUI(_ paramIdx: Int, _ value: Double) {
+    state.params[Int(paramIdx)].value = value;
+  }
+}
+```
+
+## State Management
+
+The state object uses SwiftUI's `@Published` property wrapper:
+
+```swift
+class IPlugSwiftUIState: NSObject, ObservableObject {
+  var params: [Param] = []
+  @Published var bundleID = String("")
+  @Published @objc dynamic var waveform: [Float] = Array(
+    repeating: 0.0, 
+    count: kScopeBufferSize
+  )
+
+  let beginEdit: @MainActor (Int) -> Void
+  let doEdit: @MainActor (Int, Double) -> Void
+  let endEdit: @MainActor (Int) -> Void
+  let sendMsg: @MainActor () -> Void
+
+  public init(
+    beginEdit: @MainActor @escaping (Int) -> Void = {_ in },
+    doEdit: @MainActor @escaping (Int, Double) -> Void = {_,_ in },
+    endEdit: @MainActor @escaping (Int) -> Void = {_ in },
+    sendMsg: @MainActor @escaping () -> Void = {}
+  ) {
+    self.beginEdit = beginEdit
+    self.doEdit = doEdit
+    self.endEdit = endEdit
+    self.sendMsg = sendMsg
+    super.init()
+  }
+}
+```
+
+<Note>
+  The `@Published` property wrapper automatically triggers UI updates when values change, making it perfect for real-time audio visualization.
+</Note>
+
+## SwiftUI Content View
+
+```swift
+struct ContentView: View {
+  @EnvironmentObject var state: IPlugSwiftUIState
+  
+  var body: some View {
+    ZStack {
+      MeshGradient(width: 2, height: 2, points: [
+        [0, 0], [1, 0], [0, 1], [1, 1]
+      ], colors: [.red, .orange, .blue, .yellow])
+      
+      VStack {
+        Text("iPlug2 + SwiftUI + Metal")
+          .font(.title)
+          .padding()
+        
+        HStack(alignment: .center) {
+          OscilloscopeView()
+            .environmentObject(state)
+        }
+      }
+      .padding()
+    }
+    .edgesIgnoringSafeArea(.all)
+  }
+}
+```
+
+## Communication Patterns
+
+<Steps>
+  <Step title="C++ to SwiftUI: Parameters">
+    Use `onParamChangeUI()` to receive parameter updates from the host or automation.
+  </Step>
+  
+  <Step title="C++ to SwiftUI: Control Data">
+    Use `sendControlMsgFromDelegate()` to send custom data (like audio buffers for visualization).
+  </Step>
+  
+  <Step title="SwiftUI to C++: Parameters">
+    Call `beginInformHostOfParamChangeFromUI()`, `sendParameterValueFromUI()`, and `endInformHostOfParamChangeFromUI()` for gesture-based parameter editing.
+  </Step>
+  
+  <Step title="SwiftUI to C++: Messages">
+    Use `sendArbitraryMsgFromUI()` to send custom messages, handled in `OnMessage()`.
+  </Step>
+</Steps>
+
+## AUv3 View Configuration
+
+```cpp
+bool IPlugSwiftUI::OnHostRequestingSupportedViewConfiguration(int width, int height)
+{
+#ifdef OS_MAC
+  // Logic/GB offer one option with 0w, 0h
+  // Allow that so our AUv3 has "our" size as its 100% setting
+  return ((width + height) == 0);
+#else
+  return true;
+#endif
+}
+```
+
+<Info>
+  This ensures proper sizing behavior in Logic Pro and GarageBand when hosting your plugin as an AUv3.
+</Info>
+
+## Advantages of SwiftUI
+
+<CardGroup cols={2}>
+  <Card title="Native Performance" icon="bolt">
+    Metal-accelerated rendering and platform-optimized layout
+  </Card>
+  <Card title="Modern API" icon="sparkles">
+    Declarative syntax, automatic state management, reactive updates
+  </Card>
+  <Card title="Apple Ecosystem" icon="apple">
+    Full access to SF Symbols, system colors, dark mode, accessibility
+  </Card>
+  <Card title="Cross-platform" icon="devices">
+    Same code works on macOS and iOS with minimal changes
+  </Card>
+</CardGroup>
+
+<Warning>
+  SwiftUI is only available on Apple platforms. For cross-platform plugins, consider using IGraphics or web-based UIs.
+</Warning>
+
+## Related Examples
+
+- [Cocoa UI](/examples/cocoa-ui) - Interface Builder / UIKit approach
+- [Web UI](/examples/web-ui) - Cross-platform web-based UI
+- [Responsive UI](/examples/responsive-ui) - IGraphics responsive layout

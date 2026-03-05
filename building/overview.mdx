@@ -1,0 +1,216 @@
+---
+title: 'Building Overview'
+description: 'Cross-platform build system overview for iPlug2 audio plugins'
+---
+
+iPlug2 supports multiple build systems and platforms, allowing you to build professional audio plugins for desktop, mobile, and web.
+
+## Supported Platforms
+
+<CardGroup cols={2}>
+  <Card title="Windows" icon="windows">
+    Visual Studio 2019/2022 with x64 and ARM64EC support
+  </Card>
+  <Card title="macOS" icon="apple">
+    Xcode with Intel and Apple Silicon (Universal Binary)
+  </Card>
+  <Card title="iOS" icon="mobile">
+    AUv3 apps for iPhone and iPad
+  </Card>
+  <Card title="Web" icon="globe">
+    WebAssembly plugins for browsers
+  </Card>
+</CardGroup>
+
+## Build Systems
+
+iPlug2 projects can be built using:
+
+### CMake (Recommended)
+
+Modern, cross-platform build system that works on all platforms.
+
+- **Generators**: Ninja, Visual Studio, Xcode
+- **Universal support**: macOS Universal binaries, ARM64EC on Windows
+- **Simplified project files**: `iplug_add_plugin()` macro reduces boilerplate
+- **IDE integration**: Full IntelliSense, debugging, and code navigation
+
+<Tip>
+CMake is the recommended approach for new projects. See the [CMake Guide](/building/cmake) for details.
+</Tip>
+
+### Native IDEs
+
+Platform-specific IDE projects for direct development.
+
+- **Windows**: Visual Studio solution files (.sln)
+- **macOS/iOS**: Xcode project files (.xcodeproj)
+- **Full IDE features**: Visual debugging, profiling, and project management
+
+### Makefiles
+
+Command-line builds using Make.
+
+- **Web/WASM**: Emscripten-based makefile builds
+- **Custom workflows**: CI/CD and automated builds
+
+## Plugin Formats
+
+<AccordionGroup>
+  <Accordion title="Desktop Plugins" icon="desktop">
+    - **VST3**: Cross-platform (Windows, macOS)
+    - **CLAP**: Modern, open-source format
+    - **AAX**: Pro Tools (requires Avid SDK)
+    - **AUv2**: macOS Audio Units (legacy)
+    - **VST2**: Legacy format (deprecated, requires SDK)
+  </Accordion>
+  
+  <Accordion title="Mobile Plugins" icon="mobile-screen">
+    - **AUv3**: iOS/iPadOS Audio Unit v3
+    - Embedded in standalone app
+    - Full Inter-App Audio support
+  </Accordion>
+  
+  <Accordion title="Standalone Apps" icon="window">
+    - **APP**: Native desktop application
+    - RTAudio/RTMidi for audio/MIDI I/O
+    - All platforms (Windows, macOS, iOS)
+  </Accordion>
+  
+  <Accordion title="Web Plugins" icon="browser">
+    - **WAM**: Web Audio Modules
+    - **WASM**: Split DSP/UI architecture
+    - Runs in modern browsers
+  </Accordion>
+</AccordionGroup>
+
+## Build Configurations
+
+All platforms support three build configurations:
+
+| Configuration | Optimization | Debug Symbols | Use Case |
+|---------------|--------------|---------------|----------|
+| **Debug** | None (`-O0`) | Full | Development, debugging |
+| **Release** | Max (`-O3`/`/O2`) | Minimal | Production, distribution |
+| **Tracer** | Max | Profiling | Performance analysis |
+
+<Note>
+Tracer builds enable `TRACER_BUILD` for performance profiling and logging.
+</Note>
+
+## Project Structure
+
+A typical iPlug2 plugin project:
+
+```
+MyPlugin/
+├── CMakeLists.txt           # CMake project (optional)
+├── MyPlugin.sln             # Visual Studio solution (Windows)
+├── MyPlugin.cpp             # Plugin implementation
+├── MyPlugin.h               # Plugin header
+├── config.h                 # Plugin configuration
+├── config/                  # Build configuration files
+│   ├── MyPlugin-mac.xcconfig
+│   ├── MyPlugin-ios.xcconfig
+│   └── MyPlugin-win.props
+├── projects/                # IDE-specific projects
+│   ├── MyPlugin-macOS.xcodeproj
+│   ├── MyPlugin-iOS.xcodeproj
+│   ├── MyPlugin-app.vcxproj
+│   ├── MyPlugin-vst3.vcxproj
+│   └── MyPlugin-clap.vcxproj
+├── resources/               # Plugin resources
+│   ├── fonts/
+│   ├── img/
+│   └── MyPlugin-Info.plist
+└── scripts/                 # Build scripts
+    └── makedist-*.sh
+```
+
+## Quick Start by Platform
+
+<CardGroup cols={2}>
+  <Card title="Windows Build" icon="windows" href="/building/windows">
+    Visual Studio setup, x64/ARM64EC builds, debugging
+  </Card>
+  <Card title="macOS Build" icon="apple" href="/building/macos">
+    Xcode setup, Universal binaries, code signing
+  </Card>
+  <Card title="iOS Build" icon="mobile" href="/building/ios">
+    AUv3 development, app extensions, provisioning
+  </Card>
+  <Card title="Web Build" icon="globe" href="/building/web">
+    Emscripten setup, WASM builds, deployment
+  </Card>
+</CardGroup>
+
+## Cross-Platform Considerations
+
+### Dependencies
+
+Some iPlug2 features require downloading dependencies:
+
+```bash
+cd iPlug2/Dependencies
+./download-iplug-sdks.sh      # Plugin SDKs (VST3, AAX, etc.)
+./download-igraphics-libs.sh  # Graphics libraries (Skia, etc.)
+```
+
+<Warning>
+The default **NanoVG** graphics backend does not require downloading dependencies. Only download if you need Skia or specific SDKs.
+</Warning>
+
+### IGraphics Backends
+
+iPlug2 supports multiple graphics backends:
+
+| Backend | Size | Quality | Platforms |
+|---------|------|---------|----------|
+| **NanoVG** | Small (~100KB) | Good | All |
+| **Skia** | Large (~6MB) | Excellent | Desktop, iOS |
+
+<Tip>
+Use **NanoVG** for lightweight plugins. Use **Skia** for advanced graphics, text rendering, and animation.
+</Tip>
+
+### SDK Requirements
+
+| Format | SDK Required | License | Notes |
+|--------|-------------|---------|-------|
+| VST3 | VST3 SDK | GPL/Commercial | Free, requires Steinberg license |
+| CLAP | CLAP SDK | MIT | Open-source, bundled |
+| AAX | AAX SDK | Commercial | Requires Avid Developer account |
+| AUv2/v3 | Apple SDKs | Apple EULA | Bundled with Xcode |
+| VST2 | VST2 SDK | Deprecated | No longer distributed |
+
+## Next Steps
+
+<Steps>
+  <Step title="Choose your platform">
+    Select the platform guide for your development environment
+  </Step>
+  <Step title="Set up your build system">
+    Install required tools (Visual Studio, Xcode, CMake, etc.)
+  </Step>
+  <Step title="Download dependencies">
+    Run SDK download scripts if needed
+  </Step>
+  <Step title="Build your first plugin">
+    Start with an example project to verify your setup
+  </Step>
+</Steps>
+
+<CardGroup cols={2}>
+  <Card title="CMake Guide" icon="gear" href="/building/cmake">
+    Modern, cross-platform build system
+  </Card>
+  <Card title="Windows Guide" icon="windows" href="/building/windows">
+    Visual Studio and MSBuild
+  </Card>
+  <Card title="macOS Guide" icon="apple" href="/building/macos">
+    Xcode and command-line tools
+  </Card>
+  <Card title="Web Guide" icon="globe" href="/building/web">
+    WebAssembly and Emscripten
+  </Card>
+</CardGroup>

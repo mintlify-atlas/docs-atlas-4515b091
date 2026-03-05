@@ -1,0 +1,350 @@
+---
+title: "Oscillators"
+description: "Audio oscillator classes for waveform generation"
+---
+
+The oscillators module provides efficient waveform generation classes with both standard and optimized implementations.
+
+## IOscillator
+
+Base template class for all oscillators. Provides common phase and frequency management.
+
+### Template Parameters
+
+<ParamField path="T" type="typename">
+  Sample type (typically `double` or `float`)
+</ParamField>
+
+### Constructor
+
+```cpp
+IOscillator(double startPhase = 0., double startFreq = 1.)
+```
+
+<ParamField path="startPhase" type="double" default="0.0">
+  Initial phase value (0.0 to 1.0)
+</ParamField>
+
+<ParamField path="startFreq" type="double" default="1.0">
+  Initial frequency in Hz
+</ParamField>
+
+### Methods
+
+#### Process
+
+```cpp
+virtual inline T Process(double freqHz) = 0
+```
+
+Pure virtual method to generate the next sample.
+
+<ParamField path="freqHz" type="double">
+  Frequency in Hz for this sample
+</ParamField>
+
+**Returns:** Generated sample value
+
+#### SetFreqCPS
+
+```cpp
+inline void SetFreqCPS(double freqHz)
+```
+
+Set the oscillator frequency.
+
+<ParamField path="freqHz" type="double">
+  Frequency in cycles per second (Hz)
+</ParamField>
+
+#### SetSampleRate
+
+```cpp
+void SetSampleRate(double sampleRate)
+```
+
+Set the sample rate for processing.
+
+<ParamField path="sampleRate" type="double">
+  Sample rate in samples per second
+</ParamField>
+
+#### Reset
+
+```cpp
+void Reset()
+```
+
+Reset the oscillator phase to the initial start phase.
+
+#### SetPhase
+
+```cpp
+void SetPhase(double phase)
+```
+
+Set the current phase directly.
+
+<ParamField path="phase" type="double">
+  Phase value (0.0 to 1.0)
+</ParamField>
+
+### Protected Members
+
+<ParamField path="mPhase" type="double">
+  Current phase (0.0 to 1.0)
+</ParamField>
+
+<ParamField path="mPhaseIncr" type="double">
+  Phase increment per sample
+</ParamField>
+
+<ParamField path="mSampleRate" type="double" default="44100.0">
+  Current sample rate
+</ParamField>
+
+<ParamField path="mStartPhase" type="double">
+  Initial phase for reset
+</ParamField>
+
+---
+
+## SinOscillator
+
+Standard sine wave oscillator using `std::sin()`. Suitable for general-purpose use where performance is not critical.
+
+### Template Parameters
+
+<ParamField path="T" type="typename">
+  Sample type (typically `double` or `float`)
+</ParamField>
+
+### Constructor
+
+```cpp
+SinOscillator(double startPhase = 0., double startFreq = 1.)
+```
+
+<ParamField path="startPhase" type="double" default="0.0">
+  Initial phase value (0.0 to 1.0)
+</ParamField>
+
+<ParamField path="startFreq" type="double" default="1.0">
+  Initial frequency in Hz
+</ParamField>
+
+### Methods
+
+#### Process (no arguments)
+
+```cpp
+inline T Process()
+```
+
+Generate the next sample using the current frequency setting.
+
+**Returns:** Sine wave sample in range [-1.0, 1.0]
+
+#### Process (with frequency)
+
+```cpp
+inline T Process(double freqHz) override
+```
+
+Generate the next sample with per-sample frequency modulation.
+
+<ParamField path="freqHz" type="double">
+  Frequency in Hz for this sample
+</ParamField>
+
+**Returns:** Sine wave sample in range [-1.0, 1.0]
+
+### Usage Example
+
+```cpp
+// Create a 440Hz sine oscillator
+SinOscillator<double> osc(0.0, 440.0);
+osc.SetSampleRate(44100.0);
+
+// Generate samples
+for (int i = 0; i < blockSize; i++) {
+  output[i] = osc.Process();
+}
+
+// Or with per-sample frequency modulation
+for (int i = 0; i < blockSize; i++) {
+  double freq = 440.0 + lfo.Process() * 10.0; // vibrato
+  output[i] = osc.Process(freq);
+}
+```
+
+---
+
+## FastSinOscillator
+
+High-performance sine wave oscillator using table lookup with linear interpolation. Based on Miller Puckette's Pure Data implementation.
+
+<Note>
+  This oscillator uses a clever floating-point bit manipulation technique to extract table indices and fractional parts efficiently. It's significantly faster than `SinOscillator` for CPU-intensive applications.
+</Note>
+
+### Template Parameters
+
+<ParamField path="T" type="typename">
+  Sample type (typically `double` or `float`)
+</ParamField>
+
+### Constructor
+
+```cpp
+FastSinOscillator(double startPhase = 0., double startFreq = 1.)
+```
+
+<ParamField path="startPhase" type="double" default="0.0">
+  Initial phase value (0.0 to 1.0)
+</ParamField>
+
+<ParamField path="startFreq" type="double" default="1.0">
+  Initial frequency in Hz
+</ParamField>
+
+### Methods
+
+#### Process (no arguments)
+
+```cpp
+inline T Process()
+```
+
+Generate the next sample using the current frequency setting.
+
+**Returns:** Sine wave sample in range [-1.0, 1.0]
+
+#### Process (with frequency)
+
+```cpp
+inline T Process(double freqCPS) override
+```
+
+Generate the next sample with per-sample frequency modulation.
+
+<ParamField path="freqCPS" type="double">
+  Frequency in Hz for this sample
+</ParamField>
+
+**Returns:** Sine wave sample in range [-1.0, 1.0]
+
+#### Lookup (static)
+
+```cpp
+static inline T Lookup(double phaseRadians)
+```
+
+Static method to look up a sine value from the table without managing state.
+
+<ParamField path="phaseRadians" type="double">
+  Phase in radians
+</ParamField>
+
+**Returns:** Sine wave value at the given phase
+
+#### ProcessBlock
+
+```cpp
+void ProcessBlock(T* pOutput, int nFrames)
+```
+
+Process an entire block of samples for better efficiency.
+
+<ParamField path="pOutput" type="T*">
+  Output buffer to fill with generated samples
+</ParamField>
+
+<ParamField path="nFrames" type="int">
+  Number of samples to generate
+</ParamField>
+
+### Public Members
+
+<ParamField path="mLastOutput" type="T" default="0.0">
+  Last generated output value
+</ParamField>
+
+### Usage Example
+
+```cpp
+// Create a fast sine oscillator
+FastSinOscillator<double> osc(0.0, 440.0);
+osc.SetSampleRate(44100.0);
+
+// Process a block of samples
+double output[512];
+osc.ProcessBlock(output, 512);
+
+// Static lookup for one-off calculations
+double phase = 1.57079632679; // π/2
+double value = FastSinOscillator<double>::Lookup(phase); // Returns ~1.0
+```
+
+### Performance Considerations
+
+<CardGroup cols={2}>
+  <Card title="Table Size" icon="table">
+    Uses a 512-sample lookup table with linear interpolation
+  </Card>
+  <Card title="Bit Manipulation" icon="microchip">
+    Leverages IEEE 754 double precision format for fast indexing
+  </Card>
+  <Card title="Block Processing" icon="layer-group">
+    `ProcessBlock()` is more efficient than calling `Process()` in a loop
+  </Card>
+  <Card title="Cache Friendly" icon="memory">
+    Small table size fits in CPU cache
+  </Card>
+</CardGroup>
+
+---
+
+## Implementation Details
+
+### Phase Representation
+
+All oscillators use normalized phase values:
+
+- **Range:** 0.0 to 1.0
+- **Wrapping:** Automatic wrapping when phase exceeds 1.0
+- **Precision:** Double precision floating point
+
+### Frequency Calculation
+
+Phase increment is calculated as:
+
+```cpp
+mPhaseIncr = (1.0 / mSampleRate) * freqHz
+```
+
+### FastSinOscillator Algorithm
+
+The fast oscillator uses a technique originally by Robert Höldrich:
+
+1. Add a magic constant (UNITBIT32 = 1572864) to the phase
+2. Use a union to extract integer and fractional parts
+3. Use integer part as table index
+4. Use fractional part for linear interpolation
+5. Achieve sub-sample accuracy without expensive conversions
+
+<Info>
+  This technique only works with double precision floating point values in the range [-524288, +524288]. The oscillator phase is carefully managed to stay within this range.
+</Info>
+
+---
+
+## Code Location
+
+Source: `IPlug/Extras/Oscillator.h:1`
+
+## See Also
+
+- [LFO](/api/dsp/oscillators#lfo) - Low Frequency Oscillator with tempo sync
+- [Envelopes](/api/dsp/envelopes) - Envelope generators
+- [Filters](/api/dsp/filters) - Audio filtering

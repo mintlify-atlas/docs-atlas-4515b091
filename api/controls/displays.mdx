@@ -1,0 +1,533 @@
+---
+title: "Displays & Meters"
+description: "Level meters, scopes, displays, and real-time visualization controls"
+---
+
+## Overview
+
+Display controls visualize real-time data from the audio thread. They use the `ISender` system to safely transmit data from the DSP thread to the UI thread.
+
+<Warning>
+**Thread Safety**: Never access UI controls directly from `ProcessBlock`. Always use `ISender` objects to transmit data.
+</Warning>
+
+## Vector Meter Control
+
+`IVMeterControl` displays audio levels with linear or logarithmic response.
+
+### Constructor
+
+```cpp
+template <int MAXNC = 1>
+class IVMeterControl;
+
+IVMeterControl(
+  const IRECT& bounds,
+  const char* label,
+  const IVStyle& style = DEFAULT_STYLE,
+  EDirection dir = EDirection::Vertical,
+  std::initializer_list<const char*> trackNames = {},
+  int totalNSegs = 0,
+  EResponse response = EResponse::Linear,
+  float lowRangeDB = -72.f,
+  float highRangeDB = 12.f,
+  std::initializer_list<int> markers = {0, -6, -12, -24, -48}
+);
+```
+
+<ParamField path="MAXNC" type="int" default="1">
+  Template parameter: maximum number of channels
+</ParamField>
+
+<ParamField path="bounds" type="IRECT" required>
+  Position and size
+</ParamField>
+
+<ParamField path="label" type="const char*" required>
+  Label text
+</ParamField>
+
+<ParamField path="style" type="IVStyle" default="DEFAULT_STYLE">
+  Visual styling
+</ParamField>
+
+<ParamField path="dir" type="EDirection" default="EDirection::Vertical">
+  Meter orientation: `Vertical` or `Horizontal`
+</ParamField>
+
+<ParamField path="trackNames" type="std::initializer_list<const char*>">
+  Names for each channel track
+</ParamField>
+
+<ParamField path="totalNSegs" type="int" default="0">
+  Number of LED segments (0 = continuous meter)
+</ParamField>
+
+<ParamField path="response" type="EResponse" default="EResponse::Linear">
+  `Linear` or `Log` response curve
+</ParamField>
+
+<ParamField path="lowRangeDB" type="float" default="-72.f">
+  Minimum dB level displayed
+</ParamField>
+
+<ParamField path="highRangeDB" type="float" default="12.f">
+  Maximum dB level displayed
+</ParamField>
+
+<ParamField path="markers" type="std::initializer_list<int>">
+  dB values to mark with lines (log response only)
+</ParamField>
+
+### Example
+
+```cpp
+// In plugin header
+class MyPlugin : public Plugin {
+public:
+  ISender<2> mMeterSender;  // 2 channels
+};
+
+// In plugin constructor
+mMeterSender.SetControl(kCtrlTagMeter);
+
+// In ProcessBlock
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) {
+  // Process audio...
+  
+  // Send meter data
+  mMeterSender.ProcessBlock(outputs, nFrames, kCtrlTagMeter);
+}
+
+// In UI setup
+pGraphics->AttachControl(
+  new IVMeterControl<2>(
+    IRECT(10, 10, 50, 200),
+    "Output",
+    DEFAULT_STYLE,
+    EDirection::Vertical,
+    {"L", "R"},           // Channel names
+    0,                     // Continuous (not segmented)
+    IVMeterControl<2>::EResponse::Log,
+    -60.f,                 // Min -60 dB
+    6.f,                   // Max +6 dB
+    {0, -6, -12, -24, -48} // Markers
+  ),
+  kCtrlTagMeter
+);
+```
+
+### Methods
+
+```cpp
+void SetResponse(EResponse response); // Switch between Linear/Log
+```
+
+---
+
+## Peak/Average Meter Control
+
+`IVPeakAvgMeterControl` displays both peak and average (RMS) levels with held peaks.
+
+### Constructor
+
+```cpp
+template <int MAXNC = 1>
+class IVPeakAvgMeterControl;
+
+IVPeakAvgMeterControl(
+  const IRECT& bounds,
+  const char* label,
+  const IVStyle& style = DEFAULT_STYLE,
+  EDirection dir = EDirection::Vertical,
+  std::initializer_list<const char*> trackNames = {},
+  int totalNSegs = 0,
+  float lowRangeDB = -60.f,
+  float highRangeDB = 12.f,
+  std::initializer_list<int> markers = {0, -6, -12, -24, -48}
+);
+```
+
+<Info>
+Requires `IPeakAvgSender` instead of regular `ISender`.
+</Info>
+
+### Example
+
+```cpp
+// In plugin header
+IPeakAvgSender<2> mMeterSender;
+
+// In plugin constructor
+mMeterSender.SetControl(kCtrlTagMeter);
+
+// In ProcessBlock
+mMeterSender.ProcessBlock(outputs, nFrames, kCtrlTagMeter);
+
+// In UI setup
+pGraphics->AttachControl(
+  new IVPeakAvgMeterControl<2>(
+    IRECT(10, 10, 60, 200),
+    "Master",
+    DEFAULT_STYLE,
+    EDirection::Vertical,
+    {"L", "R"},
+    0,      // Continuous
+    -60.f,  // Low range
+    6.f     // High range
+  ),
+  kCtrlTagMeter
+);
+```
+
+---
+
+## LED Meter Control
+
+`IVLEDMeterControl` displays segmented LED-style meters with customizable color ranges.
+
+### Constructor
+
+```cpp
+template <int MAXNC = 1>
+class IVLEDMeterControl;
+
+struct LEDRange {
+  float lowRangeDB;
+  float highRangeDB;
+  int nSegs;
+  IColor color;
+};
+
+IVLEDMeterControl(
+  const IRECT& bounds,
+  const char* label = "",
+  const IVStyle& style = DEFAULT_STYLE,
+  EDirection dir = EDirection::Vertical,
+  std::initializer_list<const char*> trackNames = {},
+  int totalNSegs = 13,
+  const std::vector<LEDRange>& ranges = {
+    {0., 6., 1, LED5},         // Red: 0 to +6 dB
+    {-18., 0., 3, LED4},       // Orange: -18 to 0 dB
+    {-36., -18., 3, LED3},     // Yellow: -36 to -18 dB
+    {-54., -36., 3, LED2},     // Light green: -54 to -36 dB
+    {-72., -54., 3, LED1}      // Dark green: -72 to -54 dB
+  }
+);
+```
+
+<ParamField path="totalNSegs" type="int" default="13">
+  Total number of LED segments (must match sum of segments in ranges)
+</ParamField>
+
+<ParamField path="ranges" type="std::vector<LEDRange>">
+  LED color ranges from top (highest dB) to bottom (lowest dB)
+</ParamField>
+
+### Example
+
+```cpp
+// Custom LED ranges
+std::vector<IVLEDMeterControl<2>::LEDRange> customRanges = {
+  {0.f, 3.f, 1, COLOR_RED},           // 1 red LED at top
+  {-12.f, 0.f, 4, COLOR_YELLOW},      // 4 yellow LEDs
+  {-48.f, -12.f, 8, COLOR_GREEN}      // 8 green LEDs
+};
+
+pGraphics->AttachControl(
+  new IVLEDMeterControl<2>(
+    IRECT(10, 10, 70, 200),
+    "Output",
+    DEFAULT_STYLE,
+    EDirection::Vertical,
+    {"L", "R"},
+    13,  // Total segments
+    customRanges
+  ),
+  kCtrlTagMeter
+);
+```
+
+---
+
+## Bitmap Meter Control
+
+`IBMeterControl` uses a bitmap filmstrip for meter visualization.
+
+### Constructor
+
+```cpp
+IBMeterControl(
+  const IRECT& bounds,
+  const IBitmap& bitmap,
+  EResponse response = EResponse::Log,
+  float lowRangeDB = -72.f,
+  float highRangeDB = 12.f
+);
+```
+
+### Example
+
+```cpp
+const IBitmap meterBitmap = pGraphics->LoadBitmap("meter.png", 100); // 100 frames
+
+pGraphics->AttachControl(
+  new IBMeterControl(
+    IRECT(10, 10, 30, 200),
+    meterBitmap,
+    IBMeterControl::EResponse::Log,
+    -60.f,
+    6.f
+  ),
+  kCtrlTagMeter
+);
+```
+
+---
+
+## Scope Control
+
+`IVScopeControl` displays a real-time oscilloscope of audio waveforms.
+
+### Constructor
+
+```cpp
+template <int MAXNC = 1, int MAXBUF = 128>
+class IVScopeControl;
+
+IVScopeControl(
+  const IRECT& bounds,
+  const char* label = "",
+  const IVStyle& style = DEFAULT_STYLE
+);
+```
+
+<ParamField path="MAXNC" type="int" default="1">
+  Template parameter: maximum number of channels
+</ParamField>
+
+<ParamField path="MAXBUF" type="int" default="128">
+  Template parameter: buffer size (number of samples to display)
+</ParamField>
+
+### Example
+
+```cpp
+// In plugin header
+IScopeBufSender<2, 128> mScopeSender;
+
+// In plugin constructor
+mScopeSender.SetControl(kCtrlTagScope);
+
+// In ProcessBlock
+mScopeSender.ProcessBlock(outputs, nFrames, kCtrlTagScope);
+
+// In UI setup
+pGraphics->AttachControl(
+  new IVScopeControl<2, 128>(
+    IRECT(10, 10, 400, 200),
+    "Oscilloscope"
+  ),
+  kCtrlTagScope
+);
+```
+
+### Methods
+
+```cpp
+void SetBufferSize(int bufferSize); // Change displayed buffer size
+```
+
+---
+
+## Display Control
+
+`IVDisplayControl` shows a rolling display of historical values (like a chart recorder).
+
+### Constructor
+
+```cpp
+IVDisplayControl(
+  const IRECT& bounds,
+  const char* label = "",
+  const IVStyle& style = DEFAULT_STYLE,
+  EDirection dir = EDirection::Horizontal,
+  float lo = 0.,
+  float hi = 1.f,
+  float defaultVal = 0.,
+  uint32_t bufferSize = 100,
+  float strokeThickness = 2.f
+);
+```
+
+<ParamField path="dir" type="EDirection" default="EDirection::Horizontal">
+  Scroll direction: `Horizontal` (left to right) or `Vertical` (top to bottom)
+</ParamField>
+
+<ParamField path="lo" type="float" default="0.f">
+  Minimum value (bottom of display)
+</ParamField>
+
+<ParamField path="hi" type="float" default="1.f">
+  Maximum value (top of display)
+</ParamField>
+
+<ParamField path="defaultVal" type="float" default="0.f">
+  Initial value to fill buffer
+</ParamField>
+
+<ParamField path="bufferSize" type="uint32_t" default="100">
+  Number of historical values to display
+</ParamField>
+
+<ParamField path="strokeThickness" type="float" default="2.f">
+  Line thickness in pixels
+</ParamField>
+
+### Example
+
+```cpp
+// In plugin header
+ISender<1> mEnvelopeSender;
+
+// In plugin constructor
+mEnvelopeSender.SetControl(kCtrlTagEnvDisplay);
+
+// In ProcessBlock (send envelope follower value)
+float envelope = CalculateEnvelope();
+mEnvelopeSender.PushData({kCtrlTagEnvDisplay}, {envelope});
+
+// In UI setup
+pGraphics->AttachControl(
+  new IVDisplayControl(
+    IRECT(10, 10, 410, 110),
+    "Envelope",
+    DEFAULT_STYLE,
+    EDirection::Horizontal,
+    0.f,     // Min value
+    1.f,     // Max value
+    0.f,     // Default
+    200,     // 200 points
+    2.f      // 2px line
+  ),
+  kCtrlTagEnvDisplay
+);
+```
+
+---
+
+## Spectrum Analyzer Control
+
+`IVBarGraphSpectrumAnalyzerControl` displays frequency spectrum as bar graph.
+
+<Info>
+See `IGraphics/Controls/IVBarGraphSpectrumAnalyzerControl.h` for full API.
+</Info>
+
+---
+
+## Label Control
+
+`IVLabelControl` displays static or dynamic text.
+
+### Constructor
+
+```cpp
+IVLabelControl(
+  const IRECT& bounds,
+  const char* label,
+  const IVStyle& style = DEFAULT_STYLE
+    .WithDrawFrame(false)
+    .WithColor(kSH, COLOR_BLACK)
+    .WithShadowOffset(1)
+    .WithValueText(
+      DEFAULT_VALUE_TEXT
+        .WithSize(20.f)
+        .WithFGColor(COLOR_WHITE)
+    )
+);
+```
+
+### Example
+
+```cpp
+// Static label
+pGraphics->AttachControl(
+  new IVLabelControl(
+    IRECT(10, 10, 110, 40),
+    "Master Volume"
+  )
+);
+
+// Dynamic label
+auto* label = new IVLabelControl(
+  IRECT(10, 10, 200, 40),
+  "Ready"
+);
+pGraphics->AttachControl(label, kCtrlTagStatus);
+
+// Update label text later
+label->SetStr("Processing...");
+```
+
+---
+
+## ISender System
+
+The `ISender` system safely transmits data from audio thread to UI thread.
+
+### Basic ISender
+
+```cpp
+// In plugin header
+ISender<MAXNC> mSender;  // MAXNC = max channels
+
+// In constructor
+mSender.SetControl(kCtrlTag);
+
+// In ProcessBlock
+mSender.ProcessBlock(outputs, nFrames, kCtrlTag);
+
+// Or send custom data
+float values[2] = {0.5f, 0.75f};
+mSender.PushData({kCtrlTag}, values);
+```
+
+### IPeakAvgSender
+
+```cpp
+// For peak/average meters
+IPeakAvgSender<MAXNC> mPeakAvgSender;
+
+mPeakAvgSender.SetControl(kCtrlTag);
+mPeakAvgSender.ProcessBlock(outputs, nFrames, kCtrlTag);
+```
+
+### IScopeBufSender
+
+```cpp
+// For oscilloscopes
+IScopeBufSender<MAXNC, MAXBUF> mScopeSender;
+
+mScopeSender.SetControl(kCtrlTag);
+mScopeSender.ProcessBlock(outputs, nFrames, kCtrlTag);
+```
+
+<Warning>
+**Thread Safety Rules:**
+- Create `ISender` in plugin constructor
+- Call `SetControl()` after UI is created
+- Only call `ProcessBlock()` or `PushData()` from audio thread
+- Never access controls directly from `ProcessBlock`
+</Warning>
+
+---
+
+## Source Reference
+
+**Files:**
+- `IGraphics/Controls/IVMeterControl.h` - Meters
+- `IGraphics/Controls/IVScopeControl.h` - Scope
+- `IGraphics/Controls/IVDisplayControl.h` - Display
+- `IGraphics/Controls/IControls.h` - Label
+- `IPlug/ISender.h` - Data transmission system

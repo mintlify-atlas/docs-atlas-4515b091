@@ -1,0 +1,511 @@
+---
+title: Debugging
+description: Debug iPlug2 plugins with logging, assertions, and debugger integration
+---
+
+Effective debugging is essential for building stable plugins. iPlug2 provides logging, assertions, and debugger integration across all platforms.
+
+## Build Configurations
+
+iPlug2 projects include multiple build configurations:
+
+<Tabs>
+  <Tab title="Debug">
+    - Optimizations disabled (`-O0`)
+    - Debug symbols included
+    - Assertions enabled
+    - Logging enabled
+    - **Use for development**
+  </Tab>
+  
+  <Tab title="Release">
+    - Optimizations enabled (`-O3`)
+    - Debug symbols stripped
+    - Assertions disabled
+    - Minimal logging
+    - **Use for distribution**
+  </Tab>
+  
+  <Tab title="Tracer">
+    - Similar to Debug
+    - Extra verbose tracing
+    - Function entry/exit logging
+    - **Use for deep debugging**
+  </Tab>
+</Tabs>
+
+<Warning>
+Always test in **both** Debug and Release. Bugs can appear in only one configuration due to timing differences and optimizations.
+</Warning>
+
+## Logging
+
+### DBGMSG - Debug Messages
+
+Simple printf-style logging:
+
+```cpp
+#include "IPlug_include_in_plug_src.h"
+
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  DBGMSG("ProcessBlock called with %d frames\n", nFrames);
+  
+  double gain = GetParam(kParamGain)->Value();
+  DBGMSG("Gain = %.2f\n", gain);
+}
+```
+
+`DBGMSG` prints to:
+- **macOS/iOS**: Xcode console
+- **Windows**: Visual Studio Output window or DebugView
+- **Linux**: stdout
+
+<Note>
+`DBGMSG` is compiled out in Release builds. Use it freely without performance concerns.
+</Note>
+
+### TRACE - Function Entry/Exit
+
+Trace function calls automatically:
+
+```cpp
+void OnReset() override
+{
+  TRACE; // Prints: "OnReset"
+  
+  SetSampleRate(GetSampleRate());
+  
+  DBGMSG("OnReset complete\n");
+}
+```
+
+Output:
+```
+OnReset
+OnReset complete
+```
+
+### Log Levels
+
+Control verbosity with preprocessor defines:
+
+```cpp title="config.h or project settings"
+// Verbose logging
+#define TRACER_BUILD 1
+
+// Disable all logging
+#define NDEBUG 1
+```
+
+## Assertions
+
+### Standard Assertions
+
+Catch logic errors with `assert()`:
+
+```cpp
+#include <cassert>
+
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  assert(nFrames > 0 && "Invalid frame count");
+  assert(nFrames <= GetBlockSize() && "Frame count exceeds buffer size");
+  
+  // Process...
+}
+```
+
+Assertions trigger breakpoints in debug builds, abort in release (if enabled).
+
+### WDL Assertions
+
+WDL provides its own assertion macro:
+
+```cpp
+#include "wdlstring.h"
+
+WDL_ASSERT(condition); // Similar to assert()
+```
+
+## Debugger Integration
+
+### Xcode (macOS)
+
+<Steps>
+  <Step title="Build Debug Configuration">
+    Select **Debug** scheme in Xcode
+  </Step>
+  
+  <Step title="Set Breakpoints">
+    Click line numbers to add breakpoints
+  </Step>
+  
+  <Step title="Choose Host">
+    Product → Scheme → Edit Scheme → Run → Executable → Choose host DAW
+  </Step>
+  
+  <Step title="Run">
+    Cmd+R to launch host with debugger attached
+  </Step>
+</Steps>
+
+**Recommended Hosts for Debugging:**
+- **REAPER** - Fast loading, stable, free evaluation
+- **Logic Pro** - AU/AUv3 testing
+- **Standalone** - No host needed
+
+### Visual Studio (Windows)
+
+<Steps>
+  <Step title="Build Debug Configuration">
+    Set configuration to **Debug** in toolbar
+  </Step>
+  
+  <Step title="Set Breakpoints">
+    Click margin to add breakpoints (F9)
+  </Step>
+  
+  <Step title="Configure Debugging">
+    Project → Properties → Debugging
+    - Command: Path to host (e.g., `C:\Program Files\REAPER\reaper.exe`)
+    - Working Directory: Host folder
+  </Step>
+  
+  <Step title="Run">
+    F5 to launch with debugger attached
+  </Step>
+</Steps>
+
+### Standalone Debug Menu
+
+Standalone builds have a built-in debug menu (Debug builds only):
+
+```cpp
+// Available in debug standalone builds
+// Access via right-click or menu bar
+```
+
+Features:
+- Screenshot capture
+- UI bounds visualization
+- Control inspector
+- FPS display
+
+<Info>
+From CLAUDE.md: "When building standalone app targets only debug builds have the debug menu with screenshot capabilities"
+</Info>
+
+## Common Issues
+
+### Audio Dropouts/Glitches
+
+<Tabs>
+  <Tab title="Symptom">
+    Clicks, pops, or stuttering audio
+  </Tab>
+  
+  <Tab title="Causes">
+    - Memory allocation in `ProcessBlock()`
+    - Locks/mutexes on audio thread
+    - Expensive operations (trigonometry, etc.)
+    - File I/O on audio thread
+  </Tab>
+  
+  <Tab title="Debug">
+    ```cpp
+    void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+    {
+      auto start = std::chrono::high_resolution_clock::now();
+      
+      // Your processing...
+      
+      auto end = std::chrono::high_resolution_clock::now();
+      auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+      
+      // In debug builds only:
+      DBGMSG("ProcessBlock took %lld μs (budget: %lld μs)\n",
+             duration.count(), 
+             (long long)(1000000.0 * nFrames / GetSampleRate()));
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Fix">
+    - Pre-allocate all buffers in `OnReset()`
+    - Use lock-free data structures (`IPlugQueue`)
+    - Optimize hot loops
+    - Move file I/O to background thread
+  </Tab>
+</Tabs>
+
+### Crashes
+
+<Tabs>
+  <Tab title="Null Pointer">
+    ```cpp
+    void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+    {
+      // ❌ Can crash if UI isn't open
+      GetUI()->GetControlWithTag(kTag)->SetDirty();
+      
+      // ✅ Check first
+      if(auto* pUI = GetUI())
+        pUI->GetControlWithTag(kTag)->SetDirty();
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Buffer Overflow">
+    ```cpp
+    void OnReset() override
+    {
+      // ❌ Buffer too small
+      mBuffer.Resize(512);
+    }
+    
+    void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+    {
+      // Can crash if nFrames > 512
+      memcpy(mBuffer.Get(), inputs[0], nFrames * sizeof(sample));
+    }
+    ```
+    
+    **Fix**: Use `GetBlockSize()`
+    ```cpp
+    mBuffer.Resize(GetBlockSize());
+    ```
+  </Tab>
+  
+  <Tab title="Data Race">
+    ```cpp
+    // ❌ Not thread-safe
+    void OnParamChange(int paramIdx) override
+    {
+      mGain = GetParam(kParamGain)->Value(); // Main thread
+    }
+    
+    void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+    {
+      double gain = mGain; // Audio thread - RACE!
+    }
+    ```
+    
+    **Fix**: Use atomics
+    ```cpp
+    std::atomic<double> mGain {1.0};
+    ```
+  </Tab>
+</Tabs>
+
+### Memory Leaks
+
+Use sanitizers to detect leaks:
+
+```bash title="macOS - Instruments"
+# Run with Leaks instrument
+open -a "Instruments.app"
+# Profile → Leaks → Choose target
+```
+
+```bash title="Linux - Valgrind"
+valgrind --leak-check=full --show-leak-kinds=all ./MyPlugin
+```
+
+```bash title="Windows - Visual Studio"
+# Debug → Performance Profiler → Memory Usage
+```
+
+## Debugging Techniques
+
+### Conditional Breakpoints
+
+Break only when condition is true:
+
+```cpp
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+  for(int s = 0; s < nFrames; s++)
+  {
+    // Set breakpoint here with condition: s == 100
+    outputs[0][s] = inputs[0][s];
+  }
+}
+```
+
+In Xcode: Right-click breakpoint → Edit Breakpoint → Condition: `s == 100`
+
+In Visual Studio: Right-click breakpoint → Condition → `s == 100`
+
+### Data Breakpoints
+
+Break when a memory location changes:
+
+```cpp
+class MyPlugin : public Plugin
+{
+private:
+  double mGain = 1.0; // Watch this variable
+};
+```
+
+- **Xcode**: Right-click variable in debugger → Watch "mGain"
+- **Visual Studio**: Right-click variable → Break when value changes
+
+### Logging Audio Values
+
+```cpp title="Visualize Audio in Console"
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override
+{
+#ifdef _DEBUG
+  static int counter = 0;
+  if(++counter % 1000 == 0) // Every ~20ms at 48kHz
+  {
+    DBGMSG("L: %.3f R: %.3f\n", outputs[0][0], outputs[1][0]);
+  }
+#endif
+  
+  // Processing...
+}
+```
+
+### Capture Buffers to File
+
+```cpp title="Dump Audio to WAV (Debug Builds Only)"
+#ifdef _DEBUG
+#include <fstream>
+
+void DumpBufferToFile(sample* buffer, int nFrames, const char* filename)
+{
+  std::ofstream file(filename, std::ios::binary);
+  
+  // Simple 16-bit PCM WAV header
+  struct WAVHeader
+  {
+    char riff[4] = {'R','I','F','F'};
+    int32_t fileSize;
+    char wave[4] = {'W','A','V','E'};
+    char fmt[4] = {'f','m','t',' '};
+    int32_t fmtSize = 16;
+    int16_t audioFormat = 1;
+    int16_t numChannels = 1;
+    int32_t sampleRate = 48000;
+    int32_t byteRate = 96000;
+    int16_t blockAlign = 2;
+    int16_t bitsPerSample = 16;
+    char data[4] = {'d','a','t','a'};
+    int32_t dataSize;
+  } header;
+  
+  header.dataSize = nFrames * 2;
+  header.fileSize = 36 + header.dataSize;
+  
+  file.write(reinterpret_cast<char*>(&header), sizeof(header));
+  
+  for(int i = 0; i < nFrames; i++)
+  {
+    int16_t sample = static_cast<int16_t>(buffer[i] * 32767.0);
+    file.write(reinterpret_cast<char*>(&sample), sizeof(sample));
+  }
+}
+#endif
+```
+
+## Platform-Specific Tips
+
+### macOS
+
+**Console.app**: View all system logs including plugin output
+
+```bash
+# Filter logs for your plugin
+log stream --predicate 'processImagePath contains "MyPlugin"'
+```
+
+**lldb commands**:
+```lldb
+# Print variable
+(lldb) p mGain
+
+# Print expression
+(lldb) p GetParam(0)->Value()
+
+# Continue execution
+(lldb) c
+```
+
+### Windows
+
+**DebugView**: Capture `OutputDebugString()` messages
+
+Download from [Microsoft Sysinternals](https://learn.microsoft.com/en-us/sysinternals/downloads/debugview)
+
+**Visual Studio Immediate Window**:
+```
+// Evaluate during debugging
+? mGain
+? GetParam(0)->Value()
+```
+
+### Linux
+
+**GDB commands**:
+```bash
+# Attach to running process
+gdb -p $(pidof reaper)
+
+# Set breakpoint
+(gdb) break MyPlugin::ProcessBlock
+
+# Print backtrace
+(gdb) bt
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Start Simple">
+    Test basic functionality before adding complexity
+  </Step>
+  
+  <Step title="Use Standalone Build">
+    Debug in standalone first - faster iteration than loading in a host
+  </Step>
+  
+  <Step title="Enable All Warnings">
+    Treat warnings as errors during development
+  </Step>
+  
+  <Step title="Test Small Buffers">
+    Set host to 32-sample buffers to catch buffer size assumptions
+  </Step>
+  
+  <Step title="Profile Realtime Performance">
+    Use Instruments (macOS) or Very Sleepy (Windows) to profile CPU usage
+  </Step>
+</Steps>
+
+## Debugging Checklist
+
+When something goes wrong:
+
+- [ ] Check Debug vs Release build
+- [ ] Look for assertions/crashes in console
+- [ ] Verify thread safety (atomics, no locks)
+- [ ] Check buffer sizes (don't assume 512)
+- [ ] Test with different sample rates (44.1k, 48k, 96k)
+- [ ] Test in multiple hosts (REAPER, Logic, etc.)
+- [ ] Profile CPU usage
+- [ ] Check for memory leaks
+- [ ] Verify state serialization works
+- [ ] Test preset loading/saving
+
+## See Also
+
+- [Threading](/advanced/threading) - Thread safety debugging
+- [CLAUDE.md](@CLAUDE.md) - Framework-specific notes
+- [State Management](/advanced/state-management) - Debugging serialization
+
+<Tip>
+Keep a debug build of your plugin and a matching host (like REAPER) for quick testing. This setup pays for itself immediately.
+</Tip>

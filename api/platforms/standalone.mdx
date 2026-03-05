@@ -1,0 +1,436 @@
+---
+title: Standalone App Platform API
+description: Standalone application API implementation for iPlug2 plugins
+---
+
+# Standalone App Platform API
+
+The standalone app implementation enables iPlug2 plugins to run as independent desktop applications on Windows, macOS, and Linux.
+
+## Overview
+
+The `IPlugAPP` class implements a minimal host environment, allowing your plugin to run as a standalone application with full audio I/O, MIDI I/O, and plugin UI.
+
+<Info>
+Standalone apps are useful for testing, distribution to users who don't have DAWs, and creating specialized audio tools. They use the same plugin code as your VST3, AU, or AAX builds.
+</Info>
+
+## Core Class
+
+### IPlugAPP
+
+Defined in: `IPlug/APP/IPlugAPP.h`
+
+```cpp
+class IPlugAPP : public IPlugAPIBase
+               , public IPlugProcessor
+```
+
+The minimal implementation for standalone applications, handling:
+- Audio device I/O
+- MIDI device I/O  
+- Parameter automation (no host automation)
+- Window management
+- Settings persistence
+
+## Key Methods
+
+### Host Communication
+
+Standalone apps have no external host, so these methods are mostly no-ops:
+
+#### BeginInformHostOfParamChange
+```cpp
+void BeginInformHostOfParamChange(int idx) override;
+```
+No-op in standalone mode (no host to inform).
+
+**Parameters:**
+- `idx` - Parameter index
+
+#### InformHostOfParamChange
+```cpp
+void InformHostOfParamChange(int idx, double normalizedValue) override;
+```
+No-op in standalone mode.
+
+**Parameters:**
+- `idx` - Parameter index
+- `normalizedValue` - Normalized parameter value (0.0 to 1.0)
+
+#### EndInformHostOfParamChange
+```cpp
+void EndInformHostOfParamChange(int idx) override;
+```
+No-op in standalone mode.
+
+**Parameters:**
+- `idx` - Parameter index
+
+#### InformHostOfPresetChange
+```cpp
+void InformHostOfPresetChange() override;
+```
+No-op in standalone mode.
+
+### Editor
+
+#### EditorResize
+```cpp
+bool EditorResize(int viewWidth, int viewHeight) override;
+```
+Resizes the application window.
+
+**Parameters:**
+- `viewWidth` - New width in pixels
+- `viewHeight` - New height in pixels
+
+**Returns:** `true` on success
+
+<Note>
+In standalone mode, the window can be freely resized. The resize is applied immediately without host negotiation.
+</Note>
+
+### MIDI
+
+#### SendMidiMsg
+```cpp
+bool SendMidiMsg(const IMidiMsg& msg) override;
+```
+Sends a MIDI message to the configured MIDI output device.
+
+**Parameters:**
+- `msg` - MIDI message to send
+
+**Returns:** `true` if message was sent successfully
+
+**Example:**
+```cpp
+// Send MIDI note out
+IMidiMsg noteOn(0, 0x90, 60, 100); // Channel 1, Note On, Middle C, Velocity 100
+SendMidiMsg(noteOn);
+```
+
+#### SendSysEx
+```cpp
+bool SendSysEx(const ISysEx& msg) override;
+```
+Sends a System Exclusive message to the MIDI output.
+
+**Parameters:**
+- `msg` - SysEx message to send
+
+**Returns:** `true` if message was sent successfully
+
+### Editor Delegate
+
+#### SendSysexMsgFromUI
+```cpp
+void SendSysexMsgFromUI(const ISysEx& msg) override;
+```
+Sends a SysEx message from the UI thread.
+
+**Parameters:**
+- `msg` - SysEx message to send
+
+<Note>
+This method handles thread safety when sending SysEx from the UI to the audio thread.
+</Note>
+
+## Standalone-Specific Methods
+
+### AppProcess
+```cpp
+void AppProcess(double** inputs, double** outputs, int nFrames);
+```
+Main audio processing callback for standalone apps.
+
+**Parameters:**
+- `inputs` - Array of input buffers (one per input channel)
+- `outputs` - Array of output buffers (one per output channel)
+- `nFrames` - Number of frames to process
+
+<Warning>
+This is called from the audio device callback. Keep it real-time safe: no allocations, no locks, no blocking calls.
+</Warning>
+
+## Standalone Host
+
+### IPlugAPPHost
+
+The standalone host wrapper (not directly exposed in your plugin code) provides:
+
+- Audio device enumeration and selection
+- MIDI device enumeration and selection
+- Buffer size and sample rate configuration
+- Settings persistence
+- Audio/MIDI routing
+
+<Info>
+The standalone host is created automatically when your app launches. It provides the infrastructure for audio/MIDI I/O without requiring DAW-specific code.
+</Info>
+
+## Configuration
+
+### Standalone App Configuration
+
+Set in your plugin's `config.h`:
+
+```cpp
+#define PLUG_NAME "MyPlugin"
+#define PLUG_MFR "Acme"
+#define PLUG_VERSION_STR "1.0.0"
+
+// Audio I/O
+#define PLUG_CHANNEL_IO "2-2" // Stereo in, stereo out
+
+// MIDI
+#define PLUG_DOES_MIDI_IN 1
+#define PLUG_DOES_MIDI_OUT 1
+
+// Standalone options
+#define APP_NUM_CHANNELS 2
+#define APP_SAMPLE_RATE 48000.0
+#define APP_BUFFER_SIZE 512
+```
+
+### Audio I/O Configurations
+
+<CardGroup cols={2}>
+  <Card title="Stereo Effect" icon="waveform">
+    ```cpp
+    #define PLUG_CHANNEL_IO "2-2"
+    #define APP_NUM_CHANNELS 2
+    ```
+    Stereo in, stereo out
+  </Card>
+  
+  <Card title="Stereo Generator" icon="signal">
+    ```cpp
+    #define PLUG_CHANNEL_IO "0-2"
+    #define APP_NUM_CHANNELS 2
+    ```
+    No audio input (instrument)
+  </Card>
+  
+  <Card title="Mono to Stereo" icon="expand">
+    ```cpp
+    #define PLUG_CHANNEL_IO "1-2"
+    #define APP_NUM_CHANNELS 2
+    ```
+    Mono in, stereo out
+  </Card>
+  
+  <Card title="Multichannel" icon="table-columns">
+    ```cpp
+    #define PLUG_CHANNEL_IO "8-8"
+    #define APP_NUM_CHANNELS 8
+    ```
+    8 channels in/out
+  </Card>
+</CardGroup>
+
+## Debug Features
+
+<Info>
+**Debug Menu**: Debug builds include a special menu with useful development features:
+- Screenshot capture
+- Performance metrics
+- Parameter dump
+- State save/load testing
+
+Release builds omit the debug menu.
+</Info>
+
+### Enabling Screenshots
+
+```cpp
+// In debug builds, screenshots can be triggered from the menu
+// Screenshots are saved to:
+// - Windows: %APPDATA%/YourMfr/YourPlugin/
+// - macOS: ~/Library/Application Support/YourMfr/YourPlugin/
+```
+
+## Settings Persistence
+
+Standalone apps automatically save and restore:
+
+- Audio device selection
+- MIDI device selection
+- Buffer size and sample rate
+- Window position and size
+- Plugin state (presets, parameters)
+
+**Settings Location:**
+
+<CardGroup cols={2}>
+  <Card title="Windows" icon="windows">
+    ```
+    %APPDATA%\YourMfr\YourPlugin\settings.ini
+    ```
+  </Card>
+  
+  <Card title="macOS" icon="apple">
+    ```
+    ~/Library/Application Support/YourMfr/YourPlugin/settings.ini
+    ```
+  </Card>
+  
+  <Card title="Linux" icon="linux">
+    ```
+    ~/.config/YourMfr/YourPlugin/settings.ini
+    ```
+  </Card>
+</CardGroup>
+
+## Audio Backend
+
+Standalone apps use different audio APIs on each platform:
+
+- **Windows**: ASIO (if available), otherwise WASAPI
+- **macOS**: Core Audio
+- **Linux**: ALSA or JACK
+
+<Info>
+The audio backend is selected automatically. Users can choose different devices and buffer sizes through the standalone app's audio settings.
+</Info>
+
+## MIDI Routing
+
+### MIDI Input
+
+MIDI input devices can be selected from the app's MIDI settings. All MIDI messages from the selected device are routed to your plugin's MIDI processing.
+
+```cpp
+void MyPlugin::ProcessMidiMsg(const IMidiMsg& msg)
+{
+  // Handle MIDI from input device
+  int status = msg.StatusMsg();
+  
+  switch(status)
+  {
+    case IMidiMsg::kNoteOn:
+      // Handle note on
+      break;
+    case IMidiMsg::kNoteOff:
+      // Handle note off
+      break;
+  }
+}
+```
+
+### MIDI Output
+
+MIDI output devices can be selected from the app's MIDI settings. Messages sent via `SendMidiMsg()` are routed to the selected output device.
+
+```cpp
+// Send MIDI to hardware output
+IMidiMsg msg(0, 0x90, 60, 100);
+SendMidiMsg(msg);
+```
+
+## Factory Function
+
+### MakePlug
+```cpp
+IPlugAPP* MakePlug(const InstanceInfo& info);
+```
+Factory function to create the plugin instance.
+
+**Parameters:**
+- `info` - Instance information containing:
+  - `pAppHost` - Pointer to the `IPlugAPPHost` instance
+
+**Returns:** Pointer to new plugin instance
+
+**Example:**
+```cpp
+IPlugAPP* MakePlug(const InstanceInfo& info)
+{
+  return new MyPlugin(info, MakeConfig(kNumParams, kNumPresets));
+}
+```
+
+## Building Standalone Apps
+
+### Build Configuration
+
+```bash
+# macOS - Xcode
+cd MyPlugin/projects/
+open MyPlugin-macOS.xcworkspace
+# Select "APP" scheme and build
+
+# Windows - Visual Studio
+cd MyPlugin\projects\..
+msbuild MyPlugin.sln /p:Configuration=Release /p:Platform=x64
+
+# Linux - Make
+cd MyPlugin/projects/
+make APP CONFIG=Release
+```
+
+### Installer Creation
+
+<CardGroup cols={2}>
+  <Card title="Windows" icon="windows">
+    Use Inno Setup for Windows installers:
+    ```iss
+    [Setup]
+    AppName=MyPlugin
+    DefaultDirName={pf}\MyMfr\MyPlugin
+    [Files]
+    Source: "MyPlugin.exe"; DestDir: "{app}"
+    ```
+  </Card>
+  
+  <Card title="macOS" icon="apple">
+    Create .app bundle and DMG:
+    ```bash
+    # App bundle is created by Xcode
+    # Create DMG with hdiutil
+    hdiutil create MyPlugin.dmg -srcfolder MyPlugin.app
+    ```
+  </Card>
+</CardGroup>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Default Settings" icon="gear">
+    Provide sensible default audio settings. Use 48kHz sample rate and 512 sample buffer size as defaults.
+  </Card>
+  
+  <Card title="Settings UI" icon="sliders">
+    Expose audio and MIDI settings through your plugin's UI or a preferences menu for user convenience.
+  </Card>
+  
+  <Card title="State Persistence" icon="floppy-disk">
+    Implement state serialization properly. Standalone apps rely on it for preset and settings persistence.
+  </Card>
+  
+  <Card title="Error Handling" icon="triangle-exclamation">
+    Handle audio device failures gracefully. Show error messages if audio devices can't be opened.
+  </Card>
+</CardGroup>
+
+## Common Issues
+
+<Warning>
+**ASIO SDK**: Windows ASIO support requires the ASIO SDK from Steinberg. The SDK cannot be redistributed, so users may need ASIO drivers installed.
+</Warning>
+
+<Tip>
+**Latency**: Standalone apps allow users to set buffer sizes. Smaller buffers = lower latency but higher CPU usage. Provide guidance on buffer size selection.
+</Tip>
+
+<Tip>
+**Multiple Instances**: Each standalone app instance is independent. They don't share state or communicate with each other.
+</Tip>
+
+## Related Documentation
+
+- [IPlugAPIBase](/api/core/iplugapibase) - Base API functionality
+- [IPlugProcessor](/api/core/iplugprocessor) - Audio processing interface
+- [Plugin Configuration](/guides/configuration) - Plugin configuration options
+- [Building Projects](/guides/building) - Build system documentation

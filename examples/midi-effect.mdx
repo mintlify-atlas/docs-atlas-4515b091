@@ -1,0 +1,237 @@
+---
+title: "MIDI Effect Example"
+description: "Learn how to create a MIDI effect plugin that processes and generates MIDI messages"
+---
+
+## Overview
+
+The **IPlugMidiEffect** example demonstrates how to build a plugin that processes MIDI messages. This example shows a simple MIDI effect with a gain control that passes MIDI through and allows triggering MIDI notes from the UI.
+
+<Info>
+This plugin has a channel configuration of `0-0`, meaning no audio inputs or outputs - it's a pure MIDI effect.
+</Info>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="MIDI Processing" icon="sliders">
+    Filter and pass through MIDI messages in the audio thread
+  </Card>
+  <Card title="MIDI Generation" icon="keyboard">
+    Trigger MIDI notes directly from the user interface
+  </Card>
+  <Card title="Audio Passthrough" icon="volume">
+    Apply gain to audio passing through the plugin
+  </Card>
+  <Card title="MPE Support" icon="wave-square">
+    Configured to support MIDI Polyphonic Expression
+  </Card>
+</CardGroup>
+
+## Plugin Configuration
+
+In `config.h`, the plugin is configured as a MIDI effect:
+
+```cpp
+#define PLUG_CHANNEL_IO "0-0"     // No audio I/O
+#define PLUG_TYPE 2                 // MIDI Effect type
+#define PLUG_DOES_MIDI_IN 1
+#define PLUG_DOES_MIDI_OUT 1
+#define PLUG_DOES_MPE 1             // MPE support enabled
+```
+
+## Implementation
+
+### Header Structure
+
+The plugin class extends the base `Plugin` class and overrides MIDI processing methods:
+
+```cpp
+class IPlugMidiEffect final : public Plugin
+{
+public:
+  IPlugMidiEffect(const InstanceInfo& info);
+
+#if IPLUG_DSP
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  void ProcessMidiMsg(const IMidiMsg& msg) override;
+#endif
+};
+```
+
+### Processing MIDI Messages
+
+The `ProcessMidiMsg` method filters which MIDI messages to pass through:
+
+```cpp
+void IPlugMidiEffect::ProcessMidiMsg(const IMidiMsg& msg)
+{
+  int status = msg.StatusMsg();
+  
+  switch (status)
+  {
+    case IMidiMsg::kNoteOn:
+    case IMidiMsg::kNoteOff:
+    case IMidiMsg::kPolyAftertouch:
+    case IMidiMsg::kControlChange:
+    case IMidiMsg::kProgramChange:
+    case IMidiMsg::kChannelAftertouch:
+    case IMidiMsg::kPitchWheel:
+    {
+      goto handle;
+    }
+    default:
+      return;
+  }
+  
+handle:
+  SendMidiMsg(msg);
+}
+```
+
+<Note>
+Only channel voice messages are passed through. System messages and other MIDI data are filtered out.
+</Note>
+
+### Audio Processing
+
+Even though this is a MIDI effect, it can process audio that passes through:
+
+```cpp
+void IPlugMidiEffect::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kParamGain)->Value() / 100.;
+  const int nChans = NOutChansConnected();
+
+  for (auto s = 0; s < nFrames; s++) {
+    for (auto c = 0; c < nChans; c++) {
+      outputs[c][s] = outputs[c][s] * gain;
+    }
+  }
+}
+```
+
+### Triggering MIDI from the UI
+
+The example includes a button that generates MIDI notes when clicked:
+
+```cpp
+auto actionFunc = [&](IControl* pCaller) {
+  static bool onoff = false;
+  onoff = !onoff;
+  IMidiMsg msg;
+  constexpr int pitches[3] = {60, 65, 67};  // C, F, G
+  
+  for (int i = 0; i<3; i++)
+  {
+    if(onoff)
+      msg.MakeNoteOnMsg(pitches[i], 60, 0);  // Velocity 60, channel 0
+    else
+      msg.MakeNoteOffMsg(pitches[i], 0);
+  
+    SendMidiMsgFromUI(msg);
+  }
+  
+  SplashClickActionFunc(pCaller);
+};
+
+pGraphics->AttachControl(new IVButtonControl(
+  pGraphics->GetBounds().GetPadded(-10), 
+  actionFunc, 
+  "Trigger Chord"
+));
+```
+
+<Steps>
+  <Step title="Create MIDI messages">
+    Use `IMidiMsg` methods like `MakeNoteOnMsg()` and `MakeNoteOffMsg()` to construct messages
+  </Step>
+  <Step title="Send from UI thread">
+    Call `SendMidiMsgFromUI()` to safely send MIDI from the UI thread to the audio thread
+  </Step>
+  <Step title="Handle in ProcessMidiMsg">
+    Process the messages in `ProcessMidiMsg()` on the audio thread
+  </Step>
+</Steps>
+
+### Setting Tail Size
+
+MIDI effects may need to declare a tail time for proper plugin behavior:
+
+```cpp
+#if IPLUG_DSP
+  SetTailSize(4410000);  // Large tail to keep plugin alive
+#endif
+```
+
+<Warning>
+Setting a very large tail size (like 4410000 samples = ~100 seconds at 44.1kHz) keeps the plugin processing even when no audio is present. This is important for MIDI effects that need to respond to incoming MIDI.
+</Warning>
+
+## Building a MIDI Effect
+
+<Steps>
+  <Step title="Configure as MIDI effect">
+    Set `PLUG_TYPE 2` and `PLUG_CHANNEL_IO "0-0"` in config.h
+  </Step>
+  <Step title="Enable MIDI I/O">
+    Set `PLUG_DOES_MIDI_IN 1` and `PLUG_DOES_MIDI_OUT 1`
+  </Step>
+  <Step title="Override ProcessMidiMsg">
+    Implement MIDI message filtering and processing logic
+  </Step>
+  <Step title="Send MIDI output">
+    Use `SendMidiMsg()` to output MIDI messages from the audio thread
+  </Step>
+  <Step title="Optional: UI to MIDI">
+    Use `SendMidiMsgFromUI()` to generate MIDI from UI controls
+  </Step>
+</Steps>
+
+## Common MIDI Operations
+
+### Creating MIDI Messages
+
+```cpp
+IMidiMsg msg;
+
+// Note messages
+msg.MakeNoteOnMsg(noteNumber, velocity, channel);
+msg.MakeNoteOffMsg(noteNumber, channel);
+
+// Control change
+msg.MakeControlChangeMsg(controllerNumber, value, channel);
+
+// Pitch bend (0-16383, 8192 is center)
+msg.MakePitchWheelMsg(value, channel);
+```
+
+### Reading MIDI Messages
+
+```cpp
+void ProcessMidiMsg(const IMidiMsg& msg)
+{
+  int status = msg.StatusMsg();        // Note On, Note Off, etc.
+  int noteNumber = msg.NoteNumber();   // 0-127
+  int velocity = msg.Velocity();       // 0-127
+  int channel = msg.Channel();         // 0-15
+  int offset = msg.mOffset;            // Sample offset in block
+}
+```
+
+## Related Examples
+
+<CardGroup cols={2}>
+  <Card title="Drum Synth" icon="drum" href="/examples/drum-synth">
+    A synthesizer that responds to MIDI input
+  </Card>
+  <Card title="Visualizer" icon="chart-line" href="/examples/visualizer">
+    Audio visualization with UI communication
+  </Card>
+</CardGroup>
+
+## Source Files
+
+- `Examples/IPlugMidiEffect/IPlugMidiEffect.h`
+- `Examples/IPlugMidiEffect/IPlugMidiEffect.cpp`
+- `Examples/IPlugMidiEffect/config.h`

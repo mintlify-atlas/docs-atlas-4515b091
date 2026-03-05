@@ -1,0 +1,537 @@
+---
+title: 'Presets'
+description: 'Factory presets, preset banks, and state management'
+---
+
+Presets in iPlug2 allow you to save and recall plugin states. You can create factory presets baked into your plugin or load/save user presets at runtime.
+
+## Preset Basics
+
+### IPreset Structure
+
+```cpp
+class IPreset {
+public:
+  char mName[MAX_PRESET_NAME_LEN];
+  bool mInitialized;
+  IByteChunk mChunk;  // Serialized state
+};
+```
+
+### Preset Count
+
+Define the number of factory presets in your plugin header:
+
+```cpp config.h
+const int kNumPresets = 8;  // Number of factory presets
+```
+
+<Note>
+Some hosts don't like 0 presets. Even if you don't provide factory presets, set `kNumPresets = 1` and use `MakeDefaultPreset()`.
+</Note>
+
+## Creating Factory Presets
+
+iPlug2 provides several methods to create baked-in factory presets:
+
+### MakePreset - Sequential Values
+
+Specify parameter values sequentially:
+
+```cpp
+void MakePreset(const char* name, ...);
+
+// Example
+enum EParams { kGain, kFreq, kResonance, kMix, kNumParams };
+
+MySynth::MySynth(const InstanceInfo& info)
+: Plugin(info, MakeConfig(kNumParams, 3))  // 3 presets
+{
+  GetParam(kGain)->InitGain("Gain", 0., -70., 12.);
+  GetParam(kFreq)->InitFrequency("Frequency", 1000., 20., 20000.);
+  GetParam(kResonance)->InitDouble("Resonance", 0.5, 0., 1., 0.01);
+  GetParam(kMix)->InitPercentage("Mix", 50.);
+  
+  // Create presets with values in order: gain, freq, resonance, mix
+  MakePreset("Init", 0., 1000., 0.5, 50.);
+  MakePreset("Bright", 3., 5000., 0.8, 70.);
+  MakePreset("Dark", -6., 400., 0.3, 40.);
+}
+```
+
+<Warning>
+Values must be in the exact order of parameter indices. Missing a parameter or wrong order will cause incorrect preset loading.
+</Warning>
+
+### MakePresetFromNamedParams - Named Values
+
+Specify parameter index/value pairs for clarity:
+
+```cpp
+void MakePresetFromNamedParams(const char* name, int nParamsNamed, ...);
+
+// Example - more maintainable
+MakePresetFromNamedParams("Bright", 3,
+  kFreq, 5000.,
+  kResonance, 0.8,
+  kMix, 70.);
+// Note: kGain not specified, will use default value
+```
+
+### MakeDefaultPreset - Fill Uninitialized Slots
+
+Fill remaining preset slots with default parameter values:
+
+```cpp
+void MakeDefaultPreset(const char* name = 0, int nPresets = 1);
+
+// Example: Fill 8 preset slots
+MySynth::MySynth(const InstanceInfo& info)
+: Plugin(info, MakeConfig(kNumParams, 8))
+{
+  // ... initialize parameters ...
+  
+  // Create 3 custom presets
+  MakePreset("Bright", 3., 5000., 0.8, 70.);
+  MakePreset("Dark", -6., 400., 0.3, 40.);
+  MakePreset("Resonant", 0., 1000., 0.9, 60.);
+  
+  // Fill remaining 5 slots with defaults
+  MakeDefaultPreset("Empty", 5);
+}
+```
+
+### MakePresetFromChunk - Custom State
+
+Create presets from serialized chunks (for plugins with custom state):
+
+```cpp
+void MakePresetFromChunk(const char* name, IByteChunk& chunk);
+
+// Example: Preset with wavetable data
+IByteChunk chunk;
+chunk.PutBytes(mWavetableData, WAVETABLE_SIZE);
+SerializeParams(chunk);  // Add parameters
+MakePresetFromChunk("Custom Wavetable", chunk);
+```
+
+### MakePresetFromBlob - Base64 Encoded
+
+Create presets from base64-encoded strings:
+
+```cpp
+void MakePresetFromBlob(const char* name, const char* blob, int sizeOfChunk);
+
+// Use DumpPresetBlob() to generate the blob code
+// See "Exporting Presets" section below
+```
+
+## Accessing Presets
+
+```cpp
+int NPresets() const;                      // Total number of presets
+int GetCurrentPresetIdx() const;           // Current preset index
+void SetCurrentPresetIdx(int idx);         // Set current (doesn't restore)
+IPreset* GetPreset(int idx);               // Get preset by index
+const char* GetPresetName(int idx) const;  // Get preset name
+```
+
+## Restoring Presets
+
+```cpp
+bool RestorePreset(int idx);
+bool RestorePreset(const char* name);
+
+// Example in UI
+void OnPresetChanged(int newIdx)
+{
+  if (RestorePreset(newIdx)) {
+    // Preset restored successfully
+    // Parameters updated, controls will refresh
+  }
+}
+```
+
+<Info>
+`RestorePreset()` automatically:
+1. Unserializes the preset chunk
+2. Updates all parameter values
+3. Calls `OnParamReset(kPresetRecall)`
+4. Updates the current preset index
+</Info>
+
+## Modifying Presets
+
+### Update Current Preset
+
+```cpp
+void ModifyCurrentPreset(const char* name = 0);
+
+// Example: Save current settings to preset
+void SaveToCurrentPreset()
+{
+  ModifyCurrentPreset();  // Keep current name
+  // or
+  ModifyCurrentPreset("My Modified Preset");
+}
+```
+
+### Copy Presets
+
+```cpp
+void CopyPreset(IPreset* pSrc, int destIdx, bool copyname = false);
+
+// Example: Duplicate a preset
+IPreset* source = GetPreset(0);
+CopyPreset(source, 1, true);  // Copy to slot 1 with name
+```
+
+## Loading/Saving User Presets
+
+### VST2 Format (FXP/FXB)
+
+iPlug2 supports VST2 preset formats across all plugin formats:
+
+```cpp
+// Save/Load single preset (FXP)
+bool SavePresetAsFXP(const char* file) const;
+bool LoadPresetFromFXP(const char* file);
+
+// Save/Load preset bank (FXB) - VST2 only
+bool SaveBankAsFXB(const char* file) const;
+bool LoadBankFromFXB(const char* file);
+
+// Example: Save current state
+void OnSavePreset()
+{
+  WDL_String path;
+  if (GetPresetSavePath(path))  // Your UI file picker
+  {
+    SavePresetAsFXP(path.Get());
+  }
+}
+
+// Example: Load preset
+void OnLoadPreset()
+{
+  WDL_String path;
+  if (GetPresetLoadPath(path))  // Your UI file picker
+  {
+    if (LoadPresetFromFXP(path.Get()))
+    {
+      // Preset loaded, parameters updated
+      // Update UI controls if needed
+    }
+  }
+}
+```
+
+## Exporting Presets to Code
+
+iPlug2 provides utilities to export current settings as code:
+
+### DumpMakePresetSrc
+
+Export preset as `MakePreset()` call:
+
+```cpp
+void DumpMakePresetSrc(const char* file) const;
+
+// Example: Export current settings
+DumpMakePresetSrc("/tmp/preset.txt");
+
+// Output in /tmp/preset.txt:
+// MakePreset("preset", 0.000000, 1000.000000, 0.500000, 50.000000);
+```
+
+### DumpMakePresetFromNamedParamsSrc
+
+Export preset as `MakePresetFromNamedParams()` call:
+
+```cpp
+void DumpMakePresetFromNamedParamsSrc(const char* file,
+                                       const char* paramEnumNames[]) const;
+
+// Example
+const char* paramNames[] = { "kGain", "kFreq", "kResonance", "kMix" };
+DumpMakePresetFromNamedParamsSrc("/tmp/preset.txt", paramNames);
+
+// Output:
+// MakePresetFromNamedParams("preset", 4,
+//   kGain, 0.000000,
+//   kFreq, 1000.000000,
+//   kResonance, 0.500000,
+//   kMix, 50.000000);
+```
+
+### DumpPresetBlob
+
+Export preset as base64 blob:
+
+```cpp
+void DumpPresetBlob(const char* file) const;
+
+DumpPresetBlob("/tmp/preset.txt");
+
+// Output:
+// MakePresetFromBlob("preset", "AAAAAAAAAEBj8AAA...", 128);
+```
+
+<Tip>
+Use these dump functions during development:
+1. Tweak parameters in your plugin
+2. Call `DumpMakePresetSrc()` or similar
+3. Copy the output code into your plugin constructor
+4. Ship with factory presets
+</Tip>
+
+## Preset Banks (VST2)
+
+VST2 has the concept of preset banks:
+
+```cpp
+// Serialize all presets to chunk
+bool SerializePresets(IByteChunk& chunk) const;
+
+// Unserialize preset bank from chunk
+int UnserializePresets(const IByteChunk& chunk, int startPos);
+
+// Ensure all preset slots are filled
+void EnsureDefaultPreset();  // VST2 only
+
+// Remove uninitialized presets
+void PruneUninitializedPresets();  // AUv2 only
+```
+
+## Host Communication
+
+```cpp
+// Notify host of preset change (if supported)
+virtual void InformHostOfPresetChange();
+
+// Called when host modifies preset name (VST2)
+virtual void OnPresetsModified();
+```
+
+## Complete Example
+
+```cpp
+class MyEffect : public iplug::Plugin
+{
+public:
+  enum EParams {
+    kGain,
+    kFilterFreq,
+    kFilterQ,
+    kDryWet,
+    kNumParams
+  };
+  
+  static constexpr int kNumPresets = 8;
+  
+  MyEffect(const InstanceInfo& info)
+  : Plugin(info, MakeConfig(kNumParams, kNumPresets))
+  {
+    // Initialize parameters
+    GetParam(kGain)->InitGain("Gain", 0., -70., 12.);
+    GetParam(kFilterFreq)->InitFrequency("Filter Freq", 1000., 20., 20000.);
+    GetParam(kFilterQ)->InitDouble("Filter Q", 0.5, 0.1, 10., 0.1, "",
+                                    0, "Filter", IParam::ShapePowCurve(2.0));
+    GetParam(kDryWet)->InitPercentage("Dry/Wet", 50.);
+    
+    // Factory presets
+    MakePreset("Init", 0., 1000., 0.5, 50.);
+    MakePreset("Bright", 3., 8000., 2.0, 60.);
+    MakePreset("Dark", -3., 300., 0.8, 40.);
+    MakePreset("Resonant", 0., 1500., 8.0, 70.);
+    MakePreset("Subtle", 0., 2000., 0.3, 20.);
+    
+    // Fill remaining preset slots with defaults
+    MakeDefaultPreset("Empty", kNumPresets - 5);
+    
+    // Alternative: Named params (more maintainable)
+    /*
+    MakePresetFromNamedParams("Bright", 4,
+      kGain, 3.0,
+      kFilterFreq, 8000.0,
+      kFilterQ, 2.0,
+      kDryWet, 60.0);
+    */
+  }
+  
+  // Override for custom state
+  bool SerializeState(IByteChunk& chunk) const override
+  {
+    // Save custom data (e.g., impulse response)
+    chunk.Put(&mIRLength);
+    if (mIRLength > 0)
+      chunk.PutBytes(mIRData, mIRLength * sizeof(float));
+    
+    // Save parameters
+    return SerializeParams(chunk);
+  }
+  
+  int UnserializeState(const IByteChunk& chunk, int startPos) override
+  {
+    // Load custom data
+    int pos = chunk.Get(&mIRLength, startPos);
+    if (mIRLength > 0) {
+      pos = chunk.GetBytes(mIRData, mIRLength * sizeof(float), pos);
+    }
+    
+    // Load parameters
+    return UnserializeParams(chunk, pos);
+  }
+  
+private:
+  int mIRLength = 0;
+  float mIRData[MAX_IR_LENGTH];
+};
+```
+
+## Preset Management UI Example
+
+```cpp
+// In your UI setup
+void SetupPresetUI(IGraphics* pGraphics)
+{
+  // Preset selector
+  auto presetMenu = new IVComboBoxControl(bounds, kCtrlTagPreset,
+    [&](int itemIdx) {
+      RestorePreset(itemIdx);  // User selected preset
+      InformHostOfPresetChange();  // Notify host
+    });
+  
+  // Populate menu with preset names
+  for (int i = 0; i < NPresets(); i++) {
+    presetMenu->AddItem(GetPresetName(i));
+  }
+  pGraphics->AttachControl(presetMenu);
+  
+  // Save preset button
+  pGraphics->AttachControl(new IVButtonControl(bounds, 
+    [&](IControl* pCaller) {
+      // Show file picker and save
+      WDL_String path;
+      if (GetSavePresetPath(path)) {
+        SavePresetAsFXP(path.Get());
+      }
+    }, "Save Preset"));
+  
+  // Load preset button
+  pGraphics->AttachControl(new IVButtonControl(bounds,
+    [&](IControl* pCaller) {
+      // Show file picker and load
+      WDL_String path;
+      if (GetLoadPresetPath(path)) {
+        if (LoadPresetFromFXP(path.Get())) {
+          // Preset loaded - update UI
+          pGraphics->SetAllControlsDirty();
+        }
+      }
+    }, "Load Preset"));
+}
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Use Named Parameters">
+    For maintainability, prefer `MakePresetFromNamedParams()` over `MakePreset()`:
+    ```cpp
+    // Good: Clear and maintainable
+    MakePresetFromNamedParams("Bright", 2,
+      kFreq, 5000.,
+      kQ, 2.0);
+    
+    // Bad: Must remember parameter order
+    MakePreset("Bright", 0., 5000., 2.0, 50.);
+    ```
+  </Step>
+  
+  <Step title="Provide Default Preset">
+    Always include at least one initialized preset:
+    ```cpp
+    MakeDefaultPreset("Init", 1);
+    ```
+  </Step>
+  
+  <Step title="Test Preset Recall">
+    Ensure presets restore all plugin state correctly:
+    ```cpp
+    // Test in OnReset() or unit tests
+    RestorePreset(0);
+    // Verify all parameters and custom state
+    ```
+  </Step>
+  
+  <Step title="Export Presets During Development">
+    Use dump functions to create factory presets:
+    ```cpp
+    #if defined(_DEBUG)
+    if (/* user triggered export */) {
+      DumpMakePresetFromNamedParamsSrc("/tmp/presets.txt", paramNames);
+    }
+    #endif
+    ```
+  </Step>
+</Steps>
+
+## State Chunks vs Parameters
+
+<Info>
+**When to use state chunks:**
+- Plugins with sample data (samplers, convolution reverbs)
+- Wavetable synthesizers
+- Custom data structures
+- Non-parameter state (e.g., loaded file paths)
+
+**When parameters are enough:**
+- Simple effects (EQ, compressor, delay)
+- Synthesizers with only parameter-based state
+- Most plugins without custom data
+</Info>
+
+Configure in `config.h`:
+
+```cpp
+#define PLUG_DOES_STATE_CHUNKS 0  // Parameters only
+#define PLUG_DOES_STATE_CHUNKS 1  // Custom state chunks
+```
+
+## API Reference
+
+<ParamField path="MakePreset" type="void">
+  Create factory preset with sequential parameter values
+</ParamField>
+
+<ParamField path="MakePresetFromNamedParams" type="void">
+  Create factory preset with named parameter index/value pairs
+</ParamField>
+
+<ParamField path="MakeDefaultPreset" type="void">
+  Fill uninitialized preset slots with default parameter values
+</ParamField>
+
+<ParamField path="RestorePreset" type="bool">
+  Load preset by index or name
+</ParamField>
+
+<ParamField path="SavePresetAsFXP" type="bool">
+  Export current state to VST2 FXP file
+</ParamField>
+
+<ParamField path="LoadPresetFromFXP" type="bool">
+  Import preset from VST2 FXP file
+</ParamField>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Plugin Base" icon="cube" href="/iplug/plugin-base">
+    State serialization and parameter management
+  </Card>
+  <Card title="Parameters" icon="sliders" href="/iplug/parameters">
+    Learn how parameters work in presets
+  </Card>
+</CardGroup>

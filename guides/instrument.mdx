@@ -1,0 +1,606 @@
+---
+title: Building Instrument Plugins
+description: Create MIDI synthesizers and virtual instruments with polyphony and DSP
+---
+
+## Overview
+
+Instrument plugins receive MIDI input and generate audio output. They're used for synthesizers, samplers, drum machines, and other sound generators.
+
+## IPlugInstrument Template
+
+The `IPlugInstrument` example demonstrates:
+
+- MIDI note processing with polyphony
+- ADSR envelope generator
+- LFO modulation (free-running and tempo-synced)
+- Parameter groups and UI organization
+- Visual feedback (keyboard, meters, LFO visualization)
+
+### Project Configuration
+
+```cpp config.h
+#define PLUG_TYPE 1              // 1 = Instrument
+#define PLUG_DOES_MIDI_IN 1
+#define PLUG_DOES_MIDI_OUT 1     // Pass-through MIDI
+#define PLUG_DOES_MPE 0
+
+#define PLUG_CHANNEL_IO "0-2"    // No audio input, stereo output
+
+#define VST3_SUBCATEGORY "Instrument|Synth"
+```
+
+<Note>
+**Key Differences from Effects:**
+- `PLUG_TYPE 1` identifies it as an instrument
+- `PLUG_DOES_MIDI_IN 1` enables MIDI input
+- `PLUG_CHANNEL_IO "0-2"` = no audio input, stereo output
+</Note>
+
+## Basic Structure
+
+<Tabs>
+<Tab title="Header">
+```cpp IPlugInstrument.h
+#pragma once
+
+#include "IPlug_include_in_plug_hdr.h"
+#include "IControls.h"
+
+enum EParams
+{
+  kParamGain = 0,
+  kParamNoteGlideTime,
+  kParamAttack,
+  kParamDecay,
+  kParamSustain,
+  kParamRelease,
+  kParamLFOShape,
+  kParamLFORateHz,
+  kParamLFORateTempo,
+  kParamLFORateMode,
+  kParamLFODepth,
+  kNumParams
+};
+
+#if IPLUG_DSP
+#include "IPlugInstrument_DSP.h"
+#endif
+
+enum EControlTags
+{
+  kCtrlTagMeter = 0,
+  kCtrlTagLFOVis,
+  kCtrlTagKeyboard,
+  kCtrlTagBender,
+  kNumCtrlTags
+};
+
+using namespace iplug;
+using namespace igraphics;
+
+class IPlugInstrument final : public Plugin
+{
+public:
+  IPlugInstrument(const InstanceInfo& info);
+
+#if IPLUG_DSP
+  void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  void ProcessMidiMsg(const IMidiMsg& msg) override;
+  void OnReset() override;
+  void OnParamChange(int paramIdx) override;
+  void OnIdle() override;
+  
+private:
+  IPlugInstrumentDSP<sample> mDSP {16};  // 16-voice polyphony
+  IPeakAvgSender<2> mMeterSender;
+  ISender<1> mLFOVisSender;
+#endif
+};
+```
+
+**Key Components:**
+- `ProcessMidiMsg()` - Handle MIDI input
+- `mDSP` - DSP engine with polyphony
+- `IPeakAvgSender` - Send meter data to UI
+- `EControlTags` - Tag controls for updates
+</Tab>
+
+<Tab title="MIDI Processing">
+```cpp IPlugInstrument.cpp
+void IPlugInstrument::ProcessMidiMsg(const IMidiMsg& msg)
+{
+  TRACE;
+  
+  int status = msg.StatusMsg();
+  
+  switch (status)
+  {
+    case IMidiMsg::kNoteOn:
+    case IMidiMsg::kNoteOff:
+    case IMidiMsg::kPolyAftertouch:
+    case IMidiMsg::kControlChange:
+    case IMidiMsg::kProgramChange:
+    case IMidiMsg::kChannelAftertouch:
+    case IMidiMsg::kPitchWheel:
+    {
+      goto handle;
+    }
+    default:
+      return;
+  }
+  
+handle:
+  mDSP.ProcessMidiMsg(msg);
+  SendMidiMsg(msg);  // Pass-through for host
+}
+```
+
+**MIDI Message Types:**
+- `kNoteOn` / `kNoteOff` - Note triggers
+- `kPitchWheel` - Pitch bend
+- `kControlChange` - CC messages (mod wheel, etc.)
+- `kPolyAftertouch` - Per-note pressure (MPE)
+- `kChannelAftertouch` - Channel pressure
+</Tab>
+
+<Tab title="Audio Processing">
+```cpp
+void IPlugInstrument::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  // Generate audio from DSP engine
+  mDSP.ProcessBlock(nullptr, outputs, 2, nFrames, 
+                    mTimeInfo.mPPQPos, 
+                    mTimeInfo.mTransportIsRunning);
+  
+  // Send meter data to UI
+  mMeterSender.ProcessBlock(outputs, nFrames, kCtrlTagMeter);
+  
+  // Send LFO visualization data
+  mLFOVisSender.PushData({kCtrlTagLFOVis, {float(mDSP.mLFO.GetLastOutput())}});
+}
+
+void IPlugInstrument::OnIdle()
+{
+  // Transmit queued data to UI thread
+  mMeterSender.TransmitData(*this);
+  mLFOVisSender.TransmitData(*this);
+}
+
+void IPlugInstrument::OnReset()
+{
+  mDSP.Reset(GetSampleRate(), GetBlockSize());
+  mMeterSender.Reset(GetSampleRate());
+}
+
+void IPlugInstrument::OnParamChange(int paramIdx)
+{
+  mDSP.SetParam(paramIdx, GetParam(paramIdx)->Value());
+}
+```
+</Tab>
+</Tabs>
+
+## Creating an Instrument
+
+<Steps>
+
+### Duplicate Template
+
+```bash
+cd iPlug2/Examples
+python duplicate.py IPlugInstrument MySynth MyCompany
+cd MySynth
+```
+
+### Configure as Instrument
+
+Verify `config.h` settings:
+
+```cpp config.h
+#define PLUG_TYPE 1
+#define PLUG_DOES_MIDI_IN 1
+#define PLUG_CHANNEL_IO "0-2"    // Mono synths use "0-1"
+
+#define VST3_SUBCATEGORY "Instrument|Synth"
+#define AAX_PLUG_CATEGORY_STR "Synth"
+```
+
+### Define Parameters
+
+```cpp MySynth.h
+enum EParams
+{
+  // Oscillator
+  kOscWaveform = 0,
+  kOscPitch,
+  kOscDetune,
+  
+  // Filter
+  kFilterCutoff,
+  kFilterResonance,
+  kFilterEnvAmount,
+  
+  // Envelope
+  kEnvAttack,
+  kEnvDecay,
+  kEnvSustain,
+  kEnvRelease,
+  
+  // Output
+  kMasterVolume,
+  
+  kNumParams
+};
+```
+
+### Initialize Parameters
+
+```cpp
+MySynth::MySynth(const InstanceInfo& info)
+: Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  // Oscillator
+  GetParam(kOscWaveform)->InitEnum("Waveform", 0, 
+    {"Sine", "Saw", "Square", "Triangle"});
+  GetParam(kOscPitch)->InitInt("Pitch", 0, -24, 24, "", IParam::kFlagsNone, "Osc");
+  GetParam(kOscDetune)->InitDouble("Detune", 0., -100., 100., 0.01, "cents");
+  
+  // Filter
+  GetParam(kFilterCutoff)->InitFrequency("Cutoff", 1000., 20., 20000.);
+  GetParam(kFilterResonance)->InitPercentage("Resonance", 10.);
+  GetParam(kFilterEnvAmount)->InitPercentage("Env Amount", 50.);
+  
+  // Envelope (with power curve for natural feel)
+  GetParam(kEnvAttack)->InitDouble("Attack", 10., 0.1, 5000., 0.1, "ms",
+                                    IParam::kFlagsNone, "ADSR",
+                                    IParam::ShapePowCurve(3.));
+  GetParam(kEnvDecay)->InitDouble("Decay", 100., 1., 5000., 0.1, "ms",
+                                   IParam::kFlagsNone, "ADSR",
+                                   IParam::ShapePowCurve(3.));
+  GetParam(kEnvSustain)->InitPercentage("Sustain", 70., 0., 100., "ADSR");
+  GetParam(kEnvRelease)->InitDouble("Release", 500., 2., 10000., 0.1, "ms",
+                                     IParam::kFlagsNone, "ADSR",
+                                     IParam::ShapePowCurve(3.));
+  
+  // Output
+  GetParam(kMasterVolume)->InitGain("Volume", 0., -60., 12.);
+}
+```
+
+### Implement DSP Engine
+
+Create a DSP class to handle voice management:
+
+```cpp MySynth_DSP.h
+template<typename T>
+class MySynthDSP
+{
+public:
+  MySynthDSP(int maxVoices) : mMaxVoices(maxVoices) {
+    mVoices.resize(maxVoices);
+  }
+  
+  void ProcessBlock(T** inputs, T** outputs, int nChans, int nFrames) {
+    // Clear output buffers
+    for (int c = 0; c < nChans; c++) {
+      memset(outputs[c], 0, nFrames * sizeof(T));
+    }
+    
+    // Process each active voice
+    for (auto& voice : mVoices) {
+      if (voice.IsActive()) {
+        voice.ProcessBlock(outputs, nChans, nFrames);
+      }
+    }
+  }
+  
+  void ProcessMidiMsg(const IMidiMsg& msg) {
+    switch (msg.StatusMsg()) {
+      case IMidiMsg::kNoteOn:
+        if (msg.Velocity() > 0) {
+          NoteOn(msg.NoteNumber(), msg.Velocity());
+        } else {
+          NoteOff(msg.NoteNumber());
+        }
+        break;
+        
+      case IMidiMsg::kNoteOff:
+        NoteOff(msg.NoteNumber());
+        break;
+        
+      case IMidiMsg::kPitchWheel:
+        SetPitchBend(msg.PitchWheel());
+        break;
+    }
+  }
+  
+private:
+  void NoteOn(int note, int velocity) {
+    // Find free voice or steal oldest
+    Voice* voice = FindFreeVoice();
+    if (!voice) {
+      voice = FindOldestVoice();
+    }
+    voice->Start(note, velocity);
+  }
+  
+  void NoteOff(int note) {
+    for (auto& voice : mVoices) {
+      if (voice.GetNote() == note) {
+        voice.Release();
+      }
+    }
+  }
+  
+  std::vector<Voice> mVoices;
+  int mMaxVoices;
+};
+```
+
+### Add UI Controls
+
+```cpp
+mLayoutFunc = [&](IGraphics* pGraphics) {
+  pGraphics->AttachPanelBackground(COLOR_GRAY);
+  pGraphics->EnableMouseOver(true);
+  pGraphics->EnableMultiTouch(true);
+  
+  const IRECT bounds = pGraphics->GetBounds().GetPadded(-20);
+  
+  // Keyboard at bottom
+  IRECT keyboardBounds = bounds.GetFromBottom(200);
+  pGraphics->AttachControl(new IVKeyboardControl(keyboardBounds), 
+                          kCtrlTagKeyboard);
+  
+  // Pitch bend and mod wheel
+  IRECT wheelsBounds = keyboardBounds.ReduceFromLeft(100).GetPadded(-10);
+  pGraphics->AttachControl(
+    new IWheelControl(wheelsBounds.FracRectHorizontal(0.5)), 
+    kCtrlTagBender);
+  pGraphics->AttachControl(
+    new IWheelControl(wheelsBounds.FracRectHorizontal(0.5, true), 
+                      IMidiMsg::EControlChangeMsg::kModWheel));
+  
+  // Parameter controls in grid
+  IRECT controlArea = bounds.GetReducedFromBottom(220);
+  
+  // Oscillator section
+  IRECT oscSection = controlArea.GetGridCell(0, 3, 1);
+  pGraphics->AttachControl(new IVKnobControl(
+    oscSection.GetGridCell(0, 3, 2).GetCentredInside(80), 
+    kOscPitch, "Pitch"));
+  pGraphics->AttachControl(new IVKnobControl(
+    oscSection.GetGridCell(1, 3, 2).GetCentredInside(80), 
+    kOscDetune, "Detune"));
+  
+  // Filter section
+  IRECT filterSection = controlArea.GetGridCell(1, 3, 1);
+  pGraphics->AttachControl(new IVKnobControl(
+    filterSection.GetGridCell(0, 2, 2).GetCentredInside(80), 
+    kFilterCutoff, "Cutoff"));
+  pGraphics->AttachControl(new IVKnobControl(
+    filterSection.GetGridCell(1, 2, 2).GetCentredInside(80), 
+    kFilterResonance, "Resonance"));
+  
+  // QWERTY keyboard support
+  pGraphics->SetQwertyMidiKeyHandlerFunc([pGraphics](const IMidiMsg& msg) {
+    pGraphics->GetControlWithTag(kCtrlTagKeyboard)
+      ->As<IVKeyboardControl>()
+      ->SetNoteFromMidi(msg.NoteNumber(), msg.StatusMsg() == IMidiMsg::kNoteOn);
+  });
+};
+```
+
+</Steps>
+
+## Voice Management
+
+### Polyphony
+
+Most synthesizers support multiple simultaneous notes (polyphony):
+
+```cpp
+class Voice
+{
+public:
+  void Start(int note, int velocity) {
+    mNote = note;
+    mVelocity = velocity;
+    mIsActive = true;
+    mEnvelope.Start();
+  }
+  
+  void Release() {
+    mEnvelope.Release();
+  }
+  
+  bool IsActive() const { return mIsActive; }
+  int GetNote() const { return mNote; }
+  
+  void ProcessBlock(sample** outputs, int nChans, int nFrames) {
+    if (!mIsActive) return;
+    
+    for (int s = 0; s < nFrames; s++) {
+      const double env = mEnvelope.Process();
+      if (env <= 0.0 && mEnvelope.IsReleased()) {
+        mIsActive = false;
+        break;
+      }
+      
+      const double osc = mOscillator.Process();
+      const double output = osc * env * (mVelocity / 127.0);
+      
+      for (int c = 0; c < nChans; c++) {
+        outputs[c][s] += output;
+      }
+    }
+  }
+  
+private:
+  int mNote = 0;
+  int mVelocity = 0;
+  bool mIsActive = false;
+  Oscillator mOscillator;
+  ADSREnvelope mEnvelope;
+};
+```
+
+### Voice Stealing
+
+When all voices are busy, steal the oldest:
+
+```cpp
+Voice* FindFreeVoice() {
+  for (auto& voice : mVoices) {
+    if (!voice.IsActive()) {
+      return &voice;
+    }
+  }
+  return nullptr;
+}
+
+Voice* FindOldestVoice() {
+  Voice* oldest = &mVoices[0];
+  uint64_t oldestTime = oldest->GetStartTime();
+  
+  for (auto& voice : mVoices) {
+    if (voice.GetStartTime() < oldestTime) {
+      oldest = &voice;
+      oldestTime = voice.GetStartTime();
+    }
+  }
+  
+  return oldest;
+}
+```
+
+## MIDI CC and Pitch Bend
+
+### Handling Pitch Bend
+
+```cpp
+void MySynthDSP::ProcessMidiMsg(const IMidiMsg& msg)
+{
+  if (msg.StatusMsg() == IMidiMsg::kPitchWheel) {
+    // Pitch wheel range typically ±2 semitones
+    const double bend = msg.PitchWheel();  // -1.0 to +1.0
+    const double semitones = bend * 2.0;
+    
+    for (auto& voice : mVoices) {
+      voice.SetPitchBend(semitones);
+    }
+  }
+}
+```
+
+### Mod Wheel and CCs
+
+```cpp
+if (msg.StatusMsg() == IMidiMsg::kControlChange) {
+  const int cc = msg.ControlChangeIdx();
+  const double value = msg.ControlChange(cc) / 127.0;
+  
+  switch (cc) {
+    case IMidiMsg::kModWheel:  // CC 1
+      SetModulation(value);
+      break;
+      
+    case 74:  // Filter cutoff
+      SetFilterCutoff(value);
+      break;
+      
+    case 71:  // Filter resonance
+      SetFilterResonance(value);
+      break;
+  }
+}
+```
+
+## Tempo Sync
+
+Access host tempo and position:
+
+```cpp
+void ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double tempo = mTimeInfo.mTempo;  // BPM
+  const double ppqPos = mTimeInfo.mPPQPos;  // Quarter notes
+  const bool playing = mTimeInfo.mTransportIsRunning;
+  
+  if (playing) {
+    // Sync LFO to tempo
+    mLFO.ProcessBlock(nFrames, tempo, ppqPos);
+  }
+}
+```
+
+## UI Feedback
+
+### Visual Keyboard
+
+```cpp
+// In constructor
+pGraphics->AttachControl(new IVKeyboardControl(keyboardBounds), kCtrlTagKeyboard);
+
+// Update from MIDI
+pGraphics->SetQwertyMidiKeyHandlerFunc([pGraphics](const IMidiMsg& msg) {
+  auto* keyboard = pGraphics->GetControlWithTag(kCtrlTagKeyboard)
+                             ->As<IVKeyboardControl>();
+  keyboard->SetNoteFromMidi(msg.NoteNumber(), 
+                            msg.StatusMsg() == IMidiMsg::kNoteOn);
+});
+```
+
+### Output Meters
+
+```cpp
+// In ProcessBlock
+mMeterSender.ProcessBlock(outputs, nFrames, kCtrlTagMeter);
+
+// In OnIdle (UI thread)
+mMeterSender.TransmitData(*this);
+```
+
+## MPE Support
+
+For MPE (MIDI Polyphonic Expression):
+
+```cpp config.h
+#define PLUG_DOES_MPE 1
+```
+
+```cpp
+if (msg.StatusMsg() == IMidiMsg::kPolyAftertouch) {
+  const int note = msg.NoteNumber();
+  const double pressure = msg.PolyAfterTouch() / 127.0;
+  
+  for (auto& voice : mVoices) {
+    if (voice.GetNote() == note) {
+      voice.SetPressure(pressure);
+    }
+  }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="DSP Utilities" href="/reference/dsp">
+Oscillators, filters, envelopes, and effects
+</Card>
+
+<Card title="MIDI Reference" href="/reference/midi">
+Complete MIDI message handling
+</Card>
+
+<Card title="Control Tags" href="/reference/control-tags">
+UI control tagging and updates
+</Card>
+
+<Card title="IGraphics Controls" href="/reference/igraphics-controls">
+Keyboards, meters, and visualizers
+</Card>
+
+</CardGroup>

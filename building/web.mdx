@@ -1,0 +1,539 @@
+---
+title: 'Building for Web'
+description: 'Build WebAssembly audio plugins using Emscripten'
+---
+
+iPlug2 supports compiling audio plugins to WebAssembly (WASM) for running in web browsers using the modern split DSP/UI architecture.
+
+## Architecture Overview
+
+The WASM build system creates **two separate modules**:
+
+<CardGroup cols={2}>
+  <Card title="DSP Module" icon="wave-square">
+    **Thread**: AudioWorklet (real-time audio thread)
+    
+    - Audio processing only
+    - Embedded as BASE64 for synchronous loading
+    - No UI code
+  </Card>
+  <Card title="UI Module" icon="paintbrush">
+    **Thread**: Main thread
+    
+    - IGraphics rendering
+    - User interaction
+    - Asynchronous loading
+  </Card>
+</CardGroup>
+
+### Communication
+
+- **Parameters/MIDI**: `postMessage` API
+- **Visualization**: `SharedArrayBuffer` (low-latency) or `postMessage` (fallback)
+
+<Info>
+**Why split architecture?**
+- Isolates audio processing from UI jank
+- Smaller initial load (DSP embedded, UI loads async)
+- No WAM SDK dependency
+- Multi-instance support
+</Info>
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install Emscripten SDK">
+    ```bash
+    cd ~
+    git clone https://github.com/emscripten-core/emsdk.git
+    cd emsdk
+    ./emsdk install latest
+    ./emsdk activate latest
+    source ./emsdk_env.sh
+    ```
+    
+    Add to shell profile for persistence:
+    ```bash
+    echo 'source ~/emsdk/emsdk_env.sh' >> ~/.bashrc  # or ~/.zshrc
+    ```
+  </Step>
+  
+  <Step title="Verify installation">
+    ```bash
+    emcc --version
+    # Should output: emcc (Emscripten gcc/clang-like replacement) ...
+    ```
+  </Step>
+  
+  <Step title="Download WAM SDK (optional)">
+    Only needed for WAM builds (not split WASM):
+    
+    ```bash
+    cd iPlug2/Dependencies
+    ./download-iplug-sdks.sh
+    ```
+  </Step>
+</Steps>
+
+## Building with Makefiles
+
+Each example project includes build scripts:
+
+```bash
+cd Examples/IPlugEffect/scripts
+./makedist-wasm.sh        # Build and launch in Chrome
+./makedist-wasm.sh off    # Build only, don't launch
+./makedist-wasm.sh on safari  # Build and launch in Safari
+```
+
+### Build Process
+
+The script:
+1. Packages resources (fonts, images, SVGs)
+2. Builds **DSP module** with `SINGLE_FILE=1` (BASE64 embedded)
+3. Builds **UI module** (if `PLUG_HAS_UI=1`)
+4. Copies templates and generates web bundle
+5. Outputs to `build-web-wasm/`
+
+### Headless Plugins
+
+For plugins without IGraphics (`PLUG_HAS_UI=0`), only the DSP module is built:
+
+```bash
+# In config.h
+#define PLUG_HAS_UI 0
+#define NO_IGRAPHICS
+```
+
+The template auto-generates parameter controls.
+
+## Project Configuration
+
+### Makefile Config
+
+Create `config/YourPlugin-wasm.mk`:
+
+```makefile
+# Project name
+PLUG_NAME = YourPlugin
+
+# Extra source files
+EXTRA_SRC = $(PROJECT_ROOT)/MyDSP.cpp
+
+# Extra include paths
+EXTRA_INCLUDES = -I$(PROJECT_ROOT)/libs
+
+# Extra defines
+EXTRA_CFLAGS = -DUSE_MY_FEATURE=1
+```
+
+### DSP/UI Project Files
+
+**`projects/YourPlugin-wasm-dsp.mk`**:
+```makefile
+include $(IPLUG2_ROOT)/common-wasm.mk
+include ../config/YourPlugin-wasm.mk
+```
+
+**`projects/YourPlugin-wasm-ui.mk`**:
+```makefile
+include $(IPLUG2_ROOT)/common-wasm.mk
+include ../config/YourPlugin-wasm.mk
+```
+
+## Build Output
+
+```
+build-web-wasm/
+└── YourPlugin/
+    ├── scripts/
+    │   ├── YourPlugin-wam.js       # DSP loader
+    │   ├── YourPlugin-wam.wasm     # DSP module
+    │   ├── YourPlugin-web.js       # UI loader
+    │   └── YourPlugin-web.wasm     # UI module
+    ├── index.html                  # Test page
+    ├── descriptor.json             # WAM metadata
+    └── styles/                     # CSS assets
+```
+
+## Server Requirements
+
+For `SharedArrayBuffer` support (low-latency visualization), your server **must** send these headers:
+
+```http
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+<Warning>
+Without these headers, the plugin falls back to `postMessage` for all communication (higher latency for visualization).
+</Warning>
+
+### Development Server
+
+Use the included Python server:
+
+<Tabs>
+  <Tab title="Python 3">
+    Create `serve.py`:
+    
+    ```python
+    #!/usr/bin/env python3
+    from http.server import HTTPServer, SimpleHTTPRequestHandler
+    import sys
+    
+    class CORPHandler(SimpleHTTPRequestHandler):
+        def end_headers(self):
+            self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
+            self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
+            super().end_headers()
+    
+        extensions_map = {
+            **SimpleHTTPRequestHandler.extensions_map,
+            '.wasm': 'application/wasm',
+        }
+    
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+    print(f'Serving at http://localhost:{port}')
+    HTTPServer(('localhost', port), CORPHandler).serve_forever()
+    ```
+    
+    Run:
+    ```bash
+    python3 serve.py 8080
+    ```
+  </Tab>
+  
+  <Tab title="emrun">
+    Emscripten includes a server with proper headers:
+    
+    ```bash
+    cd build-web-wasm/YourPlugin
+    emrun --no_emrun_detect index.html
+    ```
+  </Tab>
+  
+  <Tab title="Node.js (http-server)">
+    Install and configure:
+    
+    ```bash
+    npm install -g http-server
+    
+    http-server -p 8080 \
+      --cors \
+      -H "Cross-Origin-Opener-Policy: same-origin" \
+      -H "Cross-Origin-Embedder-Policy: require-corp"
+    ```
+  </Tab>
+</Tabs>
+
+## Message Protocol
+
+### UI → DSP (via postMessage)
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| `param` | `paramIdx`, `value` | Parameter change |
+| `midi` | `status`, `data1`, `data2` | MIDI message |
+| `sysex` | `data` (ArrayBuffer) | SysEx message |
+| `arbitrary` | `msgTag`, `ctrlTag`, `data` | Custom message |
+| `tick` | - | Idle tick (flush queue) |
+
+### DSP → UI (via postMessage)
+
+| Verb | Fields | Description |
+|------|--------|-------------|
+| `SPVFD` | `paramIdx`, `value` | Parameter value from DSP |
+| `SCVFD` | `ctrlTag`, `value` | Control value (visualization) |
+| `SCMFD` | `ctrlTag`, `msgTag`, `data` | Control message |
+| `SAMFD` | `msgTag`, `data` | Arbitrary message |
+| `SSMFD` | `data` | SysEx from DSP |
+| `pluginInfo` | `data` | Plugin metadata |
+
+### SharedArrayBuffer (Low-Latency)
+
+For high-frequency visualization data:
+
+```
+Header (16 bytes):
+  [0-3]   writeIdx (Uint32, atomic)
+  [4-7]   readIdx (Uint32, atomic)
+  [8-11]  capacity (Uint32)
+  [12-15] reserved
+
+Message:
+  [0]     msgType (0=SCVFD, 1=SCMFD, 2=SAMFD)
+  [1]     reserved
+  [2-3]   dataSize (Uint16)
+  [4-7]   ctrlTag (Int32)
+  [8-11]  msgTag (Int32)
+  [12+]   payload
+```
+
+## Multi-Instance Support
+
+The WASM DSP module supports **multiple plugin instances** in the same AudioWorklet context:
+
+```javascript
+// In AudioWorkletProcessor constructor
+this.instanceId = Module.createInstance();  // Unique ID
+
+// All calls include instance ID
+Module.init(this.instanceId, sampleRate, blockSize);
+Module.processBlock(this.instanceId, inputPtrs, outputPtrs, nFrames);
+```
+
+<Info>
+Each instance has isolated state and parameters, but shares the WASM module code.
+</Info>
+
+## Template Files
+
+Build copies templates from `IPlug/WEB/TemplateWasm/`:
+
+| File | Purpose |
+|------|----------|
+| `index.html` | Main page with Web Audio setup |
+| `scripts/IPlugWasmBundle.js.template` | Controller, connects DSP↔UI |
+| `scripts/IPlugWasmProcessor.js.template` | AudioWorkletProcessor wrapper |
+| `styles/style.css` | Default styling |
+
+Placeholders like `NAME_PLACEHOLDER` are replaced during build.
+
+## Debugging
+
+### Browser Console
+
+<Steps>
+  <Step title="Open DevTools">
+    - **Chrome**: F12 or ⌘⌥I (Mac)
+    - **Safari**: Enable **Develop** menu in Preferences
+  </Step>
+  
+  <Step title="Check console messages">
+    Both DSP and UI modules log to console
+    
+    DSP messages are prefixed with plugin name
+  </Step>
+  
+  <Step title="Inspect WASM modules">
+    **Sources** tab shows loaded WASM modules
+    
+    Some browsers support WASM debugging
+  </Step>
+</Steps>
+
+### Common Issues
+
+<AccordionGroup>
+  <Accordion title="SharedArrayBuffer is not defined">
+    **Cause**: Server missing COOP/COEP headers
+    
+    **Solution**:
+    - Verify headers are sent (check DevTools Network tab)
+    - Use development server with proper headers
+    - Plugin will still work, but uses slower `postMessage` path
+  </Accordion>
+  
+  <Accordion title="Module not found in globalThis">
+    **Cause**: DSP module failed to load
+    
+    **Solution**:
+    - Check browser console for WASM compilation errors
+    - Verify WASM file is accessible (check Network tab)
+    - Ensure MIME type is `application/wasm`
+  </Accordion>
+  
+  <Accordion title="Audio glitches">
+    **Cause**: DSP module too heavy for real-time
+    
+    **Solution**:
+    - Profile with Chrome DevTools Performance panel
+    - Reduce buffer processing complexity
+    - Check for allocations in `ProcessBlock`
+    - Consider disabling SIMD if causing issues
+  </Accordion>
+  
+  <Accordion title="UI not appearing">
+    **Cause**: IGraphics initialization failure
+    
+    **Solution**:
+    - Check browser console for errors
+    - Verify resources (fonts, images) are loaded
+    - Test with headless build first
+    - Ensure canvas element is created
+  </Accordion>
+</AccordionGroup>
+
+### Performance Profiling
+
+<Steps>
+  <Step title="Open Performance panel">
+    Chrome DevTools > **Performance** tab
+  </Step>
+  
+  <Step title="Record profile">
+    1. Click **Record**
+    2. Play audio through plugin
+    3. Click **Stop** after a few seconds
+  </Step>
+  
+  <Step title="Analyze">
+    Look for:
+    - Long-running `ProcessBlock` calls
+    - Memory allocations (garbage collection)
+    - Main thread blocking (UI jank)
+  </Step>
+</Steps>
+
+## WAM vs Split WASM
+
+| Feature | WASM (Split) | WAM |
+|---------|--------------|-----|
+| **SDK dependency** | None | WAM SDK required |
+| **Architecture** | Split DSP/UI | Combined |
+| **AudioWorklet** | Native | Via SDK |
+| **Visualization** | SAB + postMessage | WAM events |
+| **DAW integration** | Basic | WAM host support |
+| **Deployment** | Simpler | Standardized |
+
+<Tip>
+Use **WASM Split** for standalone web plugins and simple deployment.
+
+Use **WAM** for DAW integration and WAM-compatible hosts.
+</Tip>
+
+## Building WAM (Alternative)
+
+For Web Audio Module builds:
+
+```bash
+cd Examples/IPlugEffect/scripts
+./makedist-wam.sh        # Build WAM version
+```
+
+WAM builds create a standardized plugin format compatible with WAM hosts.
+
+## CMake Build (Alternative)
+
+iPlug2 web projects can also be built with CMake:
+
+```bash
+mkdir build && cd build
+
+# Configure with Emscripten
+emcmake cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ..
+
+# Build WAM and Web targets
+ninja MyPlugin-wam       # Audio processor (WASM)
+ninja MyPlugin-web       # UI controller (WASM)
+ninja MyPlugin-wam-dist  # Complete distribution package
+```
+
+See [CMake Guide](/building/cmake#webemscripten-options) for details.
+
+## Deployment
+
+### Hosting Requirements
+
+<Steps>
+  <Step title="Upload files">
+    Copy `build-web-wasm/YourPlugin/` to your web server
+  </Step>
+  
+  <Step title="Configure headers">
+    Ensure server sends COOP/COEP headers:
+    
+    **Apache** (`.htaccess`):
+    ```apache
+    Header set Cross-Origin-Opener-Policy "same-origin"
+    Header set Cross-Origin-Embedder-Policy "require-corp"
+    Header set Content-Type "application/wasm" "expr=%{REQUEST_URI} =~ /\.wasm$/"
+    ```
+    
+    **Nginx** (`nginx.conf`):
+    ```nginx
+    add_header Cross-Origin-Opener-Policy "same-origin";
+    add_header Cross-Origin-Embedder-Policy "require-corp";
+    
+    location ~* \.wasm$ {
+        types { application/wasm wasm; }
+    }
+    ```
+  </Step>
+  
+  <Step title="Test deployment">
+    Open `https://yourdomain.com/YourPlugin/index.html`
+    
+    Verify:
+    - Plugin loads without errors
+    - Audio processing works
+    - UI appears correctly
+  </Step>
+</Steps>
+
+### CDN Deployment
+
+For serving via CDN:
+
+<Warning>
+CDN must support custom headers (COOP/COEP). Many CDNs don't allow these headers.
+</Warning>
+
+**Workarounds**:
+- Host on your own server with proper headers
+- Use Cloudflare Workers to add headers
+- Use Service Worker to add headers client-side
+
+## Embedding in Web Pages
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>My Plugin</title>
+</head>
+<body>
+    <h1>YourPlugin Demo</h1>
+    <div id="plugin-container"></div>
+    
+    <script type="module">
+        import { YourPluginBundle } from './scripts/YourPlugin-wam.js';
+        
+        // Create AudioContext
+        const audioContext = new AudioContext();
+        
+        // Create plugin instance
+        const plugin = await YourPluginBundle.createInstance(audioContext);
+        
+        // Attach UI
+        const container = document.getElementById('plugin-container');
+        plugin.attachUI(container);
+        
+        // Connect to audio graph
+        const mediaSource = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const source = audioContext.createMediaStreamSource(mediaSource);
+        source.connect(plugin.audioNode);
+        plugin.audioNode.connect(audioContext.destination);
+    </script>
+</body>
+</html>
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="WAM Integration" icon="link" href="/web/wam-integration">
+    Integrate with WAM hosts
+  </Card>
+  <Card title="Web UI" icon="paintbrush" href="/web/web-ui">
+    Building web-based UIs
+  </Card>
+  <Card title="CMake Build" icon="gear" href="/building/cmake">
+    Alternative build system
+  </Card>
+  <Card title="Deployment" icon="cloud-arrow-up" href="/deploying/web">
+    Production deployment
+  </Card>
+</CardGroup>

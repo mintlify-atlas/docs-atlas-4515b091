@@ -1,0 +1,461 @@
+---
+title: Svelte UI
+description: Build reactive plugin interfaces using Svelte and Vite
+---
+
+The IPlugSvelteUI example demonstrates how to build modern, reactive plugin interfaces using Svelte with Vite. This approach combines the benefits of web-based UIs with Svelte's excellent performance and developer experience.
+
+## What This Example Demonstrates
+
+- Svelte framework integration
+- Vite build tooling for fast development
+- Reactive component system
+- Custom Svelte components (Knob, VU Meter)
+- TypeScript support
+- Real-time audio metering
+- Hot module replacement (HMR) during development
+
+## Architecture
+
+<CardGroup cols={3}>
+  <Card title="C++ Plugin" icon="gear">
+    Audio processing and WebView integration
+  </Card>
+  <Card title="Svelte Components" icon="puzzle-piece">
+    Reactive UI components (.svelte files)
+  </Card>
+  <Card title="Vite" icon="zap">
+    Build tool and dev server
+  </Card>
+</CardGroup>
+
+## Project Structure
+
+```
+IPlugSvelteUI/
+├── IPlugSvelteUI.cpp          # C++ plugin implementation
+├── IPlugSvelteUI.h
+├── resources/
+│   └── web/
+│       ├── index.html         # Production build output
+│       └── assets/
+│           └── index-*.js     # Bundled Svelte app
+└── web-ui/                    # Svelte source
+    ├── src/
+    │   ├── App.svelte         # Main component
+    │   ├── main.js            # Entry point
+    │   └── lib/
+    │       ├── Knob.svelte    # Knob control component
+    │       ├── VUMeter.svelte # VU meter component
+    │       └── iplug.js       # iPlug2 API helpers
+    ├── vite.config.js
+    ├── svelte.config.js
+    └── package.json
+```
+
+## C++ Plugin Setup
+
+```cpp
+IPlugSvelteUI::IPlugSvelteUI(const InstanceInfo& info)
+: iplug::Plugin(info, MakeConfig(kNumParams, kNumPresets))
+{
+  GetParam(kGain)->InitGain("Gain", -70., -70, 0.);
+  
+  SetCustomUrlScheme("iplug2");
+  SetEnableDevTools(true);
+  
+  mEditorInitFunc = [&]() {
+    LoadIndexHtml(__FILE__, GetBundleID());
+    // LoadURL("http://localhost:5173/");  // For development
+    EnableScroll(false);
+  };
+  
+  MakePreset("One", -70.);
+  MakePreset("Two", -30.);
+  MakePreset("Three", 0.);
+}
+```
+
+<Tip>
+  Uncomment `LoadURL("http://localhost:5173/")` during development to enable Vite's hot module replacement.
+</Tip>
+
+## Audio Processing with Metering
+
+```cpp
+void IPlugSvelteUI::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
+{
+  const double gain = GetParam(kGain)->DBToAmp();
+    
+  mOscillator.ProcessBlock(inputs[0], nFrames);
+
+  for (int s = 0; s < nFrames; s++)
+  {
+    outputs[0][s] = inputs[0][s] * mGainSmoother.Process(gain);
+    outputs[1][s] = outputs[0][s];
+  }
+  
+  mSender.ProcessBlock(outputs, nFrames, kCtrlTagMeter);
+}
+
+void IPlugSvelteUI::OnIdle()
+{
+  mSender.TransmitData(*this);
+}
+```
+
+## Main Svelte Component
+
+```svelte
+<script lang="ts">
+  import Knob from './lib/Knob.svelte'
+  import VUMeter from './lib/VUMeter.svelte'
+
+  let gainKnob: any;
+  let vuMeter: any;
+
+  // Handle parameter value changes from the plugin
+  globalThis.SPVFD = (paramIdx: number, val: number) => {
+    if (paramIdx === 0) {
+      gainKnob?.setValueFromPlugin(val);
+    }
+  };
+
+  globalThis.SCMFD = (
+    ctrlTag: number, 
+    msgTag: number, 
+    dataSize: number, 
+    msg: string
+  ) => {
+    if (ctrlTag === 0) {
+      // Decode base64 to binary string
+      const msgData = atob(msg);
+      
+      // Convert binary string to Uint8Array
+      const bytes = new Uint8Array(msgData.length);
+      for (let i = 0; i < msgData.length; i++) {
+        bytes[i] = msgData.charCodeAt(i);
+      }
+      
+      // Parse the message structure
+      const intView = new Int32Array(bytes.buffer, 0, 3);
+      const [controlTag, nChans, chanOffset] = intView;
+      const data = new Float32Array(bytes.buffer, 12);
+
+      vuMeter?.setLevel(data[0]);
+    }
+  };
+</script>
+
+<main>
+  <div>
+    <a href="https://vite.dev" target="_blank" rel="noreferrer">
+      <img src={viteLogo} class="logo" alt="Vite Logo" />
+    </a>
+    <a href="https://svelte.dev" target="_blank" rel="noreferrer">
+      <img src={svelteLogo} class="logo svelte" alt="Svelte Logo" />
+    </a>
+    <a href="https://iplug2.github.io" target="_blank" rel="noreferrer">
+      <img src={iPlugLogo} class="logo iplug" alt="iPlug Logo" />
+    </a>
+  </div>
+  <h1>Vite + Svelte + iPlug2</h1>
+
+  <div class="controls">
+    <Knob 
+      bind:this={gainKnob}
+      paramId={0}
+      label="Volume"
+      minValue={-70}
+      maxValue={0}
+      units="dB"
+      defaultValue={-70}
+    />
+    <VUMeter
+      bind:this={vuMeter}
+      label="Level"
+    />
+  </div>
+</main>
+
+<style>
+  .controls {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  :global(*) {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+</style>
+```
+
+<Note>
+  Use `globalThis` to expose functions that C++ can call. This ensures they're accessible from the plugin's WebView context.
+</Note>
+
+## Knob Component
+
+```svelte
+<script lang="ts">
+  import { SPVFUI, BPCFUI, EPCFUI } from './iplug';
+
+  export let paramId = 0;
+  export let defaultValue = 0.0;
+  export let label = '';
+  export let minValue = 0;
+  export let maxValue = 100;
+  export let units = '';
+  export let minAngle = -135;
+  export let maxAngle = 135;
+
+  let currentValue = defaultValue;
+
+  export function setValueFromPlugin(newValue) {
+    // Convert normalized value (0-1) to real value
+    currentValue = minValue + newValue * (maxValue - minValue);
+  }
+
+  function updateValue(newValue: number) {
+    currentValue = newValue;
+    const normValue = (newValue - minValue) / (maxValue - minValue);
+    SPVFUI(paramId, normValue);
+  }
+
+  function startDrag(e: MouseEvent | TouchEvent) {
+    if ('button' in e && e.button === 2) return;
+
+    BPCFUI(paramId);
+    e.preventDefault();
+    
+    const initialY = ('touches' in e) ? e.touches[0].clientY : e.clientY;
+    const initialValue = currentValue;
+
+    function onMove(e) {
+      const clientY = ('touches' in e) ? e.touches[0].clientY : e.clientY;
+      const deltaY = initialY - clientY;
+      const valueChange = deltaY * (maxValue - minValue) / 100;
+      const newValue = Math.min(
+        Math.max(initialValue + valueChange, minValue), 
+        maxValue
+      );
+      updateValue(newValue);
+    }
+
+    function onEnd() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onEnd);
+      EPCFUI(paramId);
+    }
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onEnd);
+  }
+
+  $: angle = minAngle + 
+    ((currentValue - minValue) / (maxValue - minValue)) * 
+    (maxAngle - minAngle);
+</script>
+
+<div class="container">
+  <div class="label">{label}</div>
+  <svg viewBox="0 0 100 100" width="80" height="80">
+    <circle 
+      cx="50" cy="50" r="42" 
+      fill="#000" stroke="#fff" stroke-width="2"
+      on:mousedown={startDrag}
+      on:touchstart={startDrag}
+      role="slider"
+      tabindex="0"
+      aria-valuemin={minValue}
+      aria-valuemax={maxValue}
+      aria-valuenow={currentValue}
+    />
+    <line 
+      class="pointer"
+      x1="50" y1="10" x2="50" y2="50"
+      stroke="#fff" stroke-width="4"
+      transform="rotate({angle}, 50, 50)"
+    />
+  </svg>
+  <div class="value">{currentValue.toFixed(1)} {units}</div>
+</div>
+
+<style>
+  .container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .label {
+    margin-bottom: 8px;
+    color: white;
+    font-size: 14px;
+  }
+</style>
+```
+
+<Info>
+  Svelte's reactive declarations (`$:`) automatically recalculate when dependencies change, making it perfect for UI updates.
+</Info>
+
+## iPlug2 API Helper Module
+
+```javascript
+// src/lib/iplug.js
+
+export function SPVFUI(paramIdx, value) {
+  if (paramIdx < 0) return;
+  
+  const message = {
+    "msg": "SPVFUI",
+    "paramIdx": parseInt(paramIdx),
+    "value": value
+  };
+  window.IPlugSendMsg(message);
+}
+
+export function BPCFUI(paramIdx) {
+  if (paramIdx < 0) return;
+  
+  const message = {
+    "msg": "BPCFUI",
+    "paramIdx": parseInt(paramIdx),
+  };
+  window.IPlugSendMsg(message);
+}
+
+export function EPCFUI(paramIdx) {
+  if (paramIdx < 0) return;
+  
+  const message = {
+    "msg": "EPCFUI",
+    "paramIdx": parseInt(paramIdx),
+  };
+  window.IPlugSendMsg(message);
+}
+```
+
+## Vite Configuration
+
+```javascript
+// vite.config.js
+import { defineConfig } from 'vite'
+import { svelte } from '@sveltejs/vite-plugin-svelte'
+
+export default defineConfig({
+  plugins: [svelte()],
+  build: {
+    outDir: '../resources/web',
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        entryFileNames: 'assets/[name]-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash].[ext]'
+      }
+    }
+  }
+})
+```
+
+<Note>
+  The build output goes directly to `resources/web/` so it's included in your plugin bundle.
+</Note>
+
+## Development Workflow
+
+<Steps>
+  <Step title="Install dependencies">
+    ```bash
+    cd web-ui
+    npm install
+    ```
+  </Step>
+  
+  <Step title="Start dev server">
+    ```bash
+    npm run dev
+    ```
+    This starts Vite dev server on `http://localhost:5173`
+  </Step>
+  
+  <Step title="Enable dev mode in C++">
+    Uncomment `LoadURL("http://localhost:5173/")` in your plugin constructor
+  </Step>
+  
+  <Step title="Build plugin">
+    Build your plugin. It will connect to the Vite dev server for hot reload.
+  </Step>
+  
+  <Step title="Production build">
+    ```bash
+    npm run build
+    ```
+    This bundles everything to `resources/web/`
+  </Step>
+</Steps>
+
+## Decoding Binary Data from C++
+
+When receiving binary data (like audio peaks):
+
+```typescript
+// Decode base64 to binary
+const msgData = atob(msg);
+
+// Convert to Uint8Array
+const bytes = new Uint8Array(msgData.length);
+for (let i = 0; i < msgData.length; i++) {
+  bytes[i] = msgData.charCodeAt(i);
+}
+
+// Parse structure: [int32, int32, int32, ...float32 data]
+const intView = new Int32Array(bytes.buffer, 0, 3);
+const [controlTag, nChans, chanOffset] = intView;
+const data = new Float32Array(bytes.buffer, 12);
+
+// Use the float data
+vuMeter?.setLevel(data[0]);
+```
+
+## Advantages of Svelte UI
+
+<CardGroup cols={2}>
+  <Card title="Reactive by Default" icon="arrows-rotate">
+    Automatic UI updates when state changes, no virtual DOM
+  </Card>
+  <Card title="Small Bundle Size" icon="feather">
+    Compiled away, resulting in tiny runtime bundle
+  </Card>
+  <Card title="Fast Development" icon="rocket">
+    Hot module replacement with Vite, instant feedback
+  </Card>
+  <Card title="TypeScript Support" icon="code">
+    Full TypeScript integration out of the box
+  </Card>
+</CardGroup>
+
+<Warning>
+  Remember to run `npm run build` before building your production plugin, or the WebView will try to connect to the dev server.
+</Warning>
+
+## Comparison with Web UI
+
+| Feature | Svelte UI | Plain Web UI |
+|---------|-----------|-------------|
+| Build step | Required (Vite) | Optional |
+| Hot reload | Yes | Manual |
+| Framework | Svelte | Vanilla JS |
+| Bundle size | Small (~10-20KB) | Minimal |
+| TypeScript | Built-in | Manual setup |
+| Learning curve | Framework-specific | Lower |
+
+## Related Examples
+
+- [Web UI](/examples/web-ui) - Vanilla JavaScript approach
+- [P5.js](/examples/p5js) - Creative coding with P5.js
+- [SwiftUI](/examples/swiftui) - Native Apple UI framework

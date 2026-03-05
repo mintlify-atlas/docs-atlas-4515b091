@@ -1,0 +1,712 @@
+---
+title: CLAP Platform API
+description: CLAP API implementation for iPlug2 plugins
+---
+
+# CLAP Platform API
+
+The CLAP (CLever Audio Plug-in) implementation provides integration with the open-source CLAP plugin format, offering modern features and cross-platform compatibility.
+
+## Overview
+
+The `IPlugCLAP` class implements the CLAP API using the official CLAP helpers library. CLAP is a modern, open-source plugin format designed to address limitations in existing formats.
+
+<Info>
+CLAP is a vendor-neutral, open-source plugin format created by the audio software community. It offers features like polyphonic modulation, note expressions, flexible parameter handling, and robust plugin/host communication.
+</Info>
+
+## Core Class
+
+### IPlugCLAP
+
+Defined in: `IPlug/CLAP/IPlugCLAP.h`
+
+```cpp
+class IPlugCLAP : public IPlugAPIBase
+                , public IPlugProcessor
+                , public ClapPluginHelper
+```
+
+Inherits from:
+- `IPlugAPIBase` - Core iPlug API interface
+- `IPlugProcessor` - Audio processing interface
+- `ClapPluginHelper` - CLAP SDK helper class (with configurable checking level)
+
+**Debug vs Release:**
+```cpp
+// Debug builds use maximal checking
+using ClapPluginHelper = clap::helpers::Plugin<
+    clap::helpers::MisbehaviourHandler::Terminate,
+    clap::helpers::CheckingLevel::Maximal>;
+
+// Release builds skip checking for performance
+using ClapPluginHelper = clap::helpers::Plugin<
+    clap::helpers::MisbehaviourHandler::Ignore,
+    clap::helpers::CheckingLevel::None>;
+```
+
+## Key Methods
+
+### Host Communication
+
+#### BeginInformHostOfParamChange
+```cpp
+void BeginInformHostOfParamChange(int idx) override;
+```
+Notifies the host that a parameter gesture is beginning.
+
+**Parameters:**
+- `idx` - Parameter index
+
+**Behavior:** Queues a `CLAP_EVENT_PARAM_GESTURE_BEGIN` event.
+
+#### InformHostOfParamChange
+```cpp
+void InformHostOfParamChange(int idx, double normalizedValue) override;
+```
+Informs the host of a parameter value change.
+
+**Parameters:**
+- `idx` - Parameter index
+- `normalizedValue` - Normalized parameter value (0.0 to 1.0)
+
+**Behavior:** Queues a `CLAP_EVENT_PARAM_VALUE` event.
+
+#### EndInformHostOfParamChange
+```cpp
+void EndInformHostOfParamChange(int idx) override;
+```
+Notifies the host that a parameter gesture has ended.
+
+**Parameters:**
+- `idx` - Parameter index
+
+**Behavior:** Queues a `CLAP_EVENT_PARAM_GESTURE_END` event.
+
+### Editor
+
+#### EditorResize
+```cpp
+bool EditorResize(int viewWidth, int viewHeight) override;
+```
+Requests an editor size change.
+
+**Parameters:**
+- `viewWidth` - New width in pixels
+- `viewHeight` - New height in pixels
+
+**Returns:** `true` if resize was accepted
+
+### Processing
+
+#### SetLatency
+```cpp
+void SetLatency(int samples) override;
+```
+Sets the plugin latency and notifies the host.
+
+**Parameters:**
+- `samples` - Latency in samples
+
+<Note>
+CLAP supports dynamic latency changes. The host will be notified and can adapt its processing graph accordingly.
+</Note>
+
+#### SetTailSize
+```cpp
+void SetTailSize(int tailSize) override;
+```
+Sets the plugin's tail length (for reverbs, delays, etc.).
+
+**Parameters:**
+- `tailSize` - Tail length in samples, or `IPLUG_TAIL_INFINITE` for infinite tail
+
+### MIDI
+
+#### SendMidiMsg
+```cpp
+bool SendMidiMsg(const IMidiMsg& msg) override;
+```
+Sends a MIDI message from the plugin to the host.
+
+**Parameters:**
+- `msg` - MIDI message to send
+
+**Returns:** `true` if message was sent successfully
+
+#### SendSysEx
+```cpp
+bool SendSysEx(const ISysEx& msg) override;
+```
+Sends a System Exclusive MIDI message.
+
+**Parameters:**
+- `msg` - SysEx message to send
+
+**Returns:** `true` if message was sent successfully
+
+## CLAP Plugin Lifecycle
+
+### init
+```cpp
+bool init() noexcept override;
+```
+Initializes the plugin instance.
+
+**Returns:** `true` on success
+
+**Called:** Once after plugin creation.
+
+### activate
+```cpp
+bool activate(
+    double sampleRate,
+    uint32_t minFrameCount,
+    uint32_t maxFrameCount) noexcept override;
+```
+Activates the plugin for processing.
+
+**Parameters:**
+- `sampleRate` - Sample rate in Hz
+- `minFrameCount` - Minimum frames per process call
+- `maxFrameCount` - Maximum frames per process call
+
+**Returns:** `true` on success
+
+**Called:** Before processing begins.
+
+### deactivate
+```cpp
+void deactivate() noexcept override;
+```
+Deactivates the plugin.
+
+**Called:** When processing stops.
+
+### reset
+```cpp
+void reset() noexcept override;
+```
+Resets the plugin state (e.g., clear delays, oscillator phases).
+
+**Called:** When the host transport stops or seeks.
+
+### process
+```cpp
+clap_process_status process(const clap_process* pProcess) noexcept override;
+```
+Main audio processing callback.
+
+**Parameters:**
+- `pProcess` - Process data structure containing:
+  - Audio buffers (input/output)
+  - Events (MIDI, parameters, etc.)
+  - Transport information
+  - Frame count
+
+**Returns:**
+- `CLAP_PROCESS_CONTINUE` - Continue processing
+- `CLAP_PROCESS_SLEEP` - Plugin has no output (e.g., waiting for note on)
+- `CLAP_PROCESS_ERROR` - Processing error
+
+## CLAP Extensions
+
+CLAP uses extensions to provide optional functionality. IPlugCLAP implements these extensions:
+
+### Latency Extension
+
+#### implementsLatency
+```cpp
+bool implementsLatency() const noexcept override;
+```
+Indicates latency support.
+
+**Returns:** `true`
+
+#### latencyGet
+```cpp
+uint32_t latencyGet() const noexcept override;
+```
+Returns current plugin latency.
+
+**Returns:** Latency in samples
+
+### Tail Extension
+
+#### implementsTail
+```cpp
+bool implementsTail() const noexcept override;
+```
+Indicates tail length support.
+
+**Returns:** `true`
+
+#### tailGet
+```cpp
+uint32_t tailGet() const noexcept override;
+```
+Returns current tail length.
+
+**Returns:** Tail length in samples, or `CLAP_TAIL_INFINITE`
+
+### Render Extension
+
+#### implementsRender
+```cpp
+bool implementsRender() const noexcept override;
+```
+Indicates render mode support.
+
+**Returns:** `true`
+
+#### renderSetMode
+```cpp
+bool renderSetMode(clap_plugin_render_mode mode) noexcept override;
+```
+Sets the render mode (realtime vs offline).
+
+**Parameters:**
+- `mode` - Render mode:
+  - `CLAP_RENDER_REALTIME` - Real-time processing
+  - `CLAP_RENDER_OFFLINE` - Offline/export processing
+
+**Returns:** `true` if mode is supported
+
+#### renderHasHardRealtimeRequirement
+```cpp
+bool renderHasHardRealtimeRequirement() noexcept override;
+```
+Indicates if plugin has hard real-time requirements.
+
+**Returns:** `false` (iPlug2 plugins can run offline)
+
+### State Extension
+
+#### implementsState
+```cpp
+bool implementsState() const noexcept override;
+```
+Indicates state save/load support.
+
+**Returns:** `true`
+
+#### stateSave
+```cpp
+bool stateSave(const clap_ostream* pStream) noexcept override;
+```
+Saves plugin state to a stream.
+
+**Parameters:**
+- `pStream` - Output stream for state data
+
+**Returns:** `true` on success
+
+#### stateLoad
+```cpp
+bool stateLoad(const clap_istream* pStream) noexcept override;
+```
+Loads plugin state from a stream.
+
+**Parameters:**
+- `pStream` - Input stream containing state data
+
+**Returns:** `true` on success
+
+### Audio Ports Extension
+
+#### implementsAudioPorts
+```cpp
+bool implementsAudioPorts() const noexcept override;
+```
+Indicates audio ports support.
+
+**Returns:** `true`
+
+#### audioPortsCount
+```cpp
+uint32_t audioPortsCount(bool isInput) const noexcept override;
+```
+Returns the number of audio ports.
+
+**Parameters:**
+- `isInput` - `true` for input ports, `false` for output ports
+
+**Returns:** Number of ports
+
+#### audioPortsInfo
+```cpp
+bool audioPortsInfo(
+    uint32_t index,
+    bool isInput,
+    clap_audio_port_info* pInfo) const noexcept override;
+```
+Returns information about an audio port.
+
+**Parameters:**
+- `index` - Port index
+- `isInput` - `true` for input, `false` for output
+- `pInfo` - Receives port information
+
+**Returns:** `true` on success
+
+### Audio Ports Configuration Extension
+
+#### implementsAudioPortsConfig
+```cpp
+bool implementsAudioPortsConfig() const noexcept override;
+```
+Indicates support for multiple audio port configurations.
+
+**Returns:** `true` if plugin has multiple I/O configs
+
+#### audioPortsConfigCount
+```cpp
+uint32_t audioPortsConfigCount() const noexcept override;
+```
+Returns the number of available configurations.
+
+**Returns:** Number of configurations
+
+#### audioPortsGetConfig
+```cpp
+bool audioPortsGetConfig(
+    uint32_t index,
+    clap_audio_ports_config* pConfig) const noexcept override;
+```
+Retrieves a configuration by index.
+
+**Parameters:**
+- `index` - Configuration index
+- `pConfig` - Receives configuration info
+
+**Returns:** `true` on success
+
+#### audioPortsSetConfig
+```cpp
+bool audioPortsSetConfig(clap_id configIdx) noexcept override;
+```
+Selects an audio port configuration.
+
+**Parameters:**
+- `configIdx` - Configuration ID to activate
+
+**Returns:** `true` on success
+
+### Note Ports Extension
+
+#### implementsNotePorts
+```cpp
+bool implementsNotePorts() const noexcept override;
+```
+Indicates MIDI/note port support.
+
+**Returns:** `true` if plugin has MIDI input or output
+
+#### notePortsCount
+```cpp
+uint32_t notePortsCount(bool isInput) const noexcept override;
+```
+Returns the number of note ports.
+
+**Parameters:**
+- `isInput` - `true` for input, `false` for output
+
+**Returns:** Number of note ports
+
+#### notePortsInfo
+```cpp
+bool notePortsInfo(
+    uint32_t index,
+    bool isInput,
+    clap_note_port_info* pInfo) const noexcept override;
+```
+Returns information about a note port.
+
+**Parameters:**
+- `index` - Port index
+- `isInput` - `true` for input, `false` for output
+- `pInfo` - Receives port information
+
+**Returns:** `true` on success
+
+### Parameters Extension
+
+#### implementsParams
+```cpp
+bool implementsParams() const noexcept override;
+```
+Indicates parameter support.
+
+**Returns:** `true`
+
+#### paramsCount
+```cpp
+uint32_t paramsCount() const noexcept override;
+```
+Returns the number of parameters.
+
+**Returns:** Parameter count
+
+#### paramsInfo
+```cpp
+bool paramsInfo(
+    uint32_t paramIdx,
+    clap_param_info* pInfo) const noexcept override;
+```
+Returns information about a parameter.
+
+**Parameters:**
+- `paramIdx` - Parameter index
+- `pInfo` - Receives parameter info
+
+**Returns:** `true` on success
+
+#### paramsValue
+```cpp
+bool paramsValue(clap_id paramIdx, double* pValue) noexcept override;
+```
+Returns a parameter's current value.
+
+**Parameters:**
+- `paramIdx` - Parameter ID
+- `pValue` - Receives parameter value
+
+**Returns:** `true` on success
+
+#### paramsValueToText
+```cpp
+bool paramsValueToText(
+    clap_id paramIdx,
+    double value,
+    char* display,
+    uint32_t size) noexcept override;
+```
+Converts a parameter value to display text.
+
+**Parameters:**
+- `paramIdx` - Parameter ID
+- `value` - Parameter value
+- `display` - Buffer for display text
+- `size` - Buffer size
+
+**Returns:** `true` on success
+
+#### paramsTextToValue
+```cpp
+bool paramsTextToValue(
+    clap_id paramIdx,
+    const char* display,
+    double* pValue) noexcept override;
+```
+Converts display text to a parameter value.
+
+**Parameters:**
+- `paramIdx` - Parameter ID
+- `display` - Display text
+- `pValue` - Receives parameter value
+
+**Returns:** `true` on success
+
+#### paramsFlush
+```cpp
+void paramsFlush(
+    const clap_input_events* pInputParamChanges,
+    const clap_output_events* pOutputParamChanges) noexcept override;
+```
+Flushes parameter changes (called between process calls).
+
+**Parameters:**
+- `pInputParamChanges` - Input parameter events
+- `pOutputParamChanges` - Output parameter events
+
+### GUI Extension
+
+#### implementsGui
+```cpp
+bool implementsGui() const noexcept override;
+```
+Indicates GUI support.
+
+**Returns:** `true` if plugin has a GUI
+
+#### guiIsApiSupported
+```cpp
+bool guiIsApiSupported(const char* api, bool isFloating) noexcept override;
+```
+Checks if a GUI API is supported.
+
+**Parameters:**
+- `api` - GUI API identifier (e.g., `CLAP_WINDOW_API_WIN32`, `CLAP_WINDOW_API_COCOA`)
+- `isFloating` - Whether GUI is in a floating window
+
+**Returns:** `true` if API is supported
+
+#### guiCreate
+```cpp
+bool guiCreate(const char* api, bool isFloating) noexcept override;
+```
+Creates the GUI.
+
+**Parameters:**
+- `api` - GUI API to use
+- `isFloating` - Whether GUI is floating
+
+**Returns:** `true` on success
+
+#### guiDestroy
+```cpp
+void guiDestroy() noexcept override;
+```
+Destroys the GUI.
+
+#### guiSetParent
+```cpp
+bool guiSetParent(const clap_window* pWindow) noexcept override;
+```
+Attaches the GUI to a parent window.
+
+**Parameters:**
+- `pWindow` - Parent window info (platform-specific)
+
+**Returns:** `true` on success
+
+#### guiGetSize
+```cpp
+bool guiGetSize(uint32_t* pWidth, uint32_t* pHeight) noexcept override;
+```
+Returns the GUI size.
+
+**Parameters:**
+- `pWidth` - Receives width in pixels
+- `pHeight` - Receives height in pixels
+
+**Returns:** `true` on success
+
+#### guiCanResize
+```cpp
+bool guiCanResize() const noexcept override;
+```
+Indicates if GUI is resizable.
+
+**Returns:** `true` if resizable
+
+#### guiSetSize
+```cpp
+bool guiSetSize(uint32_t width, uint32_t height) noexcept override;
+```
+Sets the GUI size.
+
+**Parameters:**
+- `width` - Width in pixels
+- `height` - Height in pixels
+
+**Returns:** `true` on success
+
+## Configuration
+
+### CLAP Configuration
+
+Set in your plugin's `config.h`:
+
+```cpp
+#define PLUG_TYPE 0 // 0=effect, 1=instrument
+#define PLUG_MFR_ID "com.acme"
+#define PLUG_UNIQUE_ID "com.acme.myplugin"
+#define PLUG_CLAP_FEATURES "audio-effect", "stereo", "delay"
+```
+
+### CLAP Feature Strings
+
+<CardGroup cols={2}>
+  <Card title="Plugin Type" icon="plug">
+    **Primary Features:**
+    - `audio-effect` - Audio processor
+    - `instrument` - Generates audio from notes
+    - `note-effect` - Processes notes
+    - `analyzer` - Audio analyzer
+  </Card>
+  
+  <Card title="Audio Processing" icon="waveform">
+    **Processing Categories:**
+    - `distortion`, `reverb`, `delay`
+    - `equalizer`, `compressor`, `limiter`
+    - `filter`, `pitch-shifter`, `phaser`
+    - `chorus`, `flanger`
+  </Card>
+  
+  <Card title="Channel Config" icon="table-columns">
+    **Channel Support:**
+    - `mono`, `stereo`
+    - `surround`, `ambisonic`
+  </Card>
+  
+  <Card title="Instrument Type" icon="guitar">
+    **Instrument Categories:**
+    - `synthesizer`, `sampler`
+    - `drum`, `drum-machine`
+  </Card>
+</CardGroup>
+
+## Factory Function
+
+### MakePlug
+```cpp
+IPlugCLAP* MakePlug(const InstanceInfo& info);
+```
+Factory function to create plugin instances.
+
+**Parameters:**
+- `info` - Instance information containing:
+  - `mDesc` - CLAP plugin descriptor
+  - `mHost` - CLAP host interface
+
+**Returns:** Pointer to new plugin instance
+
+**Example:**
+```cpp
+IPlugCLAP* MakePlug(const InstanceInfo& info)
+{
+  return new MyPlugin(info, MakeConfig(kNumParams, kNumPresets));
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Event Processing" icon="clock">
+    Process events sample-accurately in your audio callback. CLAP events include frame offsets for precise timing.
+  </Card>
+  
+  <Card title="Parameter Modulation" icon="sliders">
+    CLAP supports polyphonic modulation. Design parameters with modulation in mind if your plugin supports it.
+  </Card>
+  
+  <Card title="Thread Safety" icon="lock">
+    CLAP clearly defines which methods can be called from which threads. Respect these contracts.
+  </Card>
+  
+  <Card title="Feature Strings" icon="tags">
+    Use accurate feature strings to help hosts categorize and present your plugin appropriately.
+  </Card>
+</CardGroup>
+
+## Common Issues
+
+<Warning>
+**noexcept Methods**: All CLAP plugin methods are `noexcept`. Never throw exceptions from these methods or the host will terminate.
+</Warning>
+
+<Warning>
+**Thread Boundaries**: The audio thread and main thread are strictly separated. Use CLAP's request mechanism to communicate between threads.
+</Warning>
+
+<Tip>
+**Validation**: Use debug builds during development to enable CLAP's maximal checking. This catches protocol violations early.
+</Tip>
+
+## Related Documentation
+
+- [IPlugAPIBase](/api/core/iplugapibase) - Base API functionality
+- [IPlugProcessor](/api/core/iplugprocessor) - Audio processing interface
+- [Plugin Configuration](/guides/configuration) - Plugin configuration options
+- [CLAP Documentation](https://github.com/free-audio/clap) - Official CLAP specification and examples

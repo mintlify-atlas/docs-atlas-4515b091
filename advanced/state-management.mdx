@@ -1,0 +1,206 @@
+---
+title: State Management
+description: Managing plugin state with chunks and serialization
+---
+
+iPlug2 provides flexible state management through parameter serialization and custom chunk-based state. Learn how to save and restore complex plugin state beyond simple parameters.
+
+## Overview
+
+By default, iPlug2 serializes all parameters automatically. For complex state (custom data, UI settings, step sequencer patterns), override the serialization methods:
+
+- `SerializeState()` - Save state to a byte chunk
+- `UnserializeState()` - Restore state from a byte chunk
+- `CompareState()` - (Optional) Compare two states for equality
+
+## Basic Parameter Serialization
+
+Parameters are automatically serialized when `PLUG_DOES_STATE_CHUNKS` is enabled in `config.h`:
+
+```cpp title="config.h"
+#define PLUG_DOES_STATE_CHUNKS 1
+```
+
+To save only parameters, call `SerializeParams()` at the end of your `SerializeState()` method.
+
+## Custom State Example
+
+The IPlugChunks example shows how to save custom state alongside parameters:
+
+```cpp title="IPlugChunks.h"
+class IPlugChunks final : public Plugin
+{
+public:
+  bool SerializeState(IByteChunk &chunk) const override;
+  int UnserializeState(const IByteChunk &chunk, int startPos) override;
+
+private:
+  double mSteps[kNumSteps] = {};
+};
+```
+
+### Serializing Custom Data
+
+```cpp title="IPlugChunks.cpp:36"
+bool IPlugChunks::SerializeState(IByteChunk &chunk) const
+{
+  // Serialize custom data BEFORE parameters
+  for (int i = 0; i < kNumSteps; i++)
+  {
+    chunk.Put(&mSteps[i]);
+  }
+  
+  // Must call SerializeParams at the end
+  return SerializeParams(chunk);
+}
+```
+
+<Warning>
+Always call `SerializeParams(chunk)` at the end to save parameter values.
+</Warning>
+
+### Deserializing Custom Data
+
+```cpp title="IPlugChunks.cpp:48"
+int IPlugChunks::UnserializeState(const IByteChunk &chunk, int startPos)
+{
+  double v = 0.;
+  
+  // Unserialize custom data in the SAME ORDER as serialization
+  for (int i = 0; i < kNumSteps; i++)
+  {
+    startPos = chunk.Get(&v, startPos);
+    mSteps[i] = v;
+  }
+  
+  // Update UI if it exists
+#if IPLUG_EDITOR
+  if(GetUI())
+    UpdateUIControls();
+#endif
+
+  // Must call UnserializeParams at the end
+  return UnserializeParams(chunk, startPos);
+}
+```
+
+## Syncing State with UI
+
+When state is restored, the UI may not exist yet. Use `OnUIOpen()` to sync UI controls:
+
+```cpp title="IPlugChunks.cpp:94"
+void IPlugChunks::OnUIOpen()
+{
+  UpdateUIControls();
+}
+
+void IPlugChunks::UpdateUIControls()
+{
+  auto* pMultiSlider = GetUI()->GetControlWithTag(kCtrlMultiSlider);
+
+  for (int i = 0; i < kNumSteps; i++)
+  {
+    pMultiSlider->SetValue(mSteps[i], i);
+  }
+
+  GetUI()->SetAllControlsDirty();
+}
+```
+
+## UI to DSP Communication
+
+For realtime-safe communication from UI to audio thread, use `OnMessage()`:
+
+```cpp title="IPlugChunks.cpp:112"
+bool IPlugChunks::OnMessage(int msgTag, int ctrlTag, int dataSize, const void* pData)
+{
+  if(msgTag == kMsgTagSliderChanged)
+  {
+    auto* pVals = reinterpret_cast<const double*>(pData);
+    memcpy(mSteps, pVals, kNumSteps * sizeof(double));
+    return true;
+  }
+  return false;
+}
+```
+
+Send messages from UI with `SendArbitraryMsgFromUI()`:
+
+```cpp title="IPlugChunks.cpp:23"
+pGraphics->AttachControl(new IVMultiSliderControl<kNumSteps>(b, "", style), 
+  kCtrlMultiSlider)->SetActionFunction([pGraphics](IControl* pCaller) {
+    double vals[kNumSteps];
+    
+    for (int i = 0; i < kNumSteps; i++) {
+      vals[i] = pCaller->GetValue(i);
+    }
+    
+    pGraphics->GetDelegate()->SendArbitraryMsgFromUI(
+      kMsgTagSliderChanged, kCtrlMultiSlider, sizeof(vals), &vals);
+});
+```
+
+## IByteChunk Methods
+
+<CardGroup cols={2}>
+  <Card title="Put()" icon="arrow-down">
+    Write data to chunk
+    ```cpp
+    chunk.Put(&value);
+    ```
+  </Card>
+  
+  <Card title="Get()" icon="arrow-up">
+    Read data from chunk
+    ```cpp
+    pos = chunk.Get(&value, pos);
+    ```
+  </Card>
+  
+  <Card title="PutBytes()" icon="database">
+    Write raw bytes
+    ```cpp
+    chunk.PutBytes(data, size);
+    ```
+  </Card>
+  
+  <Card title="GetBytes()" icon="download">
+    Read raw bytes
+    ```cpp
+    chunk.GetBytes(data, size, pos);
+    ```
+  </Card>
+</CardGroup>
+
+## Best Practices
+
+<Steps>
+  <Step title="Maintain Order">
+    Always serialize and deserialize data in the **exact same order**
+  </Step>
+  
+  <Step title="Version Your Format">
+    Save a version number as the first value to support format changes:
+    ```cpp
+    const int kStateVersion = 1;
+    chunk.Put(&kStateVersion);
+    ```
+  </Step>
+  
+  <Step title="Call Base Methods">
+    Always call `SerializeParams()` and `UnserializeParams()` to preserve parameter state
+  </Step>
+  
+  <Step title="Update UI Safely">
+    Check if UI exists before updating: `if(GetUI())`
+  </Step>
+</Steps>
+
+## Related Examples
+
+- [IPlugChunks](@Examples/IPlugChunks) - Step sequencer with custom state
+- [IPlugVisualizer](@Examples/IPlugVisualizer/IPlugVisualizer.cpp:129) - Saving FFT settings
+
+<Info>
+Preset management is built on top of state chunks. When users save presets, your `SerializeState()` method is called automatically.
+</Info>

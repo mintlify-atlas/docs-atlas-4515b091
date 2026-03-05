@@ -1,0 +1,597 @@
+---
+title: 'Building for macOS'
+description: 'Build iPlug2 audio plugins for macOS using Xcode'
+---
+
+iPlug2 supports building macOS audio plugins using Xcode, with support for both Intel and Apple Silicon (Universal binaries).
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install Xcode">
+    Download from the [Mac App Store](https://apps.apple.com/app/xcode/id497799835)
+    
+    **Minimum version**: Xcode 13+ (Xcode 15+ for visionOS)
+  </Step>
+  
+  <Step title="Install Command Line Tools">
+    ```bash
+    xcode-select --install
+    ```
+  </Step>
+  
+  <Step title="Download SDKs (optional)">
+    For VST3, AAX, and other plugin formats:
+    
+    ```bash
+    cd iPlug2/Dependencies
+    ./download-iplug-sdks.sh
+    ```
+  </Step>
+</Steps>
+
+## Project Structure
+
+Each plugin has an Xcode project containing multiple targets:
+
+```
+MyPlugin/
+├── MyPlugin.xcworkspace/           # Workspace (optional)
+├── config/
+│   └── MyPlugin-mac.xcconfig       # Build configuration
+└── projects/
+    └── MyPlugin-macOS.xcodeproj/   # Xcode project
+        └── xcshareddata/
+            └── xcschemes/
+                ├── VST2.xcscheme
+                ├── VST3.xcscheme
+                ├── AU.xcscheme          # AUv2
+                ├── AUv3.xcscheme        # AUv3
+                ├── CLAP.xcscheme
+                ├── AAX.xcscheme
+                └── APP.xcscheme
+```
+
+## Building with Xcode
+
+### Opening the Project
+
+<Tabs>
+  <Tab title="Xcode GUI">
+    1. Double-click `MyPlugin-macOS.xcodeproj`
+    2. Or open workspace: `MyPlugin.xcworkspace`
+  </Tab>
+  
+  <Tab title="Command Line">
+    ```bash
+    open projects/MyPlugin-macOS.xcodeproj
+    ```
+  </Tab>
+</Tabs>
+
+### Building in Xcode
+
+<Steps>
+  <Step title="Select scheme">
+    Choose target from the scheme menu:
+    - **VST3** - VST3 plugin
+    - **AU** - Audio Unit v2
+    - **AUv3** - Audio Unit v3 (modern)
+    - **CLAP** - CLAP plugin
+    - **AAX** - AAX plugin (requires SDK)
+    - **APP** - Standalone application
+  </Step>
+  
+  <Step title="Select configuration">
+    **Product > Scheme > Edit Scheme**
+    
+    Choose build configuration:
+    - **Debug** - Development with debug symbols
+    - **Release** - Optimized for distribution
+    - **Tracer** - Performance profiling
+  </Step>
+  
+  <Step title="Build">
+    **Product > Build** or press `⌘B`
+  </Step>
+</Steps>
+
+### Building from Command Line
+
+<CodeGroup>
+```bash Basic Build
+# Build specific target
+xcodebuild -project projects/MyPlugin-macOS.xcodeproj \
+  -scheme VST3 \
+  -configuration Release
+
+# Build all targets
+xcodebuild -project projects/MyPlugin-macOS.xcodeproj \
+  -alltargets \
+  -configuration Release
+```
+
+```bash Universal Binary
+# Build universal (Intel + Apple Silicon)
+xcodebuild -project projects/MyPlugin-macOS.xcodeproj \
+  -scheme VST3 \
+  -configuration Release \
+  ARCHS="arm64 x86_64" \
+  ONLY_ACTIVE_ARCH=NO
+```
+
+```bash Custom xcconfig
+# Use custom build settings
+xcodebuild -project projects/MyPlugin-macOS.xcodeproj \
+  -scheme VST3 \
+  -configuration Release \
+  -xcconfig config/MyPlugin-mac.xcconfig
+```
+</CodeGroup>
+
+## Universal Binaries
+
+iPlug2 supports building Universal binaries that run natively on both Intel and Apple Silicon Macs.
+
+<CardGroup cols={2}>
+  <Card title="Intel (x86_64)" icon="microchip">
+    Runs on Intel-based Macs
+    
+    Compatible with all macOS versions
+  </Card>
+  <Card title="Apple Silicon (arm64)" icon="microchip">
+    Runs natively on M1/M2/M3 Macs
+    
+    **Significantly better performance**
+  </Card>
+</CardGroup>
+
+### Building Universal Binaries
+
+<Tabs>
+  <Tab title="Xcode">
+    1. **Product > Scheme > Edit Scheme**
+    2. **Run > Info > Build Configuration > Release**
+    3. **Product > Destination > Any Mac**
+    4. **Build Settings > Architectures**
+       - Set to: `arm64 x86_64`
+       - Or: `$(ARCHS_STANDARD)` (default)
+    5. **Product > Build**
+  </Tab>
+  
+  <Tab title="xcconfig">
+    Edit `config/MyPlugin-mac.xcconfig`:
+    
+    ```bash
+    // Build universal binaries
+    ARCHS = arm64 x86_64
+    ONLY_ACTIVE_ARCH = NO
+    ```
+  </Tab>
+  
+  <Tab title="Command Line">
+    ```bash
+    xcodebuild -project projects/MyPlugin-macOS.xcodeproj \
+      -scheme VST3 \
+      -configuration Release \
+      ARCHS="arm64 x86_64" \
+      ONLY_ACTIVE_ARCH=NO
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+Universal binaries are **recommended for distribution** to support all Macs with a single file.
+</Tip>
+
+### Verifying Universal Binaries
+
+```bash
+# Check architectures in a binary
+lipo -info build-mac/MyPlugin.vst3/Contents/MacOS/MyPlugin
+
+# Expected output:
+# Architectures in the fat file: MyPlugin are: x86_64 arm64
+
+# Extract specific architecture
+lipo build-mac/MyPlugin.vst3/Contents/MacOS/MyPlugin \
+  -extract arm64 -output MyPlugin-arm64
+```
+
+## Build Output
+
+Built plugins are placed in `build-mac/`:
+
+```
+MyPlugin/build-mac/
+├── MyPlugin.app/                   # Standalone app (contains AUv3)
+│   └── Contents/
+│       ├── MacOS/MyPlugin
+│       ├── Frameworks/
+│       │   └── MyPluginAU.framework/  # AUv3 framework
+│       └── PlugIns/
+│           └── MyPlugin.appex/        # AUv3 app extension
+├── MyPlugin.vst3/                  # VST3 plugin
+├── MyPlugin.clap/                  # CLAP plugin
+├── MyPlugin.component/             # AUv2 plugin
+├── MyPlugin.aaxplugin/             # AAX plugin
+├── MyPluginAU.framework/           # AUv3 framework (standalone)
+└── MyPlugin.appex/                 # AUv3 app extension (standalone)
+```
+
+<Info>
+**AUv3** is embedded inside the standalone app and also built as a standalone framework/appex for use in other hosts.
+</Info>
+
+## Deployment Paths
+
+Plugins are automatically symlinked to standard locations:
+
+| Format | Default Path |
+|--------|-------------|
+| **VST3** | `~/Library/Audio/Plug-Ins/VST3/` |
+| **VST2** | `~/Library/Audio/Plug-Ins/VST/` |
+| **CLAP** | `~/Library/Audio/Plug-Ins/CLAP/` |
+| **AUv2** | `~/Library/Audio/Plug-Ins/Components/` |
+| **AAX** | `/Library/Application Support/Avid/Audio/Plug-Ins/` |
+| **APP** | `~/Applications/` |
+
+<Note>
+MacOS uses **symlinks** by default for faster development. Symlinks update automatically when you rebuild.
+</Note>
+
+### Customizing Deployment
+
+Edit `common-mac.xcconfig`:
+
+```bash
+// Custom deployment paths
+VST3_PATH = $(HOME)/MyPlugins/VST3
+AU_PATH = $(HOME)/MyPlugins/Components
+```
+
+## Code Signing
+
+Code signing is **required** for AUv3 plugins and distribution.
+
+### Development Signing (Ad-hoc)
+
+For local development only:
+
+```bash
+# Sign from innermost to outermost
+codesign -s - --deep --force build-mac/MyPlugin.app/Contents/Frameworks/MyPluginAU.framework
+codesign -s - --deep --force build-mac/MyPlugin.app/Contents/PlugIns/MyPlugin.appex
+codesign -s - --deep --force build-mac/MyPlugin.app
+
+# Verify signature
+codesign -vvv --deep --strict build-mac/MyPlugin.app
+```
+
+<Warning>
+**Ad-hoc signing** (`-s -`) is for **local development only**. These plugins:
+- Cannot be distributed to other users
+- Will not run on other machines
+- Are blocked by Gatekeeper
+</Warning>
+
+### Distribution Signing
+
+For public distribution, sign with a **Developer ID** certificate:
+
+<Steps>
+  <Step title="Get Developer ID certificate">
+    1. Enroll in [Apple Developer Program](https://developer.apple.com/programs/)
+    2. **Certificates, Identifiers & Profiles > Certificates**
+    3. Create **Developer ID Application** certificate
+    4. Download and install in Keychain
+  </Step>
+  
+  <Step title="Configure code signing">
+    Edit `common-mac.xcconfig`:
+    
+    ```bash
+    CERTIFICATE_ID = Developer ID Application: Your Name (TEAM_ID)
+    DEVELOPMENT_TEAM = TEAM_ID  // Found at end of developer.apple.com URL
+    ```
+  </Step>
+  
+  <Step title="Sign with hardened runtime">
+    ```bash
+    codesign --force --timestamp --options runtime \
+      -s "Developer ID Application: Your Name (TEAM_ID)" \
+      -v build-mac/MyPlugin.app --deep --strict
+    ```
+    
+    The `--options runtime` flag enables **hardened runtime**, required for notarization.
+  </Step>
+  
+  <Step title="Verify signature">
+    ```bash
+    # Check code signature
+    codesign -dvv build-mac/MyPlugin.app
+    
+    # Verify signature is valid
+    codesign -vvv --deep --strict build-mac/MyPlugin.app
+    
+    # Check Gatekeeper assessment
+    spctl -vvv --assess --type exec build-mac/MyPlugin.app
+    ```
+  </Step>
+</Steps>
+
+### Notarization
+
+Notarization is **required** for macOS 10.15+ to avoid Gatekeeper warnings.
+
+<Steps>
+  <Step title="Create app-specific password">
+    1. Go to [appleid.apple.com](https://appleid.apple.com/)
+    2. **Sign In > App-Specific Passwords**
+    3. Generate a new password
+    4. Save it securely
+  </Step>
+  
+  <Step title="Notarize the app">
+    ```bash
+    # Create a ZIP for notarization
+    ditto -c -k --keepParent build-mac/MyPlugin.app MyPlugin.zip
+    
+    # Submit for notarization
+    xcrun notarytool submit MyPlugin.zip \
+      --apple-id your@email.com \
+      --team-id TEAM_ID \
+      --password app-specific-password \
+      --wait
+    ```
+    
+    <Tip>
+    Use `--wait` to wait for notarization to complete (takes 5-15 minutes).
+    </Tip>
+  </Step>
+  
+  <Step title="Staple the ticket">
+    After successful notarization:
+    
+    ```bash
+    # Staple notarization ticket to app
+    xcrun stapler staple build-mac/MyPlugin.app
+    
+    # Verify stapling
+    xcrun stapler validate build-mac/MyPlugin.app
+    ```
+    
+    Stapling embeds the notarization ticket, allowing the app to run offline.
+  </Step>
+</Steps>
+
+<Info>
+iPlug2 includes a helper script: `Scripts/notarise.sh` for automated notarization.
+</Info>
+
+### Using notarise.sh
+
+```bash
+cd Scripts
+./notarise.sh \
+  "$(pwd)/.." \
+  "$(pwd)/../MyPlugin/build-mac/MyPlugin.app" \
+  "com.yourcompany.myplugin" \
+  "your@email.com" \
+  "app-specific-password"
+```
+
+**Arguments**:
+1. Root directory
+2. Path to app/plugin
+3. Bundle ID
+4. Apple ID email
+5. App-specific password
+
+## Debugging
+
+### Setting Up Debugger
+
+<Steps>
+  <Step title="Edit scheme">
+    **Product > Scheme > Edit Scheme > Run > Info**
+    
+    - **Executable**: Choose your DAW (e.g., `/Applications/REAPER.app`)
+    - Or select **Ask on Launch** to choose at runtime
+  </Step>
+  
+  <Step title="Set breakpoints">
+    Click in the gutter to add breakpoints in your code
+  </Step>
+  
+  <Step title="Run debugger">
+    Press `⌘R` or **Product > Run**
+    
+    Xcode will:
+    1. Build the plugin
+    2. Deploy to plugin folder
+    3. Launch your DAW
+    4. Attach the debugger
+  </Step>
+  
+  <Step title="Load plugin in DAW">
+    Create a track and load your plugin
+    
+    Breakpoints will trigger when code is executed
+  </Step>
+</Steps>
+
+### LLDB Debugging
+
+For advanced debugging:
+
+```bash
+# Launch DAW with LLDB
+lldb /Applications/REAPER.app/Contents/MacOS/REAPER
+
+# Set breakpoints
+(lldb) breakpoint set --name MyPlugin::ProcessBlock
+(lldb) breakpoint set --file MyPlugin.cpp --line 42
+
+# Run
+(lldb) run
+
+# When breakpoint hits
+(lldb) bt           # Backtrace
+(lldb) frame variable  # Local variables
+(lldb) continue     # Continue execution
+```
+
+## Audio Unit Validation
+
+Validate AUv2 plugins with `auval`:
+
+```bash
+# List all registered Audio Units
+auval -a
+
+# Validate effect (aufx)
+auval -v aufx <subtype> <manufacturer>
+
+# Validate instrument (aumu)
+auval -v aumu <subtype> <manufacturer>
+
+# Example: Validate IPlugEffect
+auval -v aufx Ipef Acme
+```
+
+<Info>
+`<subtype>` and `<manufacturer>` are 4-character codes defined in `config.h`.
+</Info>
+
+### Common auval Errors
+
+<AccordionGroup>
+  <Accordion title="ERROR: Failed validation">
+    **Cause**: Plugin not properly registered or has errors
+    
+    **Solution**:
+    - Ensure plugin is code-signed
+    - Run the standalone app once to register AUv3
+    - Clear Audio Unit cache: `killall -9 AudioComponentRegistrar`
+    - Check Console.app for crash logs
+  </Accordion>
+  
+  <Accordion title="WARNING: View has zero size">
+    **Cause**: UI not initialized properly
+    
+    **Solution**:
+    - Usually benign, but verify UI appears correctly in DAW
+    - Check `IGraphics` initialization in plugin constructor
+  </Accordion>
+</AccordionGroup>
+
+## Build Settings
+
+### Common Settings (from common-mac.xcconfig)
+
+```bash
+// Deployment target
+MACOSX_DEPLOYMENT_TARGET = 10.13  // Minimum macOS version
+
+// Architectures
+ARCHS = arm64 x86_64  // Universal binary
+
+// C++ standard
+CLANG_CXX_LANGUAGE_STANDARD = c++17
+CLANG_CXX_LIBRARY = libc++
+
+// Code signing
+CERTIFICATE_ID = Developer ID Application: Your Name (TEAM_ID)
+DEVELOPMENT_TEAM = TEAM_ID
+```
+
+### Preprocessor Defines
+
+```cpp
+NOMINMAX                 // Disable min/max macros
+SWELL_CLEANUP_ON_UNLOAD  // Clean up SWELL resources
+
+// Format-specific
+VST3_API                 // VST3 plugin
+AU_API                   // Audio Unit v2
+AUv3_API                 // Audio Unit v3
+CLAP_API                 // CLAP plugin
+AAX_API                  // AAX plugin
+APP_API                  // Standalone app
+
+// Audio APIs (APP only)
+__MACOSX_CORE__          // CoreAudio
+
+// IPlug defines
+IPLUG_EDITOR=1           // Has UI
+IPLUG_DSP=1              // Has DSP
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Plugin not loading in DAW">
+    **Cause**: Architecture mismatch, code signing, or registration
+    
+    **Solution**:
+    - Check DAW architecture matches plugin (Intel vs Apple Silicon)
+    - Verify plugin is code-signed: `codesign -vv MyPlugin.component`
+    - Clear Audio Unit cache: `killall -9 AudioComponentRegistrar`
+    - For AUv3: Run standalone app once to register
+  </Accordion>
+  
+  <Accordion title="Build fails with SDK errors">
+    **Cause**: Missing SDKs or incorrect paths
+    
+    **Solution**:
+    - Run `Dependencies/download-iplug-sdks.sh`
+    - Check paths in `common-mac.xcconfig`:
+      ```bash
+      VST3_SDK = $(DEPS_PATH)/IPlug/VST3_SDK
+      AAX_SDK = $(DEPS_PATH)/IPlug/AAX_SDK
+      ```
+  </Accordion>
+  
+  <Accordion title="Notarization fails">
+    **Cause**: Hardened runtime not enabled or unsigned binaries
+    
+    **Solution**:
+    - Sign with `--options runtime` flag
+    - Ensure all frameworks and executables are signed
+    - Check notarization log for details:
+      ```bash
+      xcrun notarytool log <submission-id> \
+        --apple-id your@email.com \
+        --team-id TEAM_ID \
+        --password app-specific-password
+      ```
+  </Accordion>
+  
+  <Accordion title="AUv3 not appearing in GarageBand/Logic">
+    **Cause**: AUv3 not registered or code signing issue
+    
+    **Solution**:
+    - Run standalone app at least once
+    - Ensure app is properly code-signed (ad-hoc or Developer ID)
+    - Check Console.app for errors
+    - Verify entitlements are correct
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="iOS Build" icon="mobile" href="/building/ios">
+    Build AUv3 plugins for iOS
+  </Card>
+  <Card title="Code Signing" icon="file-signature" href="/deploying/code-signing">
+    Deep dive into signing and notarization
+  </Card>
+  <Card title="CMake Build" icon="gear" href="/building/cmake">
+    Alternative build system
+  </Card>
+  <Card title="Installers" icon="box" href="/deploying/installers">
+    Create DMG installers
+  </Card>
+</CardGroup>
