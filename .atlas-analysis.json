@@ -1,0 +1,230 @@
+{
+  "projectType": "framework",
+  "projectName": "iPlug2",
+  "projectDescription": "Cross-platform C++ audio plugin framework for desktop, mobile, XR, and web with multiple plugin format support and GPU-accelerated graphics",
+  "theme": "aspen",
+  "primaryColor": "#6B46C1",
+  "lightColor": "#9F7AEA",
+  "darkColor": "#553C9A",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/plugin-formats",
+              "concepts/parameters",
+              "concepts/audio-processing",
+              "concepts/project-structure"
+            ]
+          },
+          {
+            "group": "IPlug Core",
+            "pages": [
+              "iplug/overview",
+              "iplug/plugin-base",
+              "iplug/processor",
+              "iplug/parameters",
+              "iplug/presets",
+              "iplug/midi"
+            ]
+          },
+          {
+            "group": "IGraphics",
+            "pages": [
+              "igraphics/overview",
+              "igraphics/getting-started",
+              "igraphics/drawing-backends",
+              "igraphics/controls",
+              "igraphics/custom-controls",
+              "igraphics/responsive-ui"
+            ]
+          },
+          {
+            "group": "Alternative UI Frameworks",
+            "pages": [
+              "ui-frameworks/overview",
+              "ui-frameworks/swiftui",
+              "ui-frameworks/cocoa",
+              "ui-frameworks/webview",
+              "ui-frameworks/svelte"
+            ]
+          },
+          {
+            "group": "Building & Deployment",
+            "pages": [
+              "building/overview",
+              "building/windows",
+              "building/macos",
+              "building/ios",
+              "building/web",
+              "building/cmake"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/creating-plugins",
+              "guides/audio-effect",
+              "guides/instrument",
+              "guides/midi-effect",
+              "guides/sidechain",
+              "guides/surround",
+              "guides/reaper-extensions",
+              "guides/web-audio-modules"
+            ]
+          },
+          {
+            "group": "Advanced Topics",
+            "pages": [
+              "advanced/state-management",
+              "advanced/dsp-extras",
+              "advanced/multibus",
+              "advanced/mpe",
+              "advanced/visualization",
+              "advanced/threading",
+              "advanced/debugging"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core Classes",
+            "pages": [
+              "api/iplug-plugin-base",
+              "api/iplug-processor",
+              "api/iplug-parameter",
+              "api/iplug-midi"
+            ]
+          },
+          {
+            "group": "IGraphics Classes",
+            "pages": [
+              "api/igraphics",
+              "api/icontrol",
+              "api/igraphics-structs"
+            ]
+          },
+          {
+            "group": "Controls Library",
+            "pages": [
+              "api/controls/overview",
+              "api/controls/knobs-sliders",
+              "api/controls/buttons-switches",
+              "api/controls/displays",
+              "api/controls/menus",
+              "api/controls/special"
+            ]
+          },
+          {
+            "group": "DSP Utilities",
+            "pages": [
+              "api/dsp/oscillators",
+              "api/dsp/envelopes",
+              "api/dsp/filters",
+              "api/dsp/effects"
+            ]
+          },
+          {
+            "group": "Platform APIs",
+            "pages": [
+              "api/platforms/vst3",
+              "api/platforms/auv2",
+              "api/platforms/auv3",
+              "api/platforms/aax",
+              "api/platforms/clap",
+              "api/platforms/wam",
+              "api/platforms/standalone"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Examples",
+        "groups": [
+          {
+            "group": "Template Projects",
+            "pages": [
+              "examples/overview",
+              "examples/iplug-effect",
+              "examples/iplug-instrument",
+              "examples/iplug-controls"
+            ]
+          },
+          {
+            "group": "Specialized Examples",
+            "pages": [
+              "examples/midi-effect",
+              "examples/sidechain",
+              "examples/surround",
+              "examples/drum-synth",
+              "examples/convo-engine",
+              "examples/visualizer"
+            ]
+          },
+          {
+            "group": "UI Examples",
+            "pages": [
+              "examples/responsive-ui",
+              "examples/swiftui",
+              "examples/cocoa-ui",
+              "examples/web-ui",
+              "examples/svelte-ui",
+              "examples/p5js"
+            ]
+          },
+          {
+            "group": "Reaper Integration",
+            "pages": [
+              "examples/reaper-extension",
+              "examples/reaper-plugin"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Cross-platform C++ audio plugin framework",
+    "Support for VST3, AUv2, AUv3, AAX, CLAP, and WAM formats",
+    "Multiple graphics backends (NanoVG, Skia)",
+    "Rich controls library with 50+ UI widgets",
+    "Compile to WebAssembly for browser-based plugins",
+    "Alternative UI frameworks (SwiftUI, WebView, Svelte)",
+    "MPE-capable polyphonic synthesis support",
+    "Built-in DSP utilities and effects",
+    "Standalone app and REAPER extension support",
+    "iOS, visionOS, and ARM64 platform support"
+  ],
+  "publicApiSurface": [
+    "IPluginBase - Base plugin class with state management",
+    "IPlugProcessor - Audio processing base class",
+    "IPlug::Parameter - Parameter abstraction",
+    "IGraphics - Main graphics context class",
+    "IControl - Base UI control class",
+    "IVKnobControl - Vector knob control",
+    "IVSliderControl - Vector slider control",
+    "IVButtonControl - Vector button control",
+    "ISender - Audio thread to UI thread data sender",
+    "ADSREnvelope - ADSR envelope generator",
+    "Oscillator - Multi-waveform oscillator",
+    "SVF - State variable filter",
+    "Oversampler - Oversampling utility",
+    "MidiQueue - MIDI message queue",
+    "IMidiMsg - MIDI message structure"
+  ]
+}
